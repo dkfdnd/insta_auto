@@ -1,0 +1,5 @@
+requests>=2.32
+pillow>=10
+instaloader>=4.13
+browser-cookie3>=0.19
+kiwipiepy>=0.18

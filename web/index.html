@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>오늘의 터진 게시물</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <div>
+      <h1>🔥 오늘의 터진 게시물</h1>
+      <p class="sub" id="meta">데이터를 불러오는 중…</p>
+    </div>
+    <div class="top-right">
+      <span class="badge" id="source-badge"></span>
+      <button class="btn ghost" id="theme-toggle" title="테마 전환">🌙</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap" id="app">
+  <div id="banner" class="banner" hidden></div>
+
+  <section class="stats" id="stats"></section>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>오늘의 핫 주제</h2>
+      <p class="hint">핫 게시물에서 자주 등장한 해시태그·키워드. 클릭하면 관련 게시물만 봅니다.</p>
+    </div>
+    <div class="chips" id="topics"></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>터진 게시물</h2>
+      <p class="hint" id="result-count"></p>
+    </div>
+    <div class="criteria" id="criteria">
+      <div class="criteria-head">
+        <button class="btn" id="crit-toggle" aria-expanded="false">⚙️ 판정 기준 조절</button>
+        <span class="crit-summary" id="crit-summary"></span>
+        <div class="presets" id="presets">
+          <span class="hint">프리셋</span>
+          <button data-preset="default">기본</button>
+          <button data-preset="comments">댓글 중심</button>
+          <button data-preset="views">조회수 중심</button>
+          <button data-preset="strict">엄격</button>
+          <button data-preset="loose">느슨</button>
+        </div>
+      </div>
+      <div class="criteria-body" id="crit-body" hidden></div>
+    </div>
+    <div class="toolbar">
+      <div class="seg" id="period" data-key="period">
+        <button data-v="24">24시간</button><button data-v="72">3일</button><button data-v="168">7일</button><button data-v="336" class="on">14일</button><button data-v="720">30일</button>
+      </div>
+      <div class="seg" id="kind" data-key="kind">
+        <button data-v="all" class="on">전체</button><button data-v="video">릴스</button><button data-v="image">사진</button>
+      </div>
+      <select id="tier">
+        <option value="1">🔥 이상 (터진 것만)</option>
+        <option value="2">🔥🔥 이상</option>
+        <option value="3">🔥🔥🔥 만</option>
+        <option value="0">전체 게시물</option>
+      </select>
+      <select id="sort">
+        <option value="rank">터진 정도순</option>
+        <option value="views">조회수순</option>
+        <option value="comments">댓글순</option>
+        <option value="likes">좋아요순</option>
+        <option value="recent">최신순</option>
+      </select>
+      <select id="account"><option value="">모든 계정</option></select>
+      <input id="q" type="search" placeholder="캡션·해시태그 검색">
+      <button class="btn ghost" id="reset">초기화</button>
+    </div>
+    <div class="grid" id="cards"></div>
+    <div class="empty" id="empty" hidden></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>계정별 요약</h2>
+      <p class="hint">평소 성과(중앙값)와 최근 핫 게시물 수. 계정을 클릭하면 위 목록을 그 계정으로 좁힙니다.</p>
+    </div>
+    <div class="table-wrap"><table id="accounts"></table></div>
+  </section>
+
+  <section class="section method">
+    <details>
+      <summary><h2>판정 방법</h2></summary>
+      <div class="method-body" id="method"></div>
+    </details>
+  </section>
+</main>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card" role="dialog" aria-modal="true">
+    <button class="modal-close" data-close aria-label="닫기">✕</button>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script src="app.js?v=2"></script>
+</body>
+</html>

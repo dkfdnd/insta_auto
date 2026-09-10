@@ -1,0 +1,9 @@
+{
+  "ig_user": "mr.salrim",
+  "posts_per_account": 30,
+  "recent_days": 30,
+  "hot_multiplier": 1.8,
+  "tier2_multiplier": 3.0,
+  "tier3_multiplier": 5.0,
+  "sleep_between_accounts": 3.0
+}
