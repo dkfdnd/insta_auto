@@ -31,6 +31,22 @@ class Settings:
     download_thumbs: bool = True
     thumb_width: int = 640
 
+    # 소스 영상 탐색 (선택 API 키는 환경변수 사용 권장)
+    source_max_candidates: int = 40
+    source_max_downloads: int = 20
+    source_max_probe_downloads: int = 30  # 먼저 받아 검사한 뒤 상위 source_max_downloads만 ZIP에 포함
+    source_max_file_mb: int = 200
+    source_google_vision_api_key: str = ""
+    source_pexels_api_key: str = ""
+    source_browser_search: bool = True
+    source_browser_headless: bool = False
+    source_browser_frames: int = 4
+    source_browser_captcha_wait: int = 60
+    source_use_openclip: bool = True
+    source_openclip_model: str = "ViT-B-32-quickgelu"
+    source_openclip_pretrained: str = "openai"
+    source_detect_text_overlays: bool = True
+
     # 분석
     hot_multiplier: float = 1.8       # 이 배수 이상이면 '터진 게시물'
     tier2_multiplier: float = 3.0
@@ -57,6 +73,27 @@ class Settings:
     @property
     def session_dir(self) -> Path:
         return self.data_dir / "sessions"
+
+    @property
+    def source_dir(self) -> Path:
+        return self.data_dir / "source_jobs"
+
+    @property
+    def source_browser_profile_dir(self) -> Path:
+        return self.data_dir / "source_browser_profile"
+
+    @property
+    def source_browser_cookie_file(self) -> Path:
+        """Playwright와 yt-dlp 사이에서만 공유하는 Netscape 쿠키 파일."""
+        return self.data_dir / "source_browser_cookies.txt"
+
+    @property
+    def source_model_dir(self) -> Path:
+        return self.data_dir / "models"
+
+    @property
+    def source_tessdata_dir(self) -> Path:
+        return self.source_model_dir / "tessdata"
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -88,4 +125,8 @@ def load_settings() -> Settings:
     s.data_dir.mkdir(parents=True, exist_ok=True)
     s.thumbs_dir.mkdir(parents=True, exist_ok=True)
     s.session_dir.mkdir(parents=True, exist_ok=True)
+    s.source_dir.mkdir(parents=True, exist_ok=True)
+    s.source_browser_profile_dir.mkdir(parents=True, exist_ok=True)
+    s.source_model_dir.mkdir(parents=True, exist_ok=True)
+    s.source_tessdata_dir.mkdir(parents=True, exist_ok=True)
     return s

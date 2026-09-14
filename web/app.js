@@ -336,6 +336,46 @@
   }
   function renderAll() { recompute(); renderStats(); const base = render(); renderTopics(base); renderTable(); }
 
+  // ---------- 플랫폼 로그인 관리 ----------
+  const sessionModal = $('#session-modal');
+  const sessionStart = $('#session-start');
+  const sessionFinish = $('#session-finish');
+  let sessionPoll = null;
+  function closeSessionModal() { sessionModal.hidden = true; if (sessionPoll) clearTimeout(sessionPoll); sessionPoll = null; }
+  $$('[data-session-close]', sessionModal).forEach((el) => el.addEventListener('click', closeSessionModal));
+  $('#platform-login').addEventListener('click', () => { sessionModal.hidden = false; refreshPlatformSession(); });
+  function renderPlatformSession(data) {
+    $('#session-platforms').innerHTML = (data.platforms || []).map((p) =>
+      `<div class="session-platform">${esc(p.label)}<span class="${p.connected ? 'connected' : ''}">${p.connected ? '● 로그인 쿠키 감지' : '○ 로그인 필요'}</span></div>`).join('');
+    const status = $('#session-status');
+    status.classList.toggle('error', Boolean(data.error));
+    status.innerHTML = `<b>${esc(data.error || data.message || '상태 확인 완료')}</b><small>${data.cookie_file_ready ? '다운로드용 쿠키 파일 준비됨' : '로그인 창에서 인증하면 다운로드용 쿠키가 생성됩니다.'}</small>`;
+    sessionStart.hidden = Boolean(data.active);
+    sessionFinish.hidden = !data.active;
+  }
+  async function refreshPlatformSession() {
+    try {
+      const response = await fetch('/api/platform-session'); const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '로그인 상태 확인 실패');
+      renderPlatformSession(data);
+      if (data.active && !sessionModal.hidden) sessionPoll = setTimeout(refreshPlatformSession, 1800);
+    } catch (e) { $('#session-status').classList.add('error'); $('#session-status').textContent = e.message; }
+  }
+  sessionStart.addEventListener('click', async () => {
+    sessionStart.disabled = true;
+    try {
+      const response = await fetch('/api/platform-session', { method: 'POST' }); const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '로그인 창 실행 실패');
+      renderPlatformSession(data); sessionPoll = setTimeout(refreshPlatformSession, 1200);
+    } catch (e) { $('#session-status').classList.add('error'); $('#session-status').textContent = e.message; }
+    finally { sessionStart.disabled = false; }
+  });
+  sessionFinish.addEventListener('click', async () => {
+    sessionFinish.disabled = true;
+    try { await fetch('/api/platform-session/finish', { method: 'POST' }); setTimeout(refreshPlatformSession, 800); }
+    finally { sessionFinish.disabled = false; }
+  });
+
   // ---------- 상세 모달 ----------
   const modal = $('#modal');
   $('#cards').addEventListener('click', (e) => { const c = e.target.closest('.card'); if (c) openDetail(POSTS.find((p) => p.shortcode === c.dataset.code)); });
@@ -370,10 +410,51 @@
         ${p.flags.filter((f) => flagTxt[f]).length ? `<div class="flags">${p.flags.filter((f) => flagTxt[f]).map((f) => `<span class="flag">${flagTxt[f]}</span>`).join('')}</div>` : ''}
         <div class="fullcap">${esc(p.caption) || '(캡션 없음)'}</div>
         ${p.hashtags.length ? `<div class="tags">${p.hashtags.map((h) => `<span data-tag="${esc(h)}">#${esc(h)}</span>`).join('')}</div>` : ''}
-        <div><a class="linkbtn" href="${esc(p.url)}" target="_blank" rel="noopener">Instagram에서 보기 ↗</a></div>
+        <div class="detail-actions">
+          <a class="linkbtn secondary" href="${esc(p.url)}" target="_blank" rel="noopener">Instagram에서 보기 ↗</a>
+          ${isVideo(p) ? `<button class="linkbtn source-download" id="source-download" data-code="${esc(p.shortcode)}">소스 영상 찾기·다운로드</button>` : ''}
+        </div>
+        ${isVideo(p) ? '<div class="source-status" id="source-status" hidden></div>' : ''}
       </div></div>`;
     $$('.tags span', modal).forEach((s) => s.addEventListener('click', () => { closeDetail(); state.q = '#' + s.dataset.tag; $('#q').value = state.q; state.tier = 0; $('#tier').value = '0'; renderAll(); }));
+    const sourceBtn = $('#source-download', modal);
+    if (sourceBtn) sourceBtn.addEventListener('click', () => startSourceJob(p.shortcode, sourceBtn));
     modal.hidden = false; document.body.style.overflow = 'hidden';
+  }
+
+  async function startSourceJob(shortcode, button) {
+    const status = $('#source-status', modal);
+    button.disabled = true; status.hidden = false; status.classList.remove('error');
+    status.innerHTML = '<b>준비 중…</b><div class="source-progress"><i style="width:2%"></i></div><small>최대 20개의 소스 영상을 찾습니다. 후보 수에 따라 시간이 오래 걸릴 수 있습니다.</small>';
+    try {
+      const response = await fetch('/api/source-jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shortcode }) });
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.error || '작업을 시작하지 못했습니다.');
+      pollSourceJob(job.id, button, status);
+    } catch (e) {
+      status.classList.add('error'); status.textContent = '실패: ' + e.message; button.disabled = false;
+    }
+  }
+
+  async function pollSourceJob(id, button, status) {
+    try {
+      const response = await fetch('/api/source-jobs/' + encodeURIComponent(id));
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.error || '상태를 확인하지 못했습니다.');
+      if (job.status === 'error') throw new Error(job.error || '탐색 작업이 실패했습니다.');
+      const notes = job.notes && job.notes.length ? `<small class="source-note">${job.notes.map(esc).join('<br>')}</small>` : '';
+      const qc = job.quality_counts || {};
+      const resultText = `${job.probed_downloads || job.downloaded}개를 검사해 상위 ${job.downloaded}개 선별 · 클린 소스 ${qc['clean-source'] || 0} · 검토 필요 ${qc['light-overlay'] || 0} · 자막 포함 ${qc['edited-with-text'] || 0}`;
+      status.innerHTML = `<b>${esc(job.message)}</b><div class="source-progress"><i style="width:${job.progress || 0}%"></i></div><small>${job.status === 'done' ? `${resultText}. ZIP에서 유형별 폴더로 구분했습니다.` : '모달을 닫아도 서버에서 계속 진행됩니다.'}</small>${notes}`;
+      if (job.status === 'done') {
+        button.disabled = false; button.textContent = '다시 탐색';
+        const link = document.createElement('a'); link.className = 'linkbtn source-ready'; link.href = job.download_url;
+        link.textContent = `ZIP 다운로드 (${job.downloaded}개)`; status.appendChild(link); return;
+      }
+      setTimeout(() => pollSourceJob(id, button, status), 1500);
+    } catch (e) {
+      status.classList.add('error'); status.textContent = '실패: ' + e.message; button.disabled = false;
+    }
   }
 
   // ---------- 계정 표 ----------

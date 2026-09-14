@@ -5,6 +5,11 @@ from hotpost.analyze import score_account, _terms
 from hotpost.config import Settings
 from hotpost.models import Post
 from hotpost.sources import extract_username, load_usernames
+from hotpost.source_finder import Candidate, PRODUCT_CONCEPTS, _dedupe, build_queries, dhash
+from hotpost.browser_search import _embedded_candidates, _html_candidates, _is_candidate, _sample_frames
+from hotpost.browser_profile import _platform_rows, export_cookies
+from hotpost.text_overlay import classify_overlay
+from PIL import Image
 
 
 def test_extract_username_variants():
@@ -52,3 +57,82 @@ def test_terms_extract_nouns_and_bigrams():
     t = _terms("다이소 신상 주방 정리템 추천해요")
     assert "다이소" in t and "주방" in t
     assert any(" " in x for x in t)
+
+
+def test_source_queries_include_product_intent():
+    queries = build_queries("차량용품인데 차문에 달아 음료와 커피를 넣는 홀더")
+    assert "car door hanging cup holder" in queries
+    assert any("车门" in q for q in queries)
+
+
+def test_youtube_dedupe_keeps_video_ids():
+    items = [Candidate(url="https://www.youtube.com/watch?v=aaa", provider="youtube"),
+             Candidate(url="https://www.youtube.com/watch?v=bbb", provider="youtube"),
+             Candidate(url="https://www.youtube.com/watch?v=aaa&feature=share", provider="youtube")]
+    assert [x.url for x in _dedupe(items)] == [items[0].url, items[1].url]
+
+
+def test_dhash_is_stable_for_same_image(tmp_path: Path):
+    image = Image.new("RGB", (120, 200), "white")
+    for x in range(60):
+        for y in range(200):
+            image.putpixel((x, y), (20, 20, 20))
+    left = tmp_path / "left.jpg"; copy = tmp_path / "copy.jpg"
+    image.save(left); image.save(copy)
+    assert dhash(left) == dhash(copy)
+
+
+def test_browser_frame_sampling_handles_one():
+    frames = [Path(f"{i}.jpg") for i in range(5)]
+    assert _sample_frames(frames, 1) == [frames[2]]
+    assert _sample_frames(frames, 3) == [frames[0], frames[2], frames[4]]
+
+
+def test_browser_candidates_require_detail_urls():
+    assert _is_candidate("https://www.tiktok.com/@creator/video/123")
+    assert _is_candidate("https://www.douyin.com/video/123")
+    assert not _is_candidate("https://www.tiktok.com/search/video?q=test")
+
+
+def test_platform_cookie_status_is_domain_specific():
+    rows = _platform_rows([
+        {"domain": ".douyin.com", "name": "sessionid", "value": "ok"},
+        {"domain": ".xiaohongshu.com", "name": "web_session", "value": "ok"},
+    ])
+    status = {row["id"]: row["connected"] for row in rows}
+    assert status["douyin"] and status["xiaohongshu"]
+    assert not status["tiktok"] and not status["youtube"]
+
+
+def test_cookie_export_is_private_and_netscape_compatible(tmp_path: Path):
+    target = tmp_path / "cookies.txt"
+    export_cookies([{"domain": ".douyin.com", "name": "sessionid", "value": "secret", "path": "/",
+                     "secure": True, "httpOnly": True, "expires": int(time.time()) + 3600}], target)
+    text = target.read_text()
+    assert "#HttpOnly_.douyin.com\tTRUE\t/\tTRUE" in text
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+def test_text_overlay_classification_prioritizes_clean_sources():
+    clean, clean_score = classify_overlay(.1, 0, 0, .001)
+    captioned, captioned_score = classify_overlay(.9, .75, .2, .025)
+    assert clean == "clean-source"
+    assert captioned == "edited-with-text"
+    assert clean_score < captioned_score
+
+
+def test_visual_product_catalog_has_english_chinese_pairs():
+    assert len(PRODUCT_CONCEPTS) >= 30
+    assert all(any("a" <= char.lower() <= "z" for char in english) for english, _ in PRODUCT_CONCEPTS)
+    assert all(any("\u3400" <= char <= "\u9fff" for char in chinese) for _, chinese in PRODUCT_CONCEPTS)
+
+
+def test_spa_embedded_video_ids_are_recovered():
+    class Page:
+        @staticmethod
+        def content():
+            return '<script>{"aweme_id":"7123456789012345678"}</script>'
+    items = _embedded_candidates(Page(), "douyin", "杯架")
+    assert items[0]["url"] == "https://www.douyin.com/video/7123456789012345678"
+    xhs = _html_candidates('{"noteId":"0123456789abcdef01234567"}', "xiaohongshu", "收纳")
+    assert xhs[0]["url"].endswith("/explore/0123456789abcdef01234567")

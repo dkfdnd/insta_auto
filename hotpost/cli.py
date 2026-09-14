@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 import webbrowser
@@ -141,12 +142,9 @@ def cmd_analyze(settings: Settings, args) -> int:
 
 
 def cmd_serve(settings: Settings, args) -> int:
-    import functools
-    from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+    from .server import serve
     port = getattr(args, "port", 8765)
-    handler = functools.partial(SimpleHTTPRequestHandler, directory=str(settings.web_dir))
-    handler.log_message = lambda *a, **k: None  # type: ignore[attr-defined]
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    httpd = serve(settings, port)
     url = f"http://localhost:{port}/"
     _log(f"웹페이지: {url}  (Ctrl+C 로 종료)")
     if not getattr(args, "no_browser", False):
@@ -155,6 +153,21 @@ def cmd_serve(settings: Settings, args) -> int:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    return 0
+
+
+def cmd_sources(settings: Settings, args) -> int:
+    from .source_finder import find_sources
+
+    def progress(message: str, percent: int) -> None:
+        _log(f"[{percent:3d}%] {message}")
+    try:
+        result = find_sources(settings, args.shortcode, progress)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"소스 영상 탐색 실패: {exc}")
+        return 1
+    print(json.dumps({"job_id": result["job_id"], "downloaded": result["downloaded"],
+                      "zip_path": result["zip_path"], "candidates": result["candidates"]}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -188,6 +201,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("sources", help="릴스 장면을 분석해 공개 소스 영상 후보 탐색·다운로드")
+    p.add_argument("shortcode", help="Instagram 릴스 shortcode (예: Dcp3P-WyMFe)")
+    p.set_defaults(fn=cmd_sources)
 
     p = sub.add_parser("list", help="인플루언서 목록 확인")
     p.set_defaults(fn=cmd_list)
