@@ -1,6 +1,4 @@
-/* 오늘의 터진 게시물 - 프론트엔드 (빌드 없이 동작하는 순수 JS)
- * 리포트에는 게시물별 실제 수치와 계정 기준선(중앙값)이 들어 있으므로,
- * 판정 기준(배수·가중치·최소값)은 화면에서 바꾸면 즉시 재계산된다. */
+/* 오늘의 터진 게시물 - 서버 판정 결과를 표시하고 기준을 저장한다. */
 (function () {
   'use strict';
   const $ = (s, el) => (el || document).querySelector(s);
@@ -21,7 +19,8 @@
   const tierTxt = (t) => ({ 0: '', 1: '🔥', 2: '🔥🔥', 3: '🔥🔥🔥' })[t];
   const kindTxt = (k) => ({ reel: '릴스', video: '동영상', image: '사진', carousel: '캐러셀' })[k] || k;
   const confTxt = { high: '높음', medium: '보통', low: '낮음' };
-  const flagTxt = { comments_spike: '💬 댓글 급증', views_spike: '👀 조회수 급증', likes_spike: '❤️ 좋아요 급증', fresh: '🆕 48시간 내', rising: '📈 상승 중' };
+  const flagTxt = { comments_spike: '💬 댓글 급증', views_spike: '👀 조회수 급증', likes_spike: '❤️ 좋아요 급증', fresh: '🆕 48시간 내', rising: '📈 상승 중',
+    ad_candidate: '광고 후보', sponsored_candidate: '협찬 후보', group_buy_candidate: '공동구매 후보', event_candidate: '이벤트 후보' };
   const esc = (s) => String(s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const initials = (u) => (u || '?').replace(/[^a-z0-9가-힣]/gi, '').slice(0, 2).toUpperCase();
   const isVideo = (p) => p.kind === 'reel' || p.kind === 'video';
@@ -51,8 +50,8 @@
 
   // ---------- 판정 기준 ----------
   const S = R.settings;
-  const W = R.weights || { video: { views: 0.5, comments: 0.3, likes: 0.2 }, image: { likes: 0.6, comments: 0.4 } };
-  const DEFAULT = {
+  const W = R.weights || { video: { views: .5, comments: .3, likes: .2 }, image: { likes: .6, comments: .4 } };
+  const DEFAULT = R.criteria_defaults || {
     t1: S.hot_multiplier, t2: S.tier2_multiplier, t3: S.tier3_multiplier,
     wvViews: W.video.views * 100, wvComments: W.video.comments * 100, wvLikes: W.video.likes * 100,
     wiLikes: W.image.likes * 100, wiComments: W.image.comments * 100,
@@ -60,6 +59,7 @@
     minViews: 0, minComments: 0, minLikes: 0, minEng: S.min_engagement || 20,
     followersMin: 0, followersMax: 0, confidence: 'all', maturity: true,
   };
+  if (!R.criteria) R.criteria = { version: 0, values: DEFAULT };
   const PRESETS = {
     default: {},
     comments: { wvViews: 25, wvComments: 55, wvLikes: 20, wiLikes: 40, wiComments: 60, minRatioComments: 1.5 },
@@ -67,51 +67,30 @@
     strict: { t1: 2.5, t2: 4, t3: 7, minEng: 100, confidence: 'medium' },
     loose: { t1: 1.4, t2: 2.2, t3: 3.5, minEng: 10 },
   };
-  let C = Object.assign({}, DEFAULT, store.get('hp-criteria', {}));
+  let C = Object.assign({}, R.criteria.values);
   const norm3 = (a, b, c) => { const s = a + b + c || 1; return [a / s, b / s, c / s]; };
   const norm2 = (a, b) => { const s = a + b || 1; return [a / s, b / s]; };
 
-  function compute(p) {
-    const m = C.maturity ? p.maturity : 1;
-    const rr = (v, b) => (v == null || b == null ? null : (v + 1) / (b * m + 1));
-    const rLikes = rr(p.likes, p.baseline.likes) || 1;
-    const rComments = rr(p.comments, p.baseline.comments) || 1;
-    const rViews = isVideo(p) && p.views != null && p.baseline.views ? rr(p.views, p.baseline.views) : null;
-    let pairs;
-    if (rViews != null) { const [a, b, c] = norm3(C.wvViews, C.wvComments, C.wvLikes); pairs = [[rViews, a], [rComments, b], [rLikes, c]]; }
-    else { const [a, b] = norm2(C.wiLikes, C.wiComments); pairs = [[rLikes, a], [rComments, b]]; }
-    let mult = Math.pow(2, pairs.reduce((s, [r, w]) => s + w * Math.log2(Math.max(r, 1e-6)), 0));
-    const eng = p.likes + p.comments * 5 + (p.views || 0) / 50;
-    if (eng < C.minEng) mult = Math.min(mult, 1);
-    const tier = mult >= C.t3 ? 3 : mult >= C.t2 ? 2 : mult >= C.t1 ? 1 : 0;
-    const flags = [];
-    if (rComments >= 2.5 && p.comments >= 5) flags.push('comments_spike');
-    if (rViews != null && rViews >= 2.5) flags.push('views_spike');
-    if (rLikes >= 2.5) flags.push('likes_spike');
-    if (p.age_hours <= 48) flags.push('fresh');
-    if (p.flags.includes('rising')) flags.push('rising');
-    return Object.assign({}, p, {
-      ratios: { likes: rLikes, comments: rComments, views: rViews }, multiplier: mult, tier, flags, eng,
-      rank_score: mult * (0.6 + 0.4 * Math.min(1, Math.log10(eng + 1) / 5)),
-    });
-  }
-  const acctMap = Object.fromEntries(R.accounts.map((a) => [a.username, a]));
-  const confRank = { low: 0, medium: 1, high: 2 };
-  function passesCriteria(p) {
-    const a = acctMap[p.username] || {};
-    if (C.followersMin && a.followers < C.followersMin) return false;
-    if (C.followersMax && a.followers > C.followersMax) return false;
-    if (C.confidence !== 'all' && confRank[p.confidence] < confRank[C.confidence]) return false;
-    if (C.minRatioViews && (p.ratios.views == null || p.ratios.views < C.minRatioViews)) return false;
-    if (C.minRatioComments && p.ratios.comments < C.minRatioComments) return false;
-    if (C.minRatioLikes && p.ratios.likes < C.minRatioLikes) return false;
-    if (C.minViews && (p.views || 0) < C.minViews) return false;
-    if (C.minComments && p.comments < C.minComments) return false;
-    if (C.minLikes && p.likes < C.minLikes) return false;
-    return true;
-  }
   let POSTS = [];
-  function recompute() { POSTS = R.posts.map(compute).filter(passesCriteria); store.set('hp-criteria', C); }
+  function recompute() { POSTS = R.posts.slice(); }
+  async function saveCriteria(values) {
+    const response = await fetch('/api/criteria', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '판정 기준 저장 실패');
+    Object.assign(R, data.report);
+    C = Object.assign({}, data.criteria.values);
+    syncPanel(); renderAll();
+    $('#meta').textContent = `${R.generated_at_kst} 기준 · 판정 v${data.criteria.version} · ${R.summary.accounts}개 계정 · 최근 ${S.recent_days}일 게시물 ${R.posts.length}개 분석`;
+  }
+  let criteriaQueue = Promise.resolve();
+  function applyCriteria() {
+    syncPanel();
+    const values = Object.assign({}, C);
+    criteriaQueue = criteriaQueue.catch(() => {}).then(() => saveCriteria(values));
+    criteriaQueue.catch((error) => { $('#crit-count').textContent = error.message; });
+  }
 
   // ---------- 기준 패널 UI ----------
   const critBody = $('#crit-body');
@@ -152,11 +131,11 @@
         else C[k] = +el.value || 0;
         if (k === 't1' && C.t2 < C.t1) C.t2 = C.t1;
         if (k === 't2' && C.t3 < C.t2) C.t3 = C.t2;
-        syncPanel(); renderAll();
+        applyCriteria();
       };
-      el.addEventListener(el.type === 'range' ? 'input' : 'change', handler);
+      el.addEventListener('change', handler);
     });
-    $('#crit-reset').addEventListener('click', () => { C = Object.assign({}, DEFAULT); syncPanel(); renderAll(); });
+    $('#crit-reset').addEventListener('click', () => { C = Object.assign({}, DEFAULT); applyCriteria(); });
   }
   function syncPanel() {
     $$('[data-k]', critBody).forEach((el) => { const k = el.dataset.k; if (el.type === 'checkbox') el.checked = !!C[k]; else el.value = C[k]; });
@@ -186,10 +165,10 @@
     $('#crit-toggle').setAttribute('aria-expanded', String(open));
     $('#crit-toggle').textContent = open ? '⚙️ 판정 기준 닫기' : '⚙️ 판정 기준 조절';
   });
-  $('#presets').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; C = Object.assign({}, DEFAULT, PRESETS[b.dataset.preset]); syncPanel(); renderAll(); });
+  $('#presets').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; C = Object.assign({}, DEFAULT, PRESETS[b.dataset.preset]); applyCriteria(); });
 
   // ---------- 헤더 / 배너 ----------
-  $('#meta').textContent = `${R.generated_at_kst} 기준 · ${R.summary.accounts}개 계정 · 최근 ${S.recent_days}일 게시물 ${R.posts.length}개 분석`;
+  $('#meta').textContent = `${R.generated_at_kst} 기준 · 판정 v${R.criteria.version} · ${R.summary.accounts}개 계정 · 최근 ${S.recent_days}일 게시물 ${R.posts.length}개 분석`;
   const sb = $('#source-badge');
   if (R.is_sample) { sb.textContent = '샘플 데이터'; sb.classList.add('sample'); }
   else { sb.textContent = { instaloader: '실데이터 · 세션 수집', web: '실데이터 · 웹 수집', dump: '실데이터 · 브라우저 덤프' }[R.source] || '실데이터'; sb.classList.add('live'); }
@@ -549,4 +528,14 @@
 
   syncPanel();
   renderAll();
+  fetch('/api/criteria').then((response) => response.json()).then((active) => {
+    if (!active.values) return;
+    if (active.version !== R.criteria.version) {
+      C = Object.assign({}, active.values);
+      applyCriteria();
+    } else {
+      C = Object.assign({}, active.values);
+      syncPanel();
+    }
+  }).catch((error) => { $('#crit-count').textContent = `판정 기준 조회 실패: ${error.message}`; });
 })();

@@ -9,6 +9,7 @@ from . import __version__
 from .analyze import Scored, extract_topics, score_account, post_terms
 from .config import Settings
 from .storage import Storage
+from .criteria import defaults
 from .thumbs import ensure_thumbnail
 
 KST = timezone(timedelta(hours=9))
@@ -18,17 +19,19 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
                  usernames: list[str] | None = None) -> dict:
     now = int(time.time())
     profiles = store.profiles()
+    active_criteria = store.criteria(settings)
     all_scored: list[Scored] = []
     accounts_out = []
     allowed = set(usernames) if usernames is not None else None
     for username, prof in sorted(profiles.items()):
         if allowed is not None and username not in allowed:
             continue
-        posts = store.posts_for(username, limit=settings.posts_per_account * 2)
+        posts = store.posts_for(username, limit=None)
         if not posts:
             continue
         snaps = {p.shortcode: store.snapshots_for(p.shortcode) for p in posts}
-        scored = score_account(posts, settings, now=now, snapshots=snaps)
+        scored = score_account(posts, settings, now=now, snapshots=snaps,
+                               criteria=active_criteria["values"], followers=prof.followers)
         recent = [s for s in scored if s.age_hours <= settings.recent_days * 24]
         all_scored.extend(recent)
         videos = [p for p in posts if p.is_video and p.views]
@@ -54,6 +57,10 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
         thumb = ensure_thumbnail(settings, s.post)
         d = s.post.to_dict()
         d.update({
+            "metric_status": {"likes": "missing" if s.post.likes is None else "observed",
+                              "comments": "missing" if s.post.comments is None else "observed",
+                              "views": ("not_applicable" if not s.post.is_video else
+                                        "missing" if s.post.views is None else "observed")},
             "thumb": thumb,
             "baseline": {k: (round(v, 1) if isinstance(v, float) else v) for k, v in s.baseline.items()},
             "ratios": {k: (round(v, 2) if v is not None else None) for k, v in s.ratios.items()},
@@ -81,15 +88,17 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
         "source": source,
         "is_sample": source == "demo",
         "notes": notes or [],
+        "criteria": active_criteria,
+        "criteria_defaults": defaults(settings),
         "settings": {
             "recent_days": settings.recent_days,
             "collect_posts_per_account": settings.collect_posts_per_account,
-            "hot_multiplier": settings.hot_multiplier,
-            "tier2_multiplier": settings.tier2_multiplier,
-            "tier3_multiplier": settings.tier3_multiplier,
+            "hot_multiplier": active_criteria["values"]["t1"],
+            "tier2_multiplier": active_criteria["values"]["t2"],
+            "tier3_multiplier": active_criteria["values"]["t3"],
             "posts_per_account": settings.posts_per_account,
             "maturity_hours": settings.maturity_hours,
-            "min_engagement": settings.min_engagement,
+            "min_engagement": active_criteria["values"]["minEng"],
         },
         "weights": {"video": {"views": 0.5, "comments": 0.3, "likes": 0.2}, "image": {"likes": 0.6, "comments": 0.4}},
         "summary": {

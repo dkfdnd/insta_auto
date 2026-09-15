@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 
 from .models import Post, Profile
+from .config import Settings
+from .criteria import defaults, validate
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS profiles (
@@ -59,6 +61,12 @@ CREATE TABLE IF NOT EXISTS hot_view_tracking (
     detected_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_hot_tracking_user_until ON hot_view_tracking(username, track_until);
+CREATE TABLE IF NOT EXISTS scoring_criteria (
+    id INTEGER PRIMARY KEY CHECK (id=1),
+    version INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    values_json TEXT NOT NULL
+);
 """
 
 
@@ -166,11 +174,34 @@ class Storage:
             )
         return out
 
-    def posts_for(self, username: str, limit: int = 60) -> list[Post]:
-        rows = self.conn.execute(
-            "SELECT * FROM posts WHERE username=? ORDER BY taken_at DESC LIMIT ?", (username, limit)
-        ).fetchall()
+    def posts_for(self, username: str, limit: int | None = 60) -> list[Post]:
+        sql = "SELECT * FROM posts WHERE username=? ORDER BY taken_at DESC, shortcode DESC"
+        rows = self.conn.execute(sql + (" LIMIT ?" if limit is not None else ""),
+                                 (username, limit) if limit is not None else (username,)).fetchall()
         return [self._row_to_post(r) for r in rows]
+
+    def criteria(self, settings: Settings) -> dict:
+        row = self.conn.execute("SELECT version,updated_at,values_json FROM scoring_criteria WHERE id=1").fetchone()
+        if row:
+            return {"version": row["version"], "updated_at": row["updated_at"],
+                    "values": json.loads(row["values_json"])}
+        values = defaults(settings)
+        now = int(time.time())
+        self.conn.execute("INSERT OR IGNORE INTO scoring_criteria VALUES (1,1,?,?)",
+                          (now, json.dumps(values, ensure_ascii=False)))
+        self.conn.commit()
+        return self.criteria(settings)
+
+    def update_criteria(self, values: dict, settings: Settings) -> dict:
+        values = validate(values, settings)
+        current = self.criteria(settings)
+        if values == current["values"]:
+            return current
+        now = int(time.time())
+        self.conn.execute("UPDATE scoring_criteria SET version=version+1,updated_at=?,values_json=? WHERE id=1",
+                          (now, json.dumps(values, ensure_ascii=False)))
+        self.conn.commit()
+        return self.criteria(settings)
 
     def snapshots_for(self, shortcode: str) -> list[dict]:
         rows = self.conn.execute(
@@ -222,7 +253,7 @@ class Storage:
     def _row_to_post(r: sqlite3.Row) -> Post:
         return Post(
             shortcode=r["shortcode"], username=r["username"], taken_at=r["taken_at"], kind=r["kind"],
-            likes=r["likes"] or 0, comments=r["comments"] or 0, views=r["views"],
+            likes=r["likes"], comments=r["comments"], views=r["views"],
             caption=r["caption"] or "", hashtags=json.loads(r["hashtags"] or "[]"),
             thumbnail_url=r["thumbnail_url"] or "", video_duration=r["video_duration"], media_id=r["media_id"] or "",
         )

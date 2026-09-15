@@ -399,11 +399,14 @@ def _node_to_post(n: dict, username: str) -> Post | None:
     if iv:
         # 640px 근처 후보 선택
         thumb = min(iv, key=lambda c: abs((c.get("width") or 0) - 640)).get("url", "")
-    views = n.get("play_count") or n.get("ig_play_count") or n.get("view_count")
+    views = next((n[key] for key in ("play_count", "ig_play_count", "view_count")
+                  if n.get(key) is not None), None)
     owner = (n.get("user") or {}).get("username") or username
     return Post(
         shortcode=code, username=owner.lower(), taken_at=int(n.get("taken_at") or 0), kind=kind,
-        likes=int(n.get("like_count") or 0), comments=int(n.get("comment_count") or 0),
+        likes=(None if n.get("like_and_view_counts_disabled") or n.get("like_count") is None
+               else int(n["like_count"])),
+        comments=(int(n["comment_count"]) if n.get("comment_count") is not None else None),
         views=(int(views) if (views is not None and kind in ("reel", "video")) else None),
         caption=cap, hashtags=[h.lower() for h in _HASHTAG_RE.findall(cap)],
         thumbnail_url=thumb, video_duration=(float(n["video_duration"]) if n.get("video_duration") else None),

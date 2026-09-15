@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import threading
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +17,8 @@ from .platform_session import PlatformSessionManager
 from .accounts import AccountRegistry
 from .scheduler import schedule_status
 from .storage import Storage
+from .report import build_report, write_report
+from .criteria import defaults
 
 
 def make_handler(settings: Settings):
@@ -23,6 +26,7 @@ def make_handler(settings: Settings):
     transcripts = TranscriptJobManager(settings)
     sessions = PlatformSessionManager(settings)
     accounts = AccountRegistry(settings)
+    criteria_lock = threading.Lock()
 
     class Handler(SimpleHTTPRequestHandler):
         def log_message(self, *_args) -> None:
@@ -35,6 +39,33 @@ def make_handler(settings: Settings):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers(); self.wfile.write(body)
+
+        def do_PUT(self) -> None:  # noqa: N802
+            if urlparse(self.path).path != "/api/criteria":
+                self.send_error(HTTPStatus.NOT_FOUND); return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > 8192:
+                    raise ValueError("잘못된 요청 크기")
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict) or set(payload) != {"values"}:
+                    raise ValueError("values 객체가 필요합니다.")
+                with criteria_lock:
+                    store = Storage(settings.db_path)
+                    try:
+                        active = store.update_criteria(payload["values"], settings)
+                        previous = {}
+                        if settings.report_path.is_file():
+                            previous = json.loads(settings.report_path.read_text(encoding="utf-8"))
+                        report = build_report(settings, store, previous.get("source", "reanalysis"),
+                                              previous.get("notes", []), accounts.usernames())
+                        write_report(settings, report)
+                    finally:
+                        store.close()
+                self._json({"criteria": active, "report": report})
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
@@ -81,6 +112,13 @@ def make_handler(settings: Settings):
             if path == "/api/accounts":
                 items = accounts.list()
                 self._json({"accounts": items, "count": len(items)}); return
+            if path == "/api/criteria":
+                store = Storage(settings.db_path)
+                try:
+                    active = store.criteria(settings)
+                finally:
+                    store.close()
+                self._json({**active, "defaults": defaults(settings)}); return
             if path == "/api/collection-status":
                 store = Storage(settings.db_path)
                 try:

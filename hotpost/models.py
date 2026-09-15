@@ -26,8 +26,8 @@ class Post:
     username: str
     taken_at: int                    # unix epoch (UTC)
     kind: str                        # 'reel' | 'video' | 'image' | 'carousel'
-    likes: int = 0
-    comments: int = 0
+    likes: Optional[int] = 0       # None: 숨김/조회 불가, 0: 실제 관측된 0
+    comments: Optional[int] = 0
     views: Optional[int] = None      # 릴스/동영상 조회수 (사진은 None)
     caption: str = ""
     hashtags: list[str] = field(default_factory=list)

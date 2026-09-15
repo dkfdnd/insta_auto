@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 
 from .config import Settings
 from .models import Post, Profile
+from .criteria import defaults
 
 # ---------------------------------------------------------------- scoring
 
@@ -41,9 +42,9 @@ class Scored:
     velocity: dict | None = None   # 스냅샷이 2개 이상일 때 시간당 증가량
 
 
-def _median(xs: list[float]) -> float:
+def _median(xs: list[float]) -> float | None:
     xs = [x for x in xs if x is not None]
-    return float(statistics.median(xs)) if xs else 0.0
+    return float(statistics.median(xs)) if xs else None
 
 
 def _ratio(value: float | None, base: float | None, maturity: float) -> float | None:
@@ -53,13 +54,20 @@ def _ratio(value: float | None, base: float | None, maturity: float) -> float | 
 
 
 def score_account(posts: list[Post], settings: Settings, now: int | None = None,
-                  snapshots: dict[str, list[dict]] | None = None) -> list[Scored]:
+                  snapshots: dict[str, list[dict]] | None = None,
+                  criteria: dict | None = None, followers: int = 0) -> list[Scored]:
     now = now or int(time.time())
+    c = criteria or defaults(settings)
     out: list[Scored] = []
     for p in posts:
-        others = [q for q in posts if q.shortcode != p.shortcode]
-        same_kind = [q for q in others if q.is_video == p.is_video]
-        peers = same_kind if len(same_kind) >= settings.min_peers_for_baseline else others
+        older = [q for q in posts if q.taken_at < p.taken_at]
+        same_kind = [q for q in older if q.is_video == p.is_video]
+        other_kind = [q for q in older if q.is_video != p.is_video]
+        peer_limit = min(30, max(1, settings.posts_per_account))
+        peers = same_kind[:peer_limit]
+        supplemented = len(peers) < settings.min_peers_for_baseline
+        if supplemented:
+            peers += other_kind[:peer_limit - len(peers)]
         base_likes = _median([q.likes for q in peers])
         base_comments = _median([q.comments for q in peers])
         base_views = _median([q.views for q in peers if q.is_video]) if p.is_video else None
@@ -69,26 +77,31 @@ def score_account(posts: list[Post], settings: Settings, now: int | None = None,
         age_h = max(0.0, (now - p.taken_at) / 3600.0)
         maturity = min(1.0, 0.35 + 0.65 * age_h / settings.maturity_hours)
 
-        r_likes = _ratio(p.likes, base_likes, maturity) or 1.0
-        r_comments = _ratio(p.comments, base_comments, maturity) or 1.0
-        r_views = _ratio(p.views, base_views, maturity) if p.is_video else None
+        m = maturity if c["maturity"] else 1.0
+        r_likes = _ratio(p.likes, base_likes, m) or 1.0
+        r_comments = _ratio(p.comments, base_comments, m) or 1.0
+        r_views = _ratio(p.views, base_views, m) if p.is_video else None
 
         if r_views is not None:
-            weights = [(r_views, 0.5), (r_comments, 0.3), (r_likes, 0.2)]
+            names = ("wvViews", "wvComments", "wvLikes")
+            ratios = (r_views, r_comments, r_likes)
         else:
-            weights = [(r_likes, 0.6), (r_comments, 0.4)]
+            names = ("wiLikes", "wiComments")
+            ratios = (r_likes, r_comments)
+        total_weight = sum(c[name] for name in names)
+        weights = [(ratio, c[name] / total_weight) for ratio, name in zip(ratios, names)]
         log_mult = sum(w * math.log2(max(r, 1e-6)) for r, w in weights)
         multiplier = 2 ** log_mult
 
-        engagement = p.likes + p.comments * 5 + (p.views or 0) / 50
-        if engagement < settings.min_engagement:
+        engagement = (p.likes or 0) + (p.comments or 0) * 5 + (p.views or 0) / 50
+        if engagement < c["minEng"] or not peers:
             multiplier = min(multiplier, 1.0)
 
-        if multiplier >= settings.tier3_multiplier:
+        if multiplier >= c["t3"]:
             tier = 3
-        elif multiplier >= settings.tier2_multiplier:
+        elif multiplier >= c["t2"]:
             tier = 2
-        elif multiplier >= settings.hot_multiplier:
+        elif multiplier >= c["t1"]:
             tier = 1
         else:
             tier = 0
@@ -97,7 +110,7 @@ def score_account(posts: list[Post], settings: Settings, now: int | None = None,
         rank_score = multiplier * (0.6 + 0.4 * min(1.0, math.log10(engagement + 1) / 5.0))
 
         flags = []
-        if r_comments >= 2.5 and p.comments >= 5:
+        if r_comments >= 2.5 and (p.comments or 0) >= 5:
             flags.append("comments_spike")
         if r_views is not None and r_views >= 2.5:
             flags.append("views_spike")
@@ -106,10 +119,36 @@ def score_account(posts: list[Post], settings: Settings, now: int | None = None,
         if age_h <= 48:
             flags.append("fresh")
         confidence = "high"
-        if len(peers) < settings.min_peers_for_baseline or age_h < 12:
+        if supplemented or len(peers) < settings.min_peers_for_baseline or age_h < 12:
             confidence = "low"
         elif len(peers) < settings.min_peers_for_baseline * 2 or age_h < 24:
             confidence = "medium"
+
+        confidence_rank = {"low": 0, "medium": 1, "high": 2}
+        gated = (
+            (c["followersMin"] and followers < c["followersMin"])
+            or (c["followersMax"] and followers > c["followersMax"])
+            or (c["confidence"] != "all" and confidence_rank[confidence] < confidence_rank[c["confidence"]])
+            or (c["minRatioViews"] and (r_views is None or r_views < c["minRatioViews"]))
+            or (c["minRatioComments"] and r_comments < c["minRatioComments"])
+            or (c["minRatioLikes"] and r_likes < c["minRatioLikes"])
+            or (c["minViews"] and (p.views is None or p.views < c["minViews"]))
+            or (c["minComments"] and (p.comments is None or p.comments < c["minComments"]))
+            or (c["minLikes"] and (p.likes is None or p.likes < c["minLikes"]))
+        )
+        if gated:
+            tier = 0
+            flags.append("criteria_gate")
+
+        caption = p.caption.lower()
+        for flag, words in {
+            "ad_candidate": ("광고", "#ad", "paid partnership"),
+            "sponsored_candidate": ("협찬", "제공받", "sponsored"),
+            "group_buy_candidate": ("공동구매", "공구", "group buy"),
+            "event_candidate": ("이벤트", "추첨", "giveaway"),
+        }.items():
+            if any(word in caption for word in words):
+                flags.append(flag)
 
         velocity = _velocity((snapshots or {}).get(p.shortcode, []))
         if velocity and velocity.get("hours", 0) >= 3:
@@ -117,7 +156,9 @@ def score_account(posts: list[Post], settings: Settings, now: int | None = None,
 
         out.append(Scored(
             post=p,
-            baseline={"likes": base_likes, "comments": base_comments, "views": base_views, "peers": len(peers)},
+            baseline={"likes": base_likes, "comments": base_comments, "views": base_views,
+                      "peers": len(peers), "same_kind_peers": len(same_kind[:peer_limit]),
+                      "supplemented": supplemented},
             ratios={"likes": r_likes, "comments": r_comments, "views": r_views},
             multiplier=multiplier, tier=tier, rank_score=rank_score, age_hours=age_h, maturity=maturity,
             flags=flags, confidence=confidence, velocity=velocity,
