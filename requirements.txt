@@ -5,3 +5,5 @@ browser-cookie3>=0.19
 kiwipiepy>=0.18
 playwright>=1.50
 open_clip_torch>=3.0
+mlx-whisper>=0.4.3; sys_platform == "darwin" and platform_machine == "arm64"
+easyocr>=1.7.2

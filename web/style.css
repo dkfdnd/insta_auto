@@ -57,6 +57,9 @@ h2 { font-size: 18px; font-weight: 700; }
 
 .section { margin: 28px 0; }
 .section-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.summary-head { align-items: center; justify-content: space-between; }
+.summary-head > div:first-child { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.section-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .hint { margin: 0; color: var(--muted); font-size: 13px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -73,7 +76,7 @@ h2 { font-size: 18px; font-weight: 700; }
 .seg button.on { background: var(--text); color: var(--bg); }
 select, input[type=search] { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 13px; }
 input[type=search] { min-width: 200px; flex: 1; }
-.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 8px 12px; cursor: pointer; font-size: 13px; font-weight: 600; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 8px 12px; cursor: pointer; font-size: 13px; font-weight: 600; text-decoration: none; }
 .btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 16px; }
@@ -162,6 +165,10 @@ button.linkbtn:disabled { opacity: .55; cursor: wait; }
 .source-progress { height: 7px; background: var(--line); overflow: hidden; border-radius: 9px; margin-top: 8px; }
 .source-progress i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
 .source-ready { margin-top: 10px; padding: 8px 12px; }
+.transcript-lines { max-height: 300px; overflow-y: auto; margin-top: 12px; border-top: 1px solid var(--line); }
+.transcript-line { display: grid; grid-template-columns: 38px 72px 1fr; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--line); line-height: 1.45; }
+.transcript-line time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.transcript-tag { color: var(--accent); font-weight: 700; }
 .session-card { max-width: 620px; }
 .session-body { padding: 26px; display: flex; flex-direction: column; gap: 16px; }
 .session-platforms { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -199,3 +206,39 @@ button.linkbtn:disabled { opacity: .55; cursor: wait; }
 .toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); font-weight: 600; cursor: pointer; }
 .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
 tr.acc.on td { background: var(--accent-soft); }
+
+/* ---- 모니터링 계정 관리 ---- */
+.accounts-page { padding-bottom: 40px; }
+.collection-health { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 20px; }
+.collection-health > div { display: flex; flex-direction: column; gap: 3px; padding: 13px 15px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.collection-health span { color: var(--muted); font-size: 12px; font-weight: 600; }
+.collection-health b { font-size: 14px; }
+.account-add-panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
+.account-form { display: grid; grid-template-columns: minmax(240px, 1.5fr) minmax(200px, 1fr) auto; gap: 10px; align-items: end; }
+.account-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); font-weight: 700; }
+.account-form label small { font-weight: 500; }
+.account-form input { width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.account-form .linkbtn { border: 0; cursor: pointer; height: 42px; }
+.account-message { margin-top: 12px; padding: 10px 12px; border-radius: 9px; background: #e6f5ea; color: #1f7a3a; font-size: 13px; }
+.account-message.error, .error { color: #c33; }
+.account-list-head { justify-content: space-between; align-items: center; }
+.account-count { display: inline-grid; place-items: center; min-width: 27px; height: 27px; margin-left: 5px; padding: 0 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 13px; vertical-align: 2px; }
+.account-list { display: flex; flex-direction: column; gap: 8px; }
+.account-row { display: grid; grid-template-columns: 42px minmax(190px, 1fr) auto auto; gap: 12px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; box-shadow: var(--shadow); }
+.account-avatar { width: 42px; height: 42px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 800; }
+.account-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.account-main a { font-weight: 800; text-decoration: none; }
+.account-main > div span { color: var(--muted); margin-left: 8px; font-size: 13px; }
+.account-main p { margin: 3px 0 0; font-size: 13px; }
+.account-stats { display: flex; gap: 18px; color: var(--muted); font-size: 12px; }
+.account-stats span { display: flex; flex-direction: column; }
+.account-stats b { color: var(--text); font-size: 13px; }
+.account-delete { color: #c33; }
+.account-delete:hover { border-color: #c33; }
+@media (max-width: 800px) {
+  .top-right { flex-wrap: wrap; justify-content: flex-end; }
+  .account-form { grid-template-columns: 1fr; }
+  .account-row { grid-template-columns: 42px 1fr auto; }
+  .account-stats { grid-column: 2 / -1; flex-wrap: wrap; }
+  .collection-health { grid-template-columns: 1fr; }
+}

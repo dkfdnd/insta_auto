@@ -1,6 +1,6 @@
 # 🔥 오늘의 터진 게시물 (hotpost)
 
-`influencer_list.txt` 에 적힌 인스타그램 인플루언서들의 최근 게시물을 모아, **각 계정의 평소 성과 대비 크게 튄 게시물**을 찾아 웹페이지로 보여준다.
+웹의 **모니터링 계정 관리**에서 등록한 인스타그램 인플루언서들의 최근 게시물을 모아, **각 계정의 평소 성과 대비 크게 튄 게시물**을 찾아 보여준다.
 
 ## 빠른 시작
 
@@ -33,10 +33,21 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `python -m hotpost sources SHORTCODE` | 릴스 장면 분석 → 공개 소스 후보 탐색·검증·ZIP 생성 |
 | `python -m hotpost import dump.json` | 브라우저 덤프(`tools/browser_dump.js`) 가져오기 |
 | `python -m hotpost list` | 인플루언서 목록 파싱 확인 |
+| `python -m hotpost schedule install` | macOS에서 매일 오전 7시 자동 수집 등록 |
+| `python -m hotpost schedule status` | 자동 수집 등록 상태 확인 |
+| `python -m hotpost schedule uninstall` | 자동 수집 일정 제거 |
+
+릴스 상세 모달에는 **소스 영상 찾기·다운로드**와 **대본 추출** 버튼이 있다. 두 작업 모두
+`python -m hotpost serve`로 실행한 서버가 필요하므로, `web/index.html`을 파일로만 열면 동작하지 않는다.
 
 ## 인플루언서 추가
 
-`influencer_list.txt` 에 한 줄씩 추가하면 끝. URL(`?stkn=` 붙은 공유 링크 포함), `@아이디`, 아이디만 적어도 된다. `#` 으로 시작하는 줄은 주석, `|` 뒤는 메모.
+대시보드 상단 또는 계정별 요약의 **👥 모니터링 계정 관리**를 열어 아이디, `@아이디` 또는 Instagram 프로필 URL을 등록한다.
+메모도 함께 저장할 수 있으며 삭제하면 다음 수집·분석부터 제외된다. 삭제해도 이미 수집한 게시물과 통계 원본은
+보존되므로 계정을 다시 등록하면 이어서 사용할 수 있다.
+
+기존 `influencer_list.txt` 목록은 계정 DB를 처음 만드는 시점에 한 번 자동으로 가져온다. 이후 SQLite가 기준
+저장소가 되며, 웹에서 모든 계정을 삭제해도 텍스트 파일에서 다시 생성되지 않는다.
 
 ```
 https://www.instagram.com/some_account?stkn=xxxx
@@ -72,29 +83,42 @@ third_account
 ## 구조
 
 ```
-influencer_list.txt      # 입력 목록
+influencer_list.txt      # 기존 목록 최초 마이그레이션용
 config.json              # 기준값/아이디
 hotpost/
   sources.py             # 목록 파서
   collectors/            # web_graphql(기본) · instaloader · dump · demo
-  storage.py             # SQLite (posts / snapshots → 증가 속도 계산)
+  storage.py             # SQLite (관리 계정 / posts / snapshots → 증가 속도 계산)
+  accounts.py            # 계정 등록·삭제와 레거시 목록 1회 마이그레이션
   analyze.py             # 배수 계산 · 등급 · 주제 추출
   report.py              # report.json / web/data.js
+  source_finder.py       # 소스 후보 탐색·검증·ZIP
+  transcript.py          # 음성 전사·화면 OCR·TXT/JSON
+  server.py              # 정적 웹 + 계정/소스/대본 API
+  scheduler.py           # macOS LaunchAgent
   cli.py
 web/                     # 순수 HTML/CSS/JS (빌드 없음)
 tools/browser_dump.js    # 백업 수집 경로
-data/                    # DB, 세션, 리포트 (git 제외)
+data/                    # DB, 세션, 모델, 다운로드, 대본 (git 제외)
 ```
 
-## 매일 자동 실행 (선택)
+다른 AI·개발자를 위한 작업 가이드는 [`AGENTS.md`](AGENTS.md), 대본 추출의 입력·출력 계약과
+검증 방법은 [`docs/transcript_pipeline.md`](docs/transcript_pipeline.md)를 먼저 확인한다.
+
+## 매일 자동 실행
 
 ```bash
-crontab -e
-# 매일 오전 8시, 오후 8시
-0 8,20 * * * cd /Users/dkfdnd/dev/insta_auto && .venv/bin/python -m hotpost run >> data/cron.log 2>&1
+.venv/bin/python -m hotpost schedule install
 ```
 
+macOS LaunchAgent가 모니터링 계정 전체를 매일 오전 7시에 수집하고 리포트를 다시 만든다. 로그는
+`data/daily_collect.log`에 쌓인다. 같은 시간에 수동 수집이 실행 중이면 파일 잠금으로 중복 실행을 막는다.
 수집이 반복될수록 스냅샷이 쌓여 게시물별 **시간당 증가 속도**(📈 상승 중)가 표시된다.
+
+한 번 수집할 때 계정별 최신 30개 게시물을 다시 읽어 새 게시물을 추가하고 좋아요·댓글·캡션 등 기존 게시물의
+수치도 upsert한다. 릴스 조회수는 Instagram 요청 제한을 줄이기 위해 계정별 최근 20개 중 게시 후 14일 이내
+릴스를 다시 조회하고, 그보다 오래된 릴스는 마지막 조회수를 재사용한다. 수집이 끝나면 터진 게시물 등급과
+`web/data.js`를 다시 생성하므로 대시보드를 새로고침하면 오전 7시 결과가 반영된다.
 
 ## 소스 영상 찾기
 
@@ -141,6 +165,20 @@ OCR은 Tesseract의 `eng+kor+chi_sim` 언어 데이터를 사용한다. Tesserac
 서버가 없는 환경에서는 `HOTPOST_SOURCE_BROWSER_HEADLESS=true`로 headless 실행이 가능하지만 Google Lens가
 CAPTCHA를 요구할 수 있다. Yandex와 플랫폼 직접 검색은 독립적으로 계속 실행된다. OpenCLIP 모델은 최초 한 번
 `data/models`에 다운로드되며 이후 재사용한다.
+
+## 릴스 대본 추출
+
+웹 서버에서 릴스 카드를 열고 **대본 추출**을 누른다. 저장된 Instagram 게시물의 기준 영상과
+로그인 세션을 사용하므로, DB에 없는 shortcode나 접근할 수 없는 영상은 실패한다. ffmpeg로 16kHz
+음성을 분리하고 Apple Silicon의 `mlx-whisper`로 시간별 대사를 전사한다. 화면 글자는 1초 간격으로
+프레임을 뽑아 EasyOCR(`ko+en`)로 읽고, 실패 시 Tesseract로 대체한다. **음성**과 **화면 글자**는
+서로 다른 출처로 보존하며, 보이지 않거나 들리지 않는 문구를 추정해서 만들지 않는다.
+
+- 필수: `ffmpeg`, `ffprobe`; Python 의존성은 `requirements.txt`에 있다.
+- Apple Silicon에서는 첫 실행 시 공개 Whisper 모델을 `data/models/`에 받는다. EasyOCR 모델도 첫 실행 시 받는다.
+- 현재 음성 전사 구현은 `mlx-whisper` 기반이므로 다른 OS에서는 설치 가능한 전사 백엔드를 추가해야 한다. 음성 모델이 없으면 화면 글자만 반환한다.
+- 결과: `data/transcripts/<shortcode>-<작업시각>/transcript.txt`, `transcript.json`과 기준 영상. 대시보드에서도 TXT/JSON을 다운로드할 수 있다.
+- 자동 전사와 OCR에는 오타가 남는다. 특히 화면 자막과 음성 대사를 합치거나 OCR을 실제 발화로 간주하지 말고 원본과 대조한다.
 
 ## 문제 해결
 

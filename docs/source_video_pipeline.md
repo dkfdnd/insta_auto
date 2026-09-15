@@ -2,34 +2,37 @@
 
 ## 목표와 경계
 
-완성 릴스의 캡션만 비슷한 영상을 받는 것이 아니라, 장면 단위로 원재료 후보를 찾고 검증한다.
-로그인·DRM·봇 차단은 우회하지 않으며 공개 접근 가능한 URL만 처리한다. “다운로드 가능”과 “재사용 허가”는
-다르므로 모든 결과에 원 URL과 권리 상태를 보존한다.
+완성 릴스와 반드시 같은 원본을 찾는다고 보장하지 않는다. 릴스의 장면·제품과 유사하면서
+재가공하기 좋은 **후보**를 찾고, 원 URL·권리 상태를 `manifest.json`에 남긴다.
+다운로드 가능하다는 사실은 상업적 이용 허가가 아니다. 로그인·CAPTCHA는 사용자가
+전용 브라우저에서 처리하며 DRM 또는 봇 차단을 우회하지 않는다.
 
-## 처리 순서
+## 현재 처리 순서
 
-1. 저장된 Instagram 세션으로 선택 릴스의 분석용 영상을 확보한다.
-2. ffmpeg로 영상을 균등 샘플링하고 dHash 거리로 거의 같은 프레임을 제거한다.
-3. 캡션에서 한국어 핵심어를 뽑고 제품군 사전으로 영어·중국어 검색 의도를 만든다.
-4. Playwright 전용 영구 Chrome 프로필로 대표 프레임을 Google Lens와 Yandex Images에 업로드한다.
-   Google CAPTCHA가 나오면 표시 브라우저에서 사람이 한 번 해결하고 해당 프로필을 재사용한다.
-5. Yandex가 인식한 다국어 상품명과 기존 검색어로 TikTok, Douyin, Xiaohongshu, Bilibili를 직접 검색한다.
-   플랫폼별 최대 3건으로 제한해 특정 사이트가 후보 전체를 독점하지 않게 한다.
-6. Google Cloud Vision 키가 있으면 브라우저 검색의 선택적 API 폴백으로 사용한다.
-7. 키 없는 공개 웹 검색과 yt-dlp의 YouTube 검색 추출기로 추가 후보를 모은다.
-8. yt-dlp가 실제로 접근 가능한 URL만 다운로드한다. 로그인/쿠키/DRM 우회 옵션은 사용하지 않는다.
-9. 후보 영상도 프레임화해 기준 릴스와 모든 프레임 쌍의 중앙부 dHash를 비교한다. 동시에 OpenCLIP
-   `ViT-B-32-quickgelu/openai` 이미지 임베딩으로 크롭·색상·촬영 구도가 달라도 같은 제품인지 비교한다.
-10. 최종 점수는 dHash 55% + OpenCLIP 45%다. 영상·미리보기·manifest를 ZIP으로 묶고 기준 Instagram
-    릴스 파일은 ZIP에서 제외한다.
+1. `data/hotpost.db`의 릴스 메타데이터와 저장된 Instagram 세션으로 기준 영상을 받는다.
+2. ffmpeg로 장면 프레임을 뽑고 OpenCLIP 제품 데모 카탈로그, 선택적 Google Cloud
+   Vision, 캡션을 조합해 영어·중국어 검색어를 만든다.
+3. 전용 Playwright Chrome 프로필로 Google Lens·Yandex 역이미지와 TikTok·Douyin·
+   Xiaohongshu·Bilibili 제품 검색을 수행한다. 웹/Bing/YouTube 검색, 로컬 후보 캐시,
+   선택적 Pexels 후보도 합친다. 전용 브라우저 쿠키가 있으면 `yt-dlp`와 공유한다.
+4. 중복 URL을 제거하고 기본 최대 40개 후보를 조사한다. `yt-dlp`로 최대 30개를
+   임시 다운로드·검사한 뒤 실제 받을 수 있는 후보의 장면 dHash와 OpenCLIP 임베딩을
+   기준 릴스와 비교한다. 장면 유사도는 dHash 55% + OpenCLIP 45%다.
+5. 후보 프레임의 자막·워터마크를 OCR로 검사해 `clean-source`, `light-overlay`,
+   `edited-with-text`, `unknown`으로 구분한다. 재가공 적합도(`source_score`)는
+   깨끗한 화면 55% + 제품 의미 유사도 30% + 장면 dHash 15%다.
+6. 이 점수로 정렬해 기본 상위 20개를 ZIP에 넣는다. `clean_sources/`,
+   `review_needed/`, `edited_references/`, `unclassified/` 폴더로 유형을 구분한다.
+   ZIP에는 미리보기·`manifest.json`이 있지만 분석용 기준 Instagram 릴스는 없다.
 
-## 점수 해석
+## 결과 해석
 
-- 0.82 이상: `same-scene-likely` — 동일 장면 가능성이 높지만 사람의 최종 확인 필요
-- 0.72 이상: `close-match` — 매우 유사한 제품/촬영일 가능성
-- 그 미만: `topic-related` — 편집 참고용 후보이며 원본으로 단정하지 않음
+`similarity`가 0.82 이상이면 `same-scene-likely`, 0.72 이상이면 `close-match`,
+그 아래는 `topic-related`다. 모두 자동 추정이며 원본 일치나 사용 권리를 보장하지
+않는다. `source_quality`도 OCR 보조 판정이라 제품 포장·현장 간판을 자막으로
+오인할 수 있다. 최종 선택 전 영상과 원 출처·권리 상태를 직접 확인한다.
 
-dHash는 빠르지만 크롭, 좌우 반전, 큰 자막에 한계가 있어 OpenCLIP과 결합한다. 다음 고도화 우선순위는
-오디오 지문(Chromaprint) → 누적 후보 벡터 인덱스 → 상품 OCR/로고 영역 검출 순이다.
-RAG는 웹에서 새 영상을 “찾는” 수단이 아니라, 이미 수집한 후보·상품·작성자 메타데이터를 다시 검색하고
-과거 성공 패턴을 재사용하는 계층으로 도입하는 것이 맞다.
+설정 기본값은 `hotpost/config.py`, 실제 점수·ZIP 구현은 `hotpost/source_finder.py`,
+브라우저 검색은 `hotpost/browser_search.py`, 텍스트 오버레이는
+`hotpost/text_overlay.py`가 기준이다. 이 문서와 코드가 다르면 코드 구현을 확인하고
+문서도 함께 갱신한다.

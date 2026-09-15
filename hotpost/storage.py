@@ -41,6 +41,16 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at INTEGER, finished_at INTEGER, source TEXT,
     accounts_ok INTEGER, accounts_failed INTEGER, posts INTEGER, notes TEXT
 );
+CREATE TABLE IF NOT EXISTS managed_accounts (
+    username TEXT PRIMARY KEY,
+    note TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS app_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -90,6 +100,51 @@ class Storage:
         )
         self.conn.commit()
 
+    def initialize_managed_accounts(self, accounts: list[tuple[str, str]]) -> bool:
+        """최초 한 번만 레거시 텍스트 목록을 가져온다. 빈 목록도 초기화 상태로 기록한다."""
+        done = self.conn.execute("SELECT 1 FROM app_meta WHERE key='managed_accounts_initialized'").fetchone()
+        if done:
+            return False
+        now = int(time.time())
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO managed_accounts (username,note,created_at,updated_at) VALUES (?,?,?,?)",
+            [(username, note, now + index, now + index) for index, (username, note) in enumerate(accounts)],
+        )
+        self.conn.execute("INSERT INTO app_meta (key,value) VALUES ('managed_accounts_initialized',?)", (str(now),))
+        self.conn.commit()
+        return True
+
+    def managed_accounts(self) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT m.username,m.note,m.created_at,m.updated_at,
+                      COALESCE(p.full_name,'') full_name,COALESCE(p.followers,0) followers,
+                      COALESCE(p.profile_pic_url,'') profile_pic_url,p.updated_at profile_updated_at,
+                      COUNT(posts.shortcode) posts_count,MAX(posts.taken_at) last_post_at
+               FROM managed_accounts m
+               LEFT JOIN profiles p ON p.username=m.username
+               LEFT JOIN posts ON posts.username=m.username
+               GROUP BY m.username
+               ORDER BY m.created_at,m.username"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_managed_account(self, username: str, note: str = "") -> bool:
+        exists = self.conn.execute("SELECT 1 FROM managed_accounts WHERE username=?", (username,)).fetchone()
+        now = int(time.time())
+        next_order = self.conn.execute("SELECT COALESCE(MAX(created_at),0)+1 FROM managed_accounts").fetchone()[0]
+        self.conn.execute(
+            """INSERT INTO managed_accounts (username,note,created_at,updated_at) VALUES (?,?,?,?)
+               ON CONFLICT(username) DO UPDATE SET note=excluded.note,updated_at=excluded.updated_at""",
+            (username, note, next_order, now),
+        )
+        self.conn.commit()
+        return not bool(exists)
+
+    def delete_managed_account(self, username: str) -> bool:
+        cursor = self.conn.execute("DELETE FROM managed_accounts WHERE username=?", (username,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
     # ---- read ----
     def profiles(self) -> dict[str, Profile]:
         rows = self.conn.execute("SELECT * FROM profiles").fetchall()
@@ -119,6 +174,12 @@ class Storage:
     def last_run(self) -> dict | None:
         r = self.conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
         return dict(r) if r else None
+
+    def collection_status(self) -> dict:
+        last = self.last_run()
+        newest_update = self.conn.execute("SELECT MAX(updated_at) FROM posts").fetchone()[0]
+        newest_post = self.conn.execute("SELECT MAX(taken_at) FROM posts").fetchone()[0]
+        return {"last_run": last, "newest_post_update": newest_update, "newest_published_post": newest_post}
 
     @staticmethod
     def _row_to_post(r: sqlite3.Row) -> Post:

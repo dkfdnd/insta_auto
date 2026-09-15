@@ -412,13 +412,15 @@
         ${p.hashtags.length ? `<div class="tags">${p.hashtags.map((h) => `<span data-tag="${esc(h)}">#${esc(h)}</span>`).join('')}</div>` : ''}
         <div class="detail-actions">
           <a class="linkbtn secondary" href="${esc(p.url)}" target="_blank" rel="noopener">Instagram에서 보기 ↗</a>
-          ${isVideo(p) ? `<button class="linkbtn source-download" id="source-download" data-code="${esc(p.shortcode)}">소스 영상 찾기·다운로드</button>` : ''}
+          ${isVideo(p) ? `<button class="linkbtn source-download" id="source-download" data-code="${esc(p.shortcode)}">소스 영상 찾기·다운로드</button><button class="linkbtn secondary" id="transcript-extract">대본 추출</button>` : ''}
         </div>
-        ${isVideo(p) ? '<div class="source-status" id="source-status" hidden></div>' : ''}
+        ${isVideo(p) ? '<div class="source-status" id="source-status" hidden></div><div class="source-status transcript-status" id="transcript-status" hidden></div>' : ''}
       </div></div>`;
     $$('.tags span', modal).forEach((s) => s.addEventListener('click', () => { closeDetail(); state.q = '#' + s.dataset.tag; $('#q').value = state.q; state.tier = 0; $('#tier').value = '0'; renderAll(); }));
     const sourceBtn = $('#source-download', modal);
     if (sourceBtn) sourceBtn.addEventListener('click', () => startSourceJob(p.shortcode, sourceBtn));
+    const transcriptBtn = $('#transcript-extract', modal);
+    if (transcriptBtn) transcriptBtn.addEventListener('click', () => startTranscriptJob(p.shortcode, transcriptBtn));
     modal.hidden = false; document.body.style.overflow = 'hidden';
   }
 
@@ -457,7 +459,58 @@
     }
   }
 
+  async function startTranscriptJob(shortcode, button) {
+    const status = $('#transcript-status', modal);
+    button.disabled = true; status.hidden = false; status.classList.remove('error');
+    status.innerHTML = '<b>대본 추출 준비 중…</b><div class="source-progress"><i style="width:2%"></i></div><small>영상의 실제 음성과 화면 글자를 별도로 분석합니다.</small>';
+    try {
+      const response = await fetch('/api/transcript-jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shortcode }) });
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.error || '작업을 시작하지 못했습니다.');
+      pollTranscriptJob(job.id, button, status);
+    } catch (e) {
+      status.classList.add('error'); status.textContent = '실패: ' + e.message; button.disabled = false;
+    }
+  }
+
+  async function pollTranscriptJob(id, button, status) {
+    try {
+      const response = await fetch('/api/transcript-jobs/' + encodeURIComponent(id));
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.error || '상태를 확인하지 못했습니다.');
+      if (job.status === 'error') throw new Error(job.error || '대본 추출에 실패했습니다.');
+      if (job.status === 'done') {
+        const lines = job.result.lines || [];
+        const clock = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+        status.innerHTML = `<b>대본 추출 완료 · 음성 ${job.result.speech.length}구간 · 화면 글자 ${job.result.screen_text.length}구간</b>
+          <small>자동 인식 결과입니다. 화면 글자는 음성 대사로 간주하지 않습니다.</small>
+          <div class="transcript-lines">${lines.length ? lines.map((line) => `<div class="transcript-line"><time>${clock(line.start)}</time><span class="transcript-tag">${line.source === 'speech' ? '음성' : '화면 글자'}</span><span>${esc(line.text)}</span></div>`).join('') : '<small>추출 가능한 대사나 화면 글자가 없습니다.</small>'}</div>
+          <div class="detail-actions"><a class="linkbtn source-ready" href="${job.download_txt_url}">TXT 다운로드</a><a class="linkbtn secondary source-ready" href="${job.download_json_url}">JSON 다운로드</a></div>
+          ${job.result.notes.map((note) => `<small class="source-note">${esc(note)}</small>`).join('')}`;
+        button.disabled = false; button.textContent = '다시 추출'; return;
+      }
+      status.innerHTML = `<b>${esc(job.message || '분석 중…')}</b><div class="source-progress"><i style="width:${job.progress || 0}%"></i></div><small>모달을 닫아도 서버에서 계속 진행됩니다.</small>`;
+      setTimeout(() => pollTranscriptJob(id, button, status), 1500);
+    } catch (e) {
+      status.classList.add('error'); status.textContent = '실패: ' + e.message; button.disabled = false;
+    }
+  }
+
   // ---------- 계정 표 ----------
+  const accountSummaryBody = $('#accounts-summary-body');
+  const accountSummaryToggle = $('#accounts-summary-toggle');
+  let accountSummaryCollapsed = store.get('hp-accounts-summary-collapsed', false);
+  function syncAccountSummary() {
+    accountSummaryBody.hidden = accountSummaryCollapsed;
+    accountSummaryToggle.setAttribute('aria-expanded', String(!accountSummaryCollapsed));
+    accountSummaryToggle.textContent = accountSummaryCollapsed ? '펼치기 ▾' : '접기 ▴';
+  }
+  accountSummaryToggle.addEventListener('click', () => {
+    accountSummaryCollapsed = !accountSummaryCollapsed;
+    store.set('hp-accounts-summary-collapsed', accountSummaryCollapsed); syncAccountSummary();
+  });
+  syncAccountSummary();
+
   const cols = [
     ['username', '계정', (a) => `<div class="who"><span class="avatar">${initials(a.username)}</span><span class="name">@${esc(a.username)}</span>${a.full_name ? `<span class="fn">${esc(a.full_name)}</span>` : ''}</div>`],
     ['followers', '팔로워', (a) => fmt(a.followers)],

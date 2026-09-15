@@ -7,16 +7,22 @@ from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import Settings
 from .source_finder import SourceJobManager
+from .transcript import TranscriptJobManager
 from .platform_session import PlatformSessionManager
+from .accounts import AccountRegistry
+from .scheduler import schedule_status
+from .storage import Storage
 
 
 def make_handler(settings: Settings):
     manager = SourceJobManager(settings)
+    transcripts = TranscriptJobManager(settings)
     sessions = PlatformSessionManager(settings)
+    accounts = AccountRegistry(settings)
 
     class Handler(SimpleHTTPRequestHandler):
         def log_message(self, *_args) -> None:
@@ -32,11 +38,25 @@ def make_handler(settings: Settings):
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path == "/api/accounts":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length <= 0 or length > 4096:
+                        raise ValueError("잘못된 요청 크기")
+                    data = json.loads(self.rfile.read(length))
+                    if not isinstance(data, dict):
+                        raise ValueError("JSON 객체로 요청하세요.")
+                    item, created = accounts.add(str(data.get("account") or ""), str(data.get("note") or ""))
+                    self._json({"account": item, "created": created},
+                               HTTPStatus.CREATED if created else HTTPStatus.OK)
+                except (ValueError, json.JSONDecodeError) as exc:
+                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             if path == "/api/platform-session":
                 self._json(sessions.start(), HTTPStatus.ACCEPTED); return
             if path == "/api/platform-session/finish":
                 self._json(sessions.finish(), HTTPStatus.ACCEPTED); return
-            if path != "/api/source-jobs":
+            if path not in ("/api/source-jobs", "/api/transcript-jobs"):
                 self.send_error(HTTPStatus.NOT_FOUND); return
             try:
                 if sessions.status()["active"]:
@@ -46,17 +66,62 @@ def make_handler(settings: Settings):
                 if length <= 0 or length > 4096:
                     raise ValueError("잘못된 요청 크기")
                 data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict):
+                    raise ValueError("JSON 객체로 요청하세요.")
                 shortcode = str(data.get("shortcode", ""))
                 if not shortcode or len(shortcode) > 40 or not all(c.isalnum() or c in "-_" for c in shortcode):
                     raise ValueError("올바르지 않은 shortcode")
-                self._json(manager.start(shortcode), HTTPStatus.ACCEPTED)
+                job_manager = transcripts if path == "/api/transcript-jobs" else manager
+                self._json(job_manager.start(shortcode), HTTPStatus.ACCEPTED)
             except (ValueError, json.JSONDecodeError) as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path == "/api/accounts":
+                items = accounts.list()
+                self._json({"accounts": items, "count": len(items)}); return
+            if path == "/api/collection-status":
+                store = Storage(settings.db_path)
+                try:
+                    collection = store.collection_status()
+                finally:
+                    store.close()
+                self._json({"collection": collection, "schedule": schedule_status(),
+                            "registered_accounts": len(accounts.usernames())}); return
             if path == "/api/platform-session":
                 self._json(sessions.status()); return
+            if path.startswith("/api/transcript-jobs/"):
+                parts = path.strip("/").split("/")
+                if len(parts) not in (3, 4):
+                    self.send_error(HTTPStatus.NOT_FOUND); return
+                job = transcripts.get(parts[2])
+                if not job:
+                    self._json({"error": "작업을 찾지 못했습니다."}, HTTPStatus.NOT_FOUND); return
+                if len(parts) == 4:
+                    if parts[3] != "download":
+                        self.send_error(HTTPStatus.NOT_FOUND); return
+                    if job["status"] != "done":
+                        self._json({"error": "대본이 아직 준비되지 않았습니다."}, HTTPStatus.CONFLICT); return
+                    format_name = parse_qs(urlparse(self.path).query).get("format", ["txt"])[0]
+                    if format_name not in ("txt", "json"):
+                        self._json({"error": "지원하지 않는 형식입니다."}, HTTPStatus.BAD_REQUEST); return
+                    target = Path(job["result"][f"{'text' if format_name == 'txt' else 'json'}_path"])
+                    if not target.is_file() or settings.transcript_dir.resolve() not in target.resolve().parents:
+                        self._json({"error": "결과 파일이 없습니다."}, HTTPStatus.NOT_FOUND); return
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8" if format_name == "txt" else "application/json; charset=utf-8")
+                    self.send_header("Content-Disposition", f'attachment; filename="{job["shortcode"]}-transcript.{format_name}"')
+                    self.send_header("Content-Length", str(target.stat().st_size)); self.end_headers()
+                    with target.open("rb") as f:
+                        while chunk := f.read(1024 * 256): self.wfile.write(chunk)
+                    return
+                public = {k: v for k, v in job.items() if k != "result"}
+                if job["status"] == "done":
+                    public["result"] = {k: v for k, v in job["result"].items() if not k.endswith("_path")}
+                    public["download_txt_url"] = f"/api/transcript-jobs/{job['id']}/download?format=txt"
+                    public["download_json_url"] = f"/api/transcript-jobs/{job['id']}/download?format=json"
+                self._json(public); return
             if path.startswith("/api/source-jobs/"):
                 parts = path.strip("/").split("/")
                 job = manager.get(parts[2]) if len(parts) >= 3 else None
@@ -89,6 +154,18 @@ def make_handler(settings: Settings):
                     public["download_url"] = f"/api/source-jobs/{job['id']}/download"
                 self._json(public); return
             super().do_GET()
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            path = urlparse(self.path).path
+            if not path.startswith("/api/accounts/"):
+                self.send_error(HTTPStatus.NOT_FOUND); return
+            try:
+                username = unquote(path.removeprefix("/api/accounts/"))
+                if not accounts.delete(username):
+                    self._json({"error": "관리 목록에서 계정을 찾지 못했습니다."}, HTTPStatus.NOT_FOUND); return
+                self._json({"deleted": username})
+            except ValueError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     return partial(Handler, directory=str(settings.web_dir))
 

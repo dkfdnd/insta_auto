@@ -9,7 +9,28 @@ from hotpost.source_finder import Candidate, PRODUCT_CONCEPTS, _dedupe, build_qu
 from hotpost.browser_search import _embedded_candidates, _html_candidates, _is_candidate, _sample_frames
 from hotpost.browser_profile import _platform_rows, export_cookies
 from hotpost.text_overlay import classify_overlay
+from hotpost.accounts import AccountRegistry
+from hotpost.scheduler import launch_agent_config
+from hotpost.transcript import _easyocr_text, collapse_screen_samples
 from PIL import Image
+
+
+def test_screen_ocr_merges_only_consecutive_matching_text():
+    rows = collapse_screen_samples([(0, "제품 소개"), (1, "제품  소개"), (2, ""),
+                                    (4, "가격 9,900원"), (5, "가격 9,900원")], 1, 6)
+    assert len(rows) == 2
+    assert rows[0] == {"source": "screen_text", "start": 0, "end": 2, "text": "제품 소개"}
+    assert rows[1]["start"] == 4 and rows[1]["end"] == 6
+
+
+def test_easyocr_keeps_caption_but_excludes_edge_watermark(tmp_path: Path):
+    frame = tmp_path / "frame.jpg"
+    Image.new("RGB", (720, 1280), "black").save(frame)
+    class Reader:
+        def readtext(self, _path, detail=1):
+            return [([(0, 570), (600, 570), (600, 630), (0, 630)], "꺼내기도 불편했는데", .65),
+                    ([(0, 1100), (200, 1100), (200, 1140), (0, 1140)], "tem doctor", .9)]
+    assert _easyocr_text(frame, Reader()) == "꺼내기도 불편했는데"
 
 
 def test_extract_username_variants():
@@ -136,3 +157,30 @@ def test_spa_embedded_video_ids_are_recovered():
     assert items[0]["url"] == "https://www.douyin.com/video/7123456789012345678"
     xhs = _html_candidates('{"noteId":"0123456789abcdef01234567"}', "xiaohongshu", "收纳")
     assert xhs[0]["url"].endswith("/explore/0123456789abcdef01234567")
+
+
+def test_account_registry_migrates_legacy_once_and_supports_crud(tmp_path: Path):
+    legacy = tmp_path / "influencer_list.txt"
+    legacy.write_text("@first | 주방\nhttps://instagram.com/second/\n", encoding="utf-8")
+    settings = Settings(data_dir=tmp_path / "data", influencer_file=legacy)
+    registry = AccountRegistry(settings)
+    assert registry.usernames() == ["first", "second"]
+    assert registry.list()[0]["note"] == "주방"
+
+    item, created = registry.add("https://instagram.com/third/?x=1", "캠핑")
+    assert created and item["username"] == "third" and item["note"] == "캠핑"
+    _, created_again = registry.add("@third", "캠핑·여행")
+    assert not created_again
+    assert next(row for row in registry.list() if row["username"] == "third")["note"] == "캠핑·여행"
+
+    assert registry.delete("first")
+    assert not registry.delete("first")
+    assert AccountRegistry(settings).usernames() == ["second", "third"]
+
+
+def test_daily_launch_agent_runs_collection_at_seven(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path / "data")
+    config = launch_agent_config(settings)
+    assert config["StartCalendarInterval"] == {"Hour": 7, "Minute": 0}
+    assert config["ProgramArguments"][-3:] == ["-m", "hotpost", "run"]
+    assert config["StandardOutPath"].endswith("data/daily_collect.log")

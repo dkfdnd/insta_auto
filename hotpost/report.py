@@ -14,12 +14,16 @@ from .thumbs import ensure_thumbnail
 KST = timezone(timedelta(hours=9))
 
 
-def build_report(settings: Settings, store: Storage, source: str, notes: list[str] | None = None) -> dict:
+def build_report(settings: Settings, store: Storage, source: str, notes: list[str] | None = None,
+                 usernames: list[str] | None = None) -> dict:
     now = int(time.time())
     profiles = store.profiles()
     all_scored: list[Scored] = []
     accounts_out = []
+    allowed = set(usernames) if usernames is not None else None
     for username, prof in sorted(profiles.items()):
+        if allowed is not None and username not in allowed:
+            continue
         posts = store.posts_for(username, limit=settings.posts_per_account * 2)
         if not posts:
             continue
@@ -100,9 +104,14 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
 
 
 def write_report(settings: Settings, report: dict) -> None:
-    settings.report_path.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    report_tmp = settings.report_path.with_suffix(".json.tmp")
+    report_tmp.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    report_tmp.replace(settings.report_path)
     js = "window.HOTPOST_REPORT = " + json.dumps(report, ensure_ascii=False) + ";\n"
-    (settings.web_dir / "data.js").write_text(js, encoding="utf-8")
+    data_path = settings.web_dir / "data.js"
+    data_tmp = data_path.with_suffix(".js.tmp")
+    data_tmp.write_text(js, encoding="utf-8")
+    data_tmp.replace(data_path)
 
 
 def _median(xs):

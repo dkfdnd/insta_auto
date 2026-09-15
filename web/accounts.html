@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>모니터링 계정 관리 · Hotpost</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="style.css?v=5">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <div>
+      <h1>👥 모니터링 계정 관리</h1>
+      <p class="sub">수집할 Instagram 계정을 웹에서 등록하고 삭제합니다.</p>
+    </div>
+    <div class="top-right">
+      <a class="btn ghost" href="/">← 대시보드</a>
+      <button class="btn ghost" id="accounts-theme" title="테마 전환">🌙</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap accounts-page">
+  <section class="collection-health" id="collection-health">
+    <div><span>자동 수집</span><b id="schedule-state">확인 중…</b></div>
+    <div><span>마지막 전체 수집</span><b id="last-collection">확인 중…</b></div>
+    <div><span>게시물 지표 갱신</span><b id="last-post-update">확인 중…</b></div>
+  </section>
+  <section class="section account-add-panel">
+    <div class="section-head">
+      <div>
+        <h2>계정 등록</h2>
+        <p class="hint">아이디, @아이디 또는 Instagram 프로필 URL을 입력할 수 있습니다.</p>
+      </div>
+    </div>
+    <form id="account-form" class="account-form">
+      <label><span>Instagram 계정</span><input id="account-input" required autocomplete="off" placeholder="@username 또는 프로필 URL"></label>
+      <label><span>메모 <small>(선택)</small></span><input id="account-note" maxlength="200" placeholder="예: 주방 살림 콘텐츠"></label>
+      <button class="linkbtn" type="submit">계정 등록</button>
+    </form>
+    <div class="account-message" id="account-message" hidden></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head account-list-head">
+      <div>
+        <h2>관리 중인 계정 <span class="account-count" id="account-count">0</span></h2>
+        <p class="hint">삭제해도 기존 수집 데이터는 보존되며, 다음 수집·분석부터 목록에서 제외됩니다.</p>
+      </div>
+      <button class="btn ghost" id="account-refresh">새로고침</button>
+    </div>
+    <div class="account-list" id="account-list"><div class="empty">계정 목록을 불러오는 중…</div></div>
+  </section>
+</main>
+
+<script src="accounts.js?v=2"></script>
+</body>
+</html>

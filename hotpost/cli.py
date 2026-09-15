@@ -17,11 +17,12 @@ import json
 import sys
 import time
 import webbrowser
+import fcntl
 from pathlib import Path
 
 from .config import load_settings, Settings
-from .sources import load_usernames
 from .storage import Storage
+from .accounts import AccountRegistry
 
 
 def _log(msg: str) -> None:
@@ -31,8 +32,8 @@ def _log(msg: str) -> None:
 # ------------------------------------------------------------------ commands
 
 def cmd_list(settings: Settings, args) -> int:
-    names = load_usernames(settings.influencer_file)
-    print(f"{len(names)}개 계정 ({settings.influencer_file})")
+    names = AccountRegistry(settings).usernames()
+    print(f"{len(names)}개 관리 계정 (SQLite)")
     for n in names:
         print(" -", n)
     return 0
@@ -92,8 +93,27 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
 
 
 def cmd_run(settings: Settings, args) -> int:
+    lock_path = settings.data_dir / "collect.lock"
+    lock_file = lock_path.open("w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        _log("다른 수집 작업이 이미 실행 중입니다.")
+        return 3
+    try:
+        return _cmd_run_locked(settings, args)
+    finally:
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
+
+
+def _cmd_run_locked(settings: Settings, args) -> int:
     from .report import build_report, write_report
-    usernames = load_usernames(settings.influencer_file)
+    usernames = AccountRegistry(settings).usernames()
+    if not usernames:
+        _log("관리 중인 계정이 없습니다. 웹의 계정 관리 페이지에서 먼저 등록하세요.")
+        return 2
     if args.only:
         usernames = [u for u in usernames if u in set(args.only)]
     db = settings.data_dir / "demo.db" if args.source == "demo" else settings.db_path
@@ -103,11 +123,26 @@ def cmd_run(settings: Settings, args) -> int:
     if ok == 0 and args.source != "demo":
         _log("수집된 계정이 없어 리포트를 만들지 않습니다. (세션 만료/차단 여부를 확인하세요)")
         return 1
-    report = build_report(settings, store, source=args.source, notes=notes)
+    report = build_report(settings, store, source=args.source, notes=notes, usernames=usernames)
     write_report(settings, report)
     _log(f"리포트 생성: {settings.report_path}  (핫 게시물 {report['summary']['hot']}개 / 전체 {report['summary']['posts']}개)")
     if args.serve:
         return cmd_serve(settings, args)
+    return 0
+
+
+def cmd_schedule(settings: Settings, args) -> int:
+    from .scheduler import install_schedule, schedule_status, uninstall_schedule
+    try:
+        if args.action == "install":
+            status = install_schedule(settings, args.hour, args.minute)
+        elif args.action == "uninstall":
+            status = uninstall_schedule()
+        else:
+            status = schedule_status()
+    except (RuntimeError, ValueError) as exc:
+        _log(str(exc)); return 1
+    print(json.dumps(status, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -119,12 +154,13 @@ def cmd_import(settings: Settings, args) -> int:
     total = 0
     data = load_dump(Path(args.file))
     for profile, posts in data:
+        AccountRegistry(settings).add(profile.username)
         store.upsert_profile(profile)
         store.upsert_posts(posts)
         total += len(posts)
         _log(f"@{profile.username}: {len(posts)}개")
     store.record_run(started, "dump", len(data), 0, total, f"file={args.file}")
-    report = build_report(settings, store, source="dump")
+    report = build_report(settings, store, source="dump", usernames=AccountRegistry(settings).usernames())
     write_report(settings, report)
     _log(f"임포트 완료: 계정 {len(data)} / 게시물 {total} → 리포트 갱신")
     return 0
@@ -135,7 +171,7 @@ def cmd_analyze(settings: Settings, args) -> int:
     store = Storage(settings.db_path)
     last = store.last_run()
     source = (last or {}).get("source") or "unknown"
-    report = build_report(settings, store, source=source)
+    report = build_report(settings, store, source=source, usernames=AccountRegistry(settings).usernames())
     write_report(settings, report)
     _log(f"리포트 재생성: 핫 {report['summary']['hot']} / 전체 {report['summary']['posts']}")
     return 0
@@ -205,6 +241,12 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("sources", help="릴스 장면을 분석해 공개 소스 영상 후보 탐색·다운로드")
     p.add_argument("shortcode", help="Instagram 릴스 shortcode (예: Dcp3P-WyMFe)")
     p.set_defaults(fn=cmd_sources)
+
+    p = sub.add_parser("schedule", help="macOS 매일 자동 수집 일정 관리")
+    p.add_argument("action", choices=["install", "status", "uninstall"])
+    p.add_argument("--hour", type=int, default=7)
+    p.add_argument("--minute", type=int, default=0)
+    p.set_defaults(fn=cmd_schedule)
 
     p = sub.add_parser("list", help="인플루언서 목록 확인")
     p.set_defaults(fn=cmd_list)

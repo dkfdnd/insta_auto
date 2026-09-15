@@ -46,6 +46,8 @@ class Settings:
     source_openclip_model: str = "ViT-B-32-quickgelu"
     source_openclip_pretrained: str = "openai"
     source_detect_text_overlays: bool = True
+    transcript_model: str = "mlx-community/whisper-small-mlx-8bit"
+    transcript_ocr_fps: float = 1.0
 
     # 분석
     hot_multiplier: float = 1.8       # 이 배수 이상이면 '터진 게시물'
@@ -77,6 +79,10 @@ class Settings:
     @property
     def source_dir(self) -> Path:
         return self.data_dir / "source_jobs"
+
+    @property
+    def transcript_dir(self) -> Path:
+        return self.data_dir / "transcripts"
 
     @property
     def source_browser_profile_dir(self) -> Path:
@@ -126,6 +132,7 @@ def load_settings() -> Settings:
     s.thumbs_dir.mkdir(parents=True, exist_ok=True)
     s.session_dir.mkdir(parents=True, exist_ok=True)
     s.source_dir.mkdir(parents=True, exist_ok=True)
+    s.transcript_dir.mkdir(parents=True, exist_ok=True)
     s.source_browser_profile_dir.mkdir(parents=True, exist_ok=True)
     s.source_model_dir.mkdir(parents=True, exist_ok=True)
     s.source_tessdata_dir.mkdir(parents=True, exist_ok=True)
