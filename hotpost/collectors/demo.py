@@ -12,6 +12,7 @@ import time
 
 from ..config import Settings
 from ..models import Post, Profile
+from ..observations import MetricObservation
 
 _TOPICS = [
     ("주방 정리", ["#주방정리", "#살림템", "#정리수납"], "주방 서랍 이렇게 바꾸니까 요리 시간이 반으로 줄었어요 🍳"),
@@ -37,7 +38,7 @@ class DemoCollector:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def fetch(self, username: str, limit: int, existing: dict[str, Post] | None = None) -> tuple[Profile, list[Post]]:
+    def fetch(self, username: str, limit: int, existing: dict[str, Post] | None = None) -> tuple[Profile, list[Post], list[MetricObservation]]:
         seed = int(hashlib.md5(username.encode()).hexdigest(), 16) % (2**32)
         rng = random.Random(seed)
         followers = int(rng.choice([8_000, 25_000, 60_000, 120_000, 300_000]) * rng.uniform(0.6, 1.6))
@@ -73,4 +74,7 @@ class DemoCollector:
                 media_id=str(seed + i),
             ))
             t -= int(rng.uniform(0.6, 2.2) * 86400)
-        return profile, posts
+        observations = [MetricObservation(p.shortcode, now, now, True, p.views, p.likes, p.comments,
+                                          "demo", age_hours=max(0, (now - p.taken_at) / 3600))
+                        for p in posts if p.is_video]
+        return profile, posts, observations

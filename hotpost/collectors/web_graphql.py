@@ -21,6 +21,7 @@ import requests
 
 from ..config import Settings
 from ..models import Post, Profile
+from ..observations import MetricObservation
 from .base import CollectError
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -247,7 +248,7 @@ class WebGraphQLCollector:
         raise CollectError(f"{qname}: 반복된 429 제한")
 
     # ------------------------------------------------------------ fetch
-    def fetch(self, username: str, limit: int, existing: dict[str, Post] | None = None) -> tuple[Profile, list[Post]]:
+    def fetch(self, username: str, limit: int, existing: dict[str, Post] | None = None) -> tuple[Profile, list[Post], list[MetricObservation]]:
         h = self._profile_html(username)
         profile = self._parse_profile(username, h)
         self._sleep(0.8, 1.6)
@@ -291,13 +292,12 @@ class WebGraphQLCollector:
                 print(f"    프로필 수치 보강 실패: {e}", flush=True)
 
         # 3) 릴스 조회수 (media info, 게시물당 1요청) — 오래된 게시물은 이전 값 재사용
-        if any(p.is_video for p in posts.values()):
-            self._fill_video_views(posts, existing or {})
-
         if not posts:
             raise CollectError(f"{username}: 게시물을 가져오지 못했습니다 (비공개 계정이거나 차단)")
         out = sorted(posts.values(), key=lambda p: p.taken_at, reverse=True)[:limit]
-        return profile, out
+        latest = {p.shortcode: p for p in out}
+        observations = self._fill_video_views(latest, existing or {}) if any(p.is_video for p in out) else []
+        return profile, out, observations
 
     def _fill_profile_counts(self, profile: Profile) -> None:
         j = self._gql(QUERIES["profile"], {"id": profile.user_id, "render_surface": "PROFILE"})
@@ -308,59 +308,95 @@ class WebGraphQLCollector:
         profile.full_name = user.get("full_name") or profile.full_name
         profile.is_private = bool(user.get("is_private", False))
 
-    def _fill_video_views(self, posts: dict[str, Post], existing: dict[str, Post]) -> None:
+    def _fill_video_views(self, posts: dict[str, Post], existing: dict[str, Post]) -> list[MetricObservation]:
         now = int(time.time())
+        observations: list[MetricObservation] = []
         videos = sorted((p for p in posts.values() if p.is_video), key=lambda p: p.taken_at, reverse=True)
         fetched = 0
         for p in videos:
             old = existing.get(p.shortcode)
             age_days = (now - p.taken_at) / 86400
-            if old and old.views and age_days > self.settings.views_refresh_days:
-                p.views = old.views
-                p.video_duration = p.video_duration or old.video_duration
+            if age_days > self.settings.views_refresh_days:
+                if old and old.views is not None:
+                    p.views = old.views
+                    p.video_duration = p.video_duration or old.video_duration
                 continue
             if fetched >= self.settings.views_lookup_limit:
-                if old and old.views:
+                if old and old.views is not None:
                     p.views = old.views
                 continue
             if not p.media_id:
                 continue
             try:
+                requested = int(time.time())
+                fetched += 1
                 r = self.s.get(f"https://www.instagram.com/api/v1/media/{p.media_id}/info/",
                                headers=self._api_headers(p.url), timeout=30)
-                fetched += 1
                 if r.status_code == 429:
                     print("    429 제한 (조회수 조회 중단, 나머지는 이전 값 사용)", flush=True)
+                    observations.append(self._view_observation(p, requested, None, 429, "rate_limited", "latest"))
                     break
                 item = ((r.json() or {}).get("items") or [{}])[0] if r.ok else {}
-                views = item.get("play_count") or item.get("ig_play_count") or item.get("view_count")
+                views = next((item[key] for key in ("play_count", "ig_play_count", "view_count")
+                              if item.get(key) is not None), None)
                 if views is not None:
                     p.views = int(views)
+                observations.append(self._view_observation(p, requested, item if views is not None else None,
+                                                           r.status_code, "" if views is not None else "missing_views", "latest"))
                 if item.get("video_duration"):
                     p.video_duration = float(item["video_duration"])
             except Exception as e:  # noqa: BLE001
                 print(f"    조회수 조회 실패 {p.shortcode}: {type(e).__name__}", flush=True)
+                observations.append(self._view_observation(p, requested,
+                                                           None, None, type(e).__name__, "latest"))
             self._sleep(0.9, 1.8)
+        return observations
 
-    def refresh_video_views(self, posts: list[Post], limit: int = 50) -> None:
+    def refresh_video_views(self, posts: list[Post], limit: int = 50) -> list[MetricObservation]:
         """최신 5개 밖으로 밀린 터진 릴스도 게시 후 14일까지 조회수를 재조회한다."""
-        for p in sorted((post for post in posts if post.is_video and post.media_id),
+        observations: list[MetricObservation] = []
+        now = int(time.time())
+        for p in sorted((post for post in posts if post.is_video and post.media_id
+                         and post.taken_at + self.settings.hot_view_tracking_days * 86400 >= now),
                         key=lambda post: post.taken_at, reverse=True)[:limit]:
             try:
+                requested = int(time.time())
                 r = self.s.get(f"https://www.instagram.com/api/v1/media/{p.media_id}/info/",
                                headers=self._api_headers(p.url), timeout=30)
                 if r.status_code == 429:
                     print("    429 제한 (터진 릴스 조회수 추적 중단)", flush=True)
+                    observations.append(self._view_observation(p, requested, None, 429, "rate_limited", "tracking"))
                     break
                 item = ((r.json() or {}).get("items") or [{}])[0] if r.ok else {}
-                views = item.get("play_count") or item.get("ig_play_count") or item.get("view_count")
+                views = next((item[key] for key in ("play_count", "ig_play_count", "view_count")
+                              if item.get(key) is not None), None)
                 if views is not None:
                     p.views = int(views)
+                observations.append(self._view_observation(p, requested, item if views is not None else None,
+                                                           r.status_code, "" if views is not None else "missing_views", "tracking"))
                 if item.get("video_duration"):
                     p.video_duration = float(item["video_duration"])
             except Exception as exc:  # noqa: BLE001
                 print(f"    추적 조회수 조회 실패 {p.shortcode}: {type(exc).__name__}", flush=True)
+                observations.append(self._view_observation(p, requested,
+                                                           None, None, type(exc).__name__, "tracking"))
             self._sleep(0.9, 1.8)
+        return observations
+
+    @staticmethod
+    def _view_observation(p: Post, requested: int, item: dict | None, status: int | None,
+                          reason: str, scope: str) -> MetricObservation:
+        return MetricObservation(
+            shortcode=p.shortcode, requested_at=requested,
+            observed_at=int(time.time()) if item is not None else None,
+            success=item is not None,
+            views=int(next(item[key] for key in ("play_count", "ig_play_count", "view_count")
+                           if item.get(key) is not None)) if item is not None else None,
+            likes=int(item["like_count"]) if item is not None and item.get("like_count") is not None else None,
+            comments=int(item["comment_count"]) if item is not None and item.get("comment_count") is not None else None,
+            source="instagram_media_info", http_status=status, reason=reason,
+            age_hours=max(0.0, (requested - p.taken_at) / 3600), scope=scope,
+        )
 
 def _num(m) -> int:
     if not m:

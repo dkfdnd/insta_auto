@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from ..models import Post, Profile
+from ..observations import MetricObservation
 
 
 class CollectError(Exception):
@@ -12,6 +13,6 @@ class CollectError(Exception):
 class Collector(Protocol):
     name: str
 
-    def fetch(self, username: str, limit: int, existing: dict[str, Post] | None = None) -> tuple[Profile, list[Post]]:
-        """프로필과 최근 게시물 `limit` 개를 돌려준다. `existing` 은 DB 에 이미 있는 같은 계정 게시물."""
+    def fetch(self, username: str, limit: int, existing: dict[str, Post] | None = None) -> tuple[Profile, list[Post], list[MetricObservation]]:
+        """프로필, 게시물, 실제 지표 조회 결과를 돌려준다."""
         ...

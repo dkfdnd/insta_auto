@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import itertools
 import re
+import time
 from pathlib import Path
 
 import instaloader
 
 from ..config import Settings
 from ..models import Post, Profile
+from ..observations import MetricObservation
 from .base import CollectError
 
 _HASHTAG_RE = re.compile(r"#([\w가-힣]+)")
@@ -102,7 +104,7 @@ class InstaloaderCollector:
             self._loader = load_session(self.settings)
         return self._loader
 
-    def fetch(self, username: str, limit: int, existing: dict[str, Post] | None = None) -> tuple[Profile, list[Post]]:
+    def fetch(self, username: str, limit: int, existing: dict[str, Post] | None = None) -> tuple[Profile, list[Post], list[MetricObservation]]:
         try:
             prof = instaloader.Profile.from_username(self.loader.context, username)
         except instaloader.exceptions.ProfileNotExistsException as e:
@@ -134,4 +136,12 @@ class InstaloaderCollector:
         except instaloader.exceptions.InstaloaderException as e:
             if not posts:
                 raise CollectError(f"{username} 게시물 조회 실패: {e}") from e
-        return profile, posts
+        now = int(time.time())
+        observations = [MetricObservation(
+            shortcode=p.shortcode, requested_at=now,
+            observed_at=now if p.views is not None else None,
+            success=p.views is not None, views=p.views, likes=p.likes, comments=p.comments,
+            source="instaloader", reason="" if p.views is not None else "missing_views",
+            age_hours=max(0, (now - p.taken_at) / 3600), scope="latest",
+        ) for p in posts if p.is_video]
+        return profile, posts, observations

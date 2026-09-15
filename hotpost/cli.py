@@ -71,11 +71,11 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
         try:
             existing = {p.shortcode: p for p in store.posts_for(name, limit=settings.posts_per_account * 2)}
             tracked = store.tracked_hot_posts(name, limit=settings.hot_view_tracking_limit)
-            profile, posts = collector.fetch(name, settings.collect_posts_per_account, existing=existing)
+            profile, posts, observations = collector.fetch(name, settings.collect_posts_per_account, existing=existing)
             fresh_codes = {post.shortcode for post in posts}
             tracked_extra = [post for post in tracked if post.shortcode not in fresh_codes]
             if tracked_extra and hasattr(collector, "refresh_video_views"):
-                collector.refresh_video_views(tracked_extra, settings.hot_view_tracking_limit)
+                observations.extend(collector.refresh_video_views(tracked_extra, settings.hot_view_tracking_limit))
                 posts.extend(tracked_extra)
                 _log(f"    터진 릴스 조회수 추적 {len(tracked_extra)}개")
         except CollectError as e:
@@ -89,13 +89,14 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
             _log(f"    실패(예외): {type(e).__name__}: {e}")
             continue
         store.upsert_profile(profile)
-        store.upsert_posts(posts)
+        store.upsert_posts(posts, observations=observations)
         ok += 1
         total += len(posts)
         _log(f"    {len(posts)}개 게시물 (팔로워 {profile.followers:,})")
         if source != "demo" and i < len(usernames):
             time.sleep(settings.sleep_between_accounts)
     store.record_run(started, source, ok, failed, total, "\n".join(notes))
+    store.finalize_hot_tracking()
     return ok, failed, total, notes
 
 

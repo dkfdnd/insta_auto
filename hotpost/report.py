@@ -10,6 +10,7 @@ from .analyze import Scored, extract_topics, score_account, post_terms
 from .config import Settings
 from .storage import Storage
 from .criteria import defaults
+from .growth import growth_signal
 from .thumbs import ensure_thumbnail
 
 KST = timezone(timedelta(hours=9))
@@ -18,9 +19,12 @@ KST = timezone(timedelta(hours=9))
 def build_report(settings: Settings, store: Storage, source: str, notes: list[str] | None = None,
                  usernames: list[str] | None = None) -> dict:
     now = int(time.time())
+    store.finalize_hot_tracking(now)
     profiles = store.profiles()
     active_criteria = store.criteria(settings)
     all_scored: list[Scored] = []
+    growth_by_code: dict[str, dict] = {}
+    observations_by_code: dict[str, list[dict]] = {}
     accounts_out = []
     allowed = set(usernames) if usernames is not None else None
     for username, prof in sorted(profiles.items()):
@@ -29,15 +33,25 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
         posts = store.posts_for(username, limit=None)
         if not posts:
             continue
-        snaps = {p.shortcode: store.snapshots_for(p.shortcode) for p in posts}
+        snaps = {p.shortcode: store.snapshots_for(p.shortcode) if not p.is_video else [] for p in posts}
+        histories = {p.shortcode: store.observations_for(p.shortcode) for p in posts if p.is_video}
+        video_by_code = {p.shortcode: p for p in posts if p.is_video}
+        observations_by_code.update(histories)
         scored = score_account(posts, settings, now=now, snapshots=snaps,
                                criteria=active_criteria["values"], followers=prof.followers)
         recent = [s for s in scored if s.age_hours <= settings.recent_days * 24]
+        for s in recent:
+            if s.post.is_video:
+                peers = [history for code, history in histories.items()
+                         if code != s.post.shortcode and video_by_code[code].taken_at < s.post.taken_at]
+                growth_by_code[s.post.shortcode] = growth_signal(
+                    histories[s.post.shortcode], now, s.age_hours, peers, s.multiplier)
         all_scored.extend(recent)
         videos = [p for p in posts if p.is_video and p.views]
         best = max(recent, key=lambda s: s.multiplier) if recent else None
         accounts_out.append({
             **prof.to_dict(),
+            **store.account_observation_health(username, now),
             "posts_analyzed": len(posts),
             "posts_recent": len(recent),
             "hot_recent": sum(1 for s in recent if s.tier >= 1),
@@ -60,7 +74,10 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
             "metric_status": {"likes": "missing" if s.post.likes is None else "observed",
                               "comments": "missing" if s.post.comments is None else "observed",
                               "views": ("not_applicable" if not s.post.is_video else
-                                        "missing" if s.post.views is None else "observed")},
+                                        "missing" if s.post.views is None else
+                                        "legacy_unverified" if not observations_by_code.get(s.post.shortcode) else
+                                        "observed" if observations_by_code[s.post.shortcode][-1]["success"] else
+                                        "stale")},
             "thumb": thumb,
             "baseline": {k: (round(v, 1) if isinstance(v, float) else v) for k, v in s.baseline.items()},
             "ratios": {k: (round(v, 2) if v is not None else None) for k, v in s.ratios.items()},
@@ -72,6 +89,8 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
             "flags": s.flags,
             "confidence": s.confidence,
             "velocity": s.velocity,
+            "growth": growth_by_code.get(s.post.shortcode),
+            "tracking": store.tracking_for(s.post.shortcode, now) if s.post.is_video else None,
             "terms": terms_by_code.get(s.post.shortcode, []),
         })
         posts_out.append(d)

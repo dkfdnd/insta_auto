@@ -14,6 +14,7 @@ from pathlib import Path
 from .models import Post, Profile
 from .config import Settings
 from .criteria import defaults, validate
+from .observations import MetricObservation
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS profiles (
@@ -67,6 +68,21 @@ CREATE TABLE IF NOT EXISTS scoring_criteria (
     updated_at INTEGER NOT NULL,
     values_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS metric_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shortcode TEXT NOT NULL,
+    requested_at INTEGER NOT NULL,
+    observed_at INTEGER,
+    success INTEGER NOT NULL,
+    views INTEGER, likes INTEGER, comments INTEGER,
+    source TEXT NOT NULL,
+    http_status INTEGER,
+    reason TEXT NOT NULL DEFAULT '',
+    age_hours REAL NOT NULL,
+    scope TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_observations_post_time ON metric_observations(shortcode, observed_at);
+CREATE INDEX IF NOT EXISTS idx_observations_request ON metric_observations(requested_at);
 """
 
 
@@ -76,6 +92,14 @@ class Storage:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        tracking_columns = {row[1] for row in self.conn.execute("PRAGMA table_info(hot_view_tracking)")}
+        for column, definition in {
+            "finalized_at": "INTEGER", "final_views": "INTEGER",
+            "max_views_per_hour": "REAL", "max_acceleration": "REAL",
+        }.items():
+            if column not in tracking_columns:
+                self.conn.execute(f"ALTER TABLE hot_view_tracking ADD COLUMN {column} {definition}")
+        self.conn.commit()
 
     # ---- write ----
     def upsert_profile(self, p: Profile) -> None:
@@ -89,23 +113,39 @@ class Storage:
              p.biography, p.profile_pic_url, int(p.is_private), int(time.time())),
         )
 
-    def upsert_posts(self, posts: list[Post], collected_at: int | None = None) -> None:
+    def upsert_posts(self, posts: list[Post], collected_at: int | None = None,
+                     observations: list[MetricObservation] | None = None) -> None:
         now = collected_at or int(time.time())
+        latest = {o.shortcode: o for o in (observations or [])}
+        successful = {code: o for code, o in latest.items() if o.success and o.views is not None}
         for p in posts:
+            view_value = (p.views if observations is None or not p.is_video else
+                          successful[p.shortcode].views if p.shortcode in successful else None)
             self.conn.execute(
                 """INSERT INTO posts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(shortcode) DO UPDATE SET
-                     likes=excluded.likes, comments=excluded.comments, views=excluded.views,
+                     likes=excluded.likes, comments=excluded.comments,
+                     views=COALESCE(excluded.views,posts.views),
                      caption=excluded.caption, hashtags=excluded.hashtags, thumbnail_url=excluded.thumbnail_url,
                      video_duration=excluded.video_duration, media_id=excluded.media_id, kind=excluded.kind,
                      updated_at=excluded.updated_at""",
-                (p.shortcode, p.username, p.taken_at, p.kind, p.likes, p.comments, p.views,
+                (p.shortcode, p.username, p.taken_at, p.kind, p.likes, p.comments, view_value,
                  p.caption, json.dumps(p.hashtags, ensure_ascii=False), p.thumbnail_url,
                  p.video_duration, p.media_id, now, now),
             )
             self.conn.execute(
                 "INSERT OR REPLACE INTO snapshots VALUES (?,?,?,?,?)",
-                (p.shortcode, now, p.likes, p.comments, p.views),
+                (p.shortcode, now, p.likes, p.comments, view_value),
+            )
+        if observations:
+            self.conn.executemany(
+                """INSERT INTO metric_observations
+                   (shortcode,requested_at,observed_at,success,views,likes,comments,
+                    source,http_status,reason,age_hours,scope) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                [(o.shortcode, o.requested_at, o.observed_at, int(o.success),
+                  o.views if o.success else None, o.likes if o.success else None,
+                  o.comments if o.success else None, o.source, o.http_status, o.reason,
+                  o.age_hours, o.scope) for o in observations],
             )
         self.conn.commit()
 
@@ -142,7 +182,7 @@ class Storage:
                GROUP BY m.username
                ORDER BY m.created_at,m.username"""
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [{**dict(row), **self.account_observation_health(row["username"])} for row in rows]
 
     def upsert_managed_account(self, username: str, note: str = "") -> bool:
         exists = self.conn.execute("SELECT 1 FROM managed_accounts WHERE username=?", (username,)).fetchone()
@@ -210,6 +250,35 @@ class Storage:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def observations_for(self, shortcode: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM metric_observations WHERE shortcode=? ORDER BY requested_at,id",
+            (shortcode,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def account_observation_health(self, username: str, now: int | None = None) -> dict:
+        now = now or int(time.time())
+        rows = self.conn.execute(
+            """SELECT COUNT(*) requests, SUM(o.success) successes
+               FROM metric_observations o JOIN posts p ON p.shortcode=o.shortcode
+               WHERE p.username=? AND o.requested_at>=?""",
+            (username, now - 7 * 86400),
+        ).fetchone()
+        last_success = self.conn.execute(
+            """SELECT MAX(o.observed_at) FROM metric_observations o
+               JOIN posts p ON p.shortcode=o.shortcode WHERE p.username=? AND o.success=1""",
+            (username,),
+        ).fetchone()[0]
+        videos = self.conn.execute(
+            "SELECT COUNT(*) total, SUM(views IS NULL) missing FROM posts WHERE username=? AND kind IN ('reel','video')",
+            (username,),
+        ).fetchone()
+        return {"views_missing_rate": round((videos["missing"] or 0) / max(1, videos["total"]), 3),
+                "recent_success_rate": (round((rows["successes"] or 0) / rows["requests"], 3)
+                                        if rows["requests"] else None),
+                "last_success_observed_at": last_success}
+
     def last_run(self) -> dict | None:
         r = self.conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
         return dict(r) if r else None
@@ -248,6 +317,42 @@ class Storage:
         active = self.conn.execute("SELECT COUNT(*) FROM hot_view_tracking WHERE track_until>=?", (now,)).fetchone()[0]
         total = self.conn.execute("SELECT COUNT(*) FROM hot_view_tracking").fetchone()[0]
         return {"active": active, "total": total}
+
+    def tracking_for(self, shortcode: str, now: int | None = None) -> dict | None:
+        row = self.conn.execute("SELECT * FROM hot_view_tracking WHERE shortcode=?", (shortcode,)).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["day"] = min(14, max(0, ((now or int(time.time())) - result["posted_at"]) // 86400))
+        result["successful_observations"] = self.conn.execute(
+            "SELECT COUNT(*) FROM metric_observations WHERE shortcode=? AND success=1 AND views IS NOT NULL",
+            (shortcode,),
+        ).fetchone()[0]
+        return result
+
+    def finalize_hot_tracking(self, now: int | None = None) -> int:
+        """14일 이후 추가 요청 없이 마지막 관측값과 최고 성장 지표를 고정한다."""
+        from .growth import _rate, _success
+        now = now or int(time.time())
+        rows = self.conn.execute(
+            "SELECT shortcode FROM hot_view_tracking WHERE track_until<? AND finalized_at IS NULL", (now,)
+        ).fetchall()
+        for row in rows:
+            code = row["shortcode"]
+            good = _success(self.observations_for(code))
+            rates = [rate for first, last in zip(good, good[1:])
+                     if (rate := _rate(first, last)) is not None]
+            accelerations = [b - a for a, b in zip(rates, rates[1:])]
+            fallback = self.conn.execute("SELECT views FROM posts WHERE shortcode=?", (code,)).fetchone()
+            final_views = good[-1]["views"] if good else (fallback["views"] if fallback else None)
+            self.conn.execute(
+                """UPDATE hot_view_tracking SET finalized_at=?,final_views=?,
+                   max_views_per_hour=?,max_acceleration=? WHERE shortcode=?""",
+                (now, final_views, max(rates) if rates else None,
+                 max(accelerations) if accelerations else None, code),
+            )
+        self.conn.commit()
+        return len(rows)
 
     @staticmethod
     def _row_to_post(r: sqlite3.Row) -> Post:

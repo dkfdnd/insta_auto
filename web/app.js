@@ -385,6 +385,11 @@
           <div>반응 성숙도<b>${Math.round((C.maturity ? p.maturity : 1) * 100)}%</b></div>
           <div>신뢰도<b>${confTxt[p.confidence]}</b></div>
           ${v ? `<div>증가 속도 (${v.hours}h)<b>${v.views_per_hour != null ? fmt(v.views_per_hour) + ' 뷰/h · ' : ''}${v.comments_per_hour} 댓글/h</b></div>` : ''}
+          ${p.growth ? `<div>최근 조회 상태<b>${esc(p.growth.state)}</b></div><div>최근 조회 속도<b>${p.growth.views_per_hour == null ? '성공 관측 부족' : fmt(p.growth.views_per_hour) + ' 뷰/h'}</b></div>
+            <div>가속도<b>${p.growth.acceleration == null ? '비교 구간 부족' : fmt(p.growth.acceleration) + ' 뷰/h²'}</b></div>
+            <div>조회 성공 관측<b>${p.growth.successful_observations}개</b></div>
+            <div>성장 비교<b>${p.growth.comparison.mode === 'age_matched' ? '같은 게시 연령 ' + p.growth.comparison.peers + '개' : '평소 중앙값 대체 · 신뢰도 낮음'}</b></div>` : ''}
+          ${p.tracking ? `<div>14일 추적<b>D+${p.tracking.day} · 성공 ${p.tracking.successful_observations}회${p.tracking.finalized_at ? ' · 종료' : ''}</b></div>` : ''}
         </div>
         ${p.flags.filter((f) => flagTxt[f]).length ? `<div class="flags">${p.flags.filter((f) => flagTxt[f]).map((f) => `<span class="flag">${flagTxt[f]}</span>`).join('')}</div>` : ''}
         <div class="fullcap">${esc(p.caption) || '(캡션 없음)'}</div>

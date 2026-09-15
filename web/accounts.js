@@ -37,7 +37,10 @@
         <div><a href="https://www.instagram.com/${encodeURIComponent(account.username)}/" target="_blank" rel="noopener">@${esc(account.username)} ↗</a>${account.full_name ? `<span>${esc(account.full_name)}</span>` : ''}</div>
         <p>${account.note ? esc(account.note) : '<span class="hint">메모 없음</span>'}</p>
       </div>
-      <div class="account-stats"><span>팔로워 <b>${fmt(account.followers)}</b></span><span>수집 게시물 <b>${fmt(account.posts_count)}</b></span><span>최근 게시 <b>${date(account.last_post_at)}</b></span></div>
+      <div class="account-stats"><span>팔로워 <b>${fmt(account.followers)}</b></span><span>수집 게시물 <b>${fmt(account.posts_count)}</b></span><span>최근 게시 <b>${date(account.last_post_at)}</b></span>
+        <span>조회 누락 <b>${Math.round((account.views_missing_rate || 0) * 100)}%</b></span>
+        <span>최근 조회 성공 <b>${account.recent_success_rate == null ? '데이터 없음' : Math.round(account.recent_success_rate * 100) + '%'}</b></span>
+        <span>마지막 성공 조회 <b>${date(account.last_success_observed_at)}</b></span></div>
       <button class="btn account-delete" data-delete="${esc(account.username)}">삭제</button>
     </article>`).join('');
   }
