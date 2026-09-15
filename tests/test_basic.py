@@ -11,6 +11,7 @@ from hotpost.browser_profile import _platform_rows, export_cookies
 from hotpost.text_overlay import classify_overlay
 from hotpost.accounts import AccountRegistry
 from hotpost.scheduler import launch_agent_config
+from hotpost.storage import Storage
 from hotpost.transcript import _easyocr_text, collapse_screen_samples
 from PIL import Image
 
@@ -184,3 +185,23 @@ def test_daily_launch_agent_runs_collection_at_seven(tmp_path: Path):
     assert config["StartCalendarInterval"] == {"Hour": 7, "Minute": 0}
     assert config["ProgramArguments"][-3:] == ["-m", "hotpost", "run"]
     assert config["StandardOutPath"].endswith("data/daily_collect.log")
+
+
+def test_daily_collection_checks_five_posts_but_keeps_thirty_for_baseline():
+    settings = Settings()
+    assert settings.collect_posts_per_account == 5
+    assert settings.views_lookup_limit == 5
+    assert settings.posts_per_account == 30
+
+
+def test_hot_reel_view_tracking_persists_until_two_weeks(tmp_path: Path):
+    store = Storage(tmp_path / "hotpost.db")
+    now = int(time.time())
+    post = Post(shortcode="hot1", username="creator", taken_at=now - 10 * 86400, kind="reel",
+                likes=100, comments=20, views=10000, media_id="123")
+    store.upsert_posts([post], collected_at=now)
+    assert store.register_hot_view_tracking([post], days=14, detected_at=now) == 1
+    assert [item.shortcode for item in store.tracked_hot_posts("creator", now=now)] == ["hot1"]
+    assert store.tracked_hot_posts("creator", now=post.taken_at + 14 * 86400 + 1) == []
+    assert store.register_hot_view_tracking([post], days=14, detected_at=now + 60) == 0
+    store.close()

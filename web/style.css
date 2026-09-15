@@ -209,7 +209,7 @@ tr.acc.on td { background: var(--accent-soft); }
 
 /* ---- 모니터링 계정 관리 ---- */
 .accounts-page { padding-bottom: 40px; }
-.collection-health { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 20px; }
+.collection-health { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 20px; }
 .collection-health > div { display: flex; flex-direction: column; gap: 3px; padding: 13px 15px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
 .collection-health span { color: var(--muted); font-size: 12px; font-weight: 600; }
 .collection-health b { font-size: 14px; }

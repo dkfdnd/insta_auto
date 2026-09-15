@@ -71,6 +71,9 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
 
     topics = extract_topics(all_scored, settings)
     hot = [p for p in posts_out if p["tier"] >= 1]
+    store.register_hot_view_tracking(
+        [scored.post for scored in all_scored if scored.tier >= 1], settings.hot_view_tracking_days, now
+    )
     report = {
         "version": __version__,
         "generated_at": now,
@@ -80,6 +83,7 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
         "notes": notes or [],
         "settings": {
             "recent_days": settings.recent_days,
+            "collect_posts_per_account": settings.collect_posts_per_account,
             "hot_multiplier": settings.hot_multiplier,
             "tier2_multiplier": settings.tier2_multiplier,
             "tier3_multiplier": settings.tier3_multiplier,

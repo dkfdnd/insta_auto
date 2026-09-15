@@ -85,9 +85,11 @@ def make_handler(settings: Settings):
                 store = Storage(settings.db_path)
                 try:
                     collection = store.collection_status()
+                    hot_tracking = store.hot_tracking_status()
                 finally:
                     store.close()
                 self._json({"collection": collection, "schedule": schedule_status(),
+                            "hot_tracking": hot_tracking,
                             "registered_accounts": len(accounts.usernames())}); return
             if path == "/api/platform-session":
                 self._json(sessions.status()); return

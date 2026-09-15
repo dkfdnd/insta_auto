@@ -23,11 +23,14 @@ class Settings:
 
     # 수집
     ig_user: str = ""                 # 로그인에 사용할 인스타 아이디 (세션 파일 이름)
-    posts_per_account: int = 30       # 계정당 가져올 최근 게시물 수 (baseline 계산용)
+    collect_posts_per_account: int = 5  # 매 수집 때 Instagram에서 새로 확인할 최신 게시물 수
+    posts_per_account: int = 30       # DB에서 평소 성과 기준선 계산에 사용할 과거 게시물 수
     recent_days: int = 30             # 이 기간 밖의 게시물은 리포트에서 제외
     sleep_between_accounts: float = 3.0
-    views_lookup_limit: int = 20      # 계정당 조회수(media info)를 새로 조회할 릴스 수
+    views_lookup_limit: int = 5       # 계정당 조회수(media info)를 새로 조회할 릴스 수
     views_refresh_days: int = 14      # 이 일수보다 오래된 릴스는 이전 조회수 재사용
+    hot_view_tracking_days: int = 14  # 터진 릴스는 게시일부터 이 기간까지 매일 조회수 추적
+    hot_view_tracking_limit: int = 50 # 계정당 하루 최대 추적 릴스 수
     download_thumbs: bool = True
     thumb_width: int = 640
 

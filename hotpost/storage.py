@@ -51,6 +51,14 @@ CREATE TABLE IF NOT EXISTS app_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS hot_view_tracking (
+    shortcode TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    posted_at INTEGER NOT NULL,
+    track_until INTEGER NOT NULL,
+    detected_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hot_tracking_user_until ON hot_view_tracking(username, track_until);
 """
 
 
@@ -180,6 +188,35 @@ class Storage:
         newest_update = self.conn.execute("SELECT MAX(updated_at) FROM posts").fetchone()[0]
         newest_post = self.conn.execute("SELECT MAX(taken_at) FROM posts").fetchone()[0]
         return {"last_run": last, "newest_post_update": newest_update, "newest_published_post": newest_post}
+
+    def register_hot_view_tracking(self, posts: list[Post], days: int, detected_at: int | None = None) -> int:
+        """한 번 터진 릴스는 게시일부터 정해진 기간까지 추적 대상으로 고정한다."""
+        now = detected_at or int(time.time())
+        rows = [(p.shortcode, p.username, p.taken_at, p.taken_at + days * 86400, now)
+                for p in posts if p.is_video and p.media_id and p.taken_at + days * 86400 >= now]
+        before = self.conn.total_changes
+        self.conn.executemany(
+            """INSERT OR IGNORE INTO hot_view_tracking
+               (shortcode,username,posted_at,track_until,detected_at) VALUES (?,?,?,?,?)""", rows)
+        self.conn.commit()
+        return self.conn.total_changes - before
+
+    def tracked_hot_posts(self, username: str, now: int | None = None, limit: int = 50) -> list[Post]:
+        now = now or int(time.time())
+        rows = self.conn.execute(
+            """SELECT posts.* FROM hot_view_tracking tracking
+               JOIN posts ON posts.shortcode=tracking.shortcode
+               WHERE tracking.username=? AND tracking.track_until>=?
+               ORDER BY tracking.posted_at DESC LIMIT ?""",
+            (username, now, limit),
+        ).fetchall()
+        return [self._row_to_post(row) for row in rows]
+
+    def hot_tracking_status(self, now: int | None = None) -> dict:
+        now = now or int(time.time())
+        active = self.conn.execute("SELECT COUNT(*) FROM hot_view_tracking WHERE track_until>=?", (now,)).fetchone()[0]
+        total = self.conn.execute("SELECT COUNT(*) FROM hot_view_tracking").fetchone()[0]
+        return {"active": active, "total": total}
 
     @staticmethod
     def _row_to_post(r: sqlite3.Row) -> Post:

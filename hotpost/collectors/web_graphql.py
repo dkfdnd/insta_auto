@@ -342,6 +342,26 @@ class WebGraphQLCollector:
                 print(f"    조회수 조회 실패 {p.shortcode}: {type(e).__name__}", flush=True)
             self._sleep(0.9, 1.8)
 
+    def refresh_video_views(self, posts: list[Post], limit: int = 50) -> None:
+        """최신 5개 밖으로 밀린 터진 릴스도 게시 후 14일까지 조회수를 재조회한다."""
+        for p in sorted((post for post in posts if post.is_video and post.media_id),
+                        key=lambda post: post.taken_at, reverse=True)[:limit]:
+            try:
+                r = self.s.get(f"https://www.instagram.com/api/v1/media/{p.media_id}/info/",
+                               headers=self._api_headers(p.url), timeout=30)
+                if r.status_code == 429:
+                    print("    429 제한 (터진 릴스 조회수 추적 중단)", flush=True)
+                    break
+                item = ((r.json() or {}).get("items") or [{}])[0] if r.ok else {}
+                views = item.get("play_count") or item.get("ig_play_count") or item.get("view_count")
+                if views is not None:
+                    p.views = int(views)
+                if item.get("video_duration"):
+                    p.video_duration = float(item["video_duration"])
+            except Exception as exc:  # noqa: BLE001
+                print(f"    추적 조회수 조회 실패 {p.shortcode}: {type(exc).__name__}", flush=True)
+            self._sleep(0.9, 1.8)
+
 def _num(m) -> int:
     if not m:
         return 0

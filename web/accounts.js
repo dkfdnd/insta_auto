@@ -61,6 +61,8 @@
       $('#last-collection').textContent = last ? new Date(last.finished_at * 1000).toLocaleString('ko-KR') : '실행 기록 없음';
       $('#last-post-update').textContent = collection.newest_post_update
         ? new Date(collection.newest_post_update * 1000).toLocaleString('ko-KR') : '갱신 기록 없음';
+      const tracking = data.hot_tracking || {};
+      $('#hot-tracking').textContent = `진행 중 ${tracking.active || 0}개 · 누적 ${tracking.total || 0}개`;
     } catch (error) {
       $('#schedule-state').textContent = error.message;
     }

@@ -70,7 +70,14 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
         _log(f"[{i}/{len(usernames)}] @{name} 수집 중...")
         try:
             existing = {p.shortcode: p for p in store.posts_for(name, limit=settings.posts_per_account * 2)}
-            profile, posts = collector.fetch(name, settings.posts_per_account, existing=existing)
+            tracked = store.tracked_hot_posts(name, limit=settings.hot_view_tracking_limit)
+            profile, posts = collector.fetch(name, settings.collect_posts_per_account, existing=existing)
+            fresh_codes = {post.shortcode for post in posts}
+            tracked_extra = [post for post in tracked if post.shortcode not in fresh_codes]
+            if tracked_extra and hasattr(collector, "refresh_video_views"):
+                collector.refresh_video_views(tracked_extra, settings.hot_view_tracking_limit)
+                posts.extend(tracked_extra)
+                _log(f"    터진 릴스 조회수 추적 {len(tracked_extra)}개")
         except CollectError as e:
             failed += 1
             notes.append(f"@{name}: {e}")
