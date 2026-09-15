@@ -37,7 +37,7 @@ PLATFORMS = {
 }
 
 
-def _platform_rows(cookies: list[dict]) -> list[dict]:
+def _platform_rows(cookies: list[dict], checks: dict[str, str] | None = None) -> list[dict]:
     rows = []
     for key, spec in PLATFORMS.items():
         found = any(
@@ -46,8 +46,40 @@ def _platform_rows(cookies: list[dict]) -> list[dict]:
             and bool(cookie.get("value") or cookie.get("has_value"))
             for cookie in cookies
         )
-        rows.append({"id": key, "label": spec["label"], "connected": found})
+        auth_status = (checks or {}).get(key, "unverified")
+        rows.append({"id": key, "label": spec["label"], "cookie_present": found,
+                     "auth_status": auth_status,
+                     "connected": found and auth_status == "authenticated"})
     return rows
+
+
+def probe_platform_auth(context, platform: str) -> str:
+    """저장 쿠키를 사용하는 가벼운 요청으로 인증 신호를 확인한다.
+
+    응답에 명시적 로그인 상태가 없으면 성공이라고 추정하지 않는다.
+    """
+    import re
+    urls = {"tiktok": "https://www.tiktok.com/login",
+            "douyin": "https://www.douyin.com/",
+            "xiaohongshu": "https://www.xiaohongshu.com/",
+            "youtube": "https://www.youtube.com/account"}
+    if platform not in urls:
+        return "unverified"
+    try:
+        response = context.request.get(urls[platform], timeout=6000)
+        if response.status == 429:
+            return "rate_limited"
+        if response.status in (401, 403) or any(word in response.url.lower() for word in
+                                                   ("accounts.google.com", "/login?", "/signin")):
+            return "login_required"
+        body = response.text()[:1_000_000]
+        if re.search(r'(?i)["\'](?:isLogin|isLoggedIn|loggedIn)["\']\s*:\s*true', body):
+            return "authenticated"
+        if re.search(r'(?i)["\'](?:isLogin|isLoggedIn|loggedIn)["\']\s*:\s*false', body):
+            return "login_required"
+    except Exception:  # 플랫폼 오류는 인증 성공으로 추정하지 않는다.
+        return "unverified"
+    return "unverified"
 
 
 def profile_cookie_status(profile_dir: Path) -> list[dict]:

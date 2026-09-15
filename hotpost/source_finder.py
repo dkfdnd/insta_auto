@@ -26,6 +26,8 @@ from PIL import Image, ImageOps
 
 from .config import Settings
 from .storage import Storage
+from .source_quality import (platform_of, round_robin_candidates, sha256_file,
+                             relevance_reasons, reuse_reasons, select_valid_candidates)
 
 Progress = Callable[[str, int], None]
 VIDEO_HOSTS = ("tiktok.com", "douyin.com", "xiaohongshu.com", "youtube.com", "youtu.be", "bilibili.com",
@@ -83,6 +85,7 @@ PRODUCT_CONCEPTS = [
 class Candidate:
     url: str
     provider: str
+    original_url: str = ""
     title: str = ""
     uploader: str = ""
     query: str = ""
@@ -100,8 +103,18 @@ class Candidate:
     caption_frame_ratio: float | None = None
     watermark_frame_ratio: float | None = None
     source_score: float | None = None
+    platform: str = "other"
+    video_meta: dict | None = None
+    file_sha256: str = ""
+    frame_hashes: list[str] | None = None
+    selection_reason: str = ""
+    rejection_reasons: list[str] | None = None
     selected_for_zip: bool = False
     error: str = ""
+
+    def __post_init__(self) -> None:
+        self.original_url = self.original_url or self.url
+        self.platform = platform_of(self.provider, self.url)
 
 
 def _run(args: list[str], timeout: int = 180) -> subprocess.CompletedProcess:
@@ -210,12 +223,30 @@ def compare_videos(reference_frames: list[Path], candidate: Path, work: Path) ->
     return round(sum(top) / len(top), 4)
 
 
+def probe_video(path: Path) -> dict:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return {"duration": None, "width": None, "height": None, "bytes": path.stat().st_size}
+    result = _run([ffprobe, "-v", "error", "-show_entries",
+                   "format=duration:stream=width,height", "-of", "json", str(path)], timeout=30)
+    try:
+        info = json.loads(result.stdout)
+        stream = next((row for row in info.get("streams", []) if row.get("width") and row.get("height")), {})
+        return {"duration": float(info.get("format", {}).get("duration") or 0),
+                "width": stream.get("width"), "height": stream.get("height"),
+                "bytes": path.stat().st_size}
+    except (ValueError, json.JSONDecodeError):
+        return {"duration": None, "width": None, "height": None, "bytes": path.stat().st_size}
+
+
 class OpenClipVerifier:
     """한 작업에서 모델/기준 임베딩을 한 번만 로드하는 선택적 의미 유사도 검증기."""
     def __init__(self, settings: Settings, reference_frames: list[Path]):
         self.settings = settings
         self.available = False
         self.error = ""
+        self.product_evidence: list[dict] = []
+        self.last_embedding = None
         if not settings.source_use_openclip:
             return
         try:
@@ -248,11 +279,14 @@ class OpenClipVerifier:
         return features
 
     def score(self, candidate_frames: list[Path]) -> float | None:
+        self.last_embedding = None
         if not self.available:
             return None
         features = self._encode(candidate_frames)
         if features is None:
             return None
+        self.last_embedding = features.mean(dim=0)
+        self.last_embedding /= self.last_embedding.norm()
         matrix = self.reference @ features.T
         best = matrix.max(dim=1).values
         top = best.topk(min(3, best.numel())).values.mean().item()
@@ -274,10 +308,17 @@ class OpenClipVerifier:
             # 제품이 잘 보이는 한두 장면을 살리되 우연한 한 프레임 매칭은 평균 점수로 보정한다.
             matrix = self.reference @ features.T
             scores = matrix.max(dim=0).values * .7 + matrix.mean(dim=0) * .3
-            ranked = scores.topk(min(count, scores.numel())).indices.tolist()
+            ranked = scores.topk(min(count + 1, scores.numel())).indices.tolist()
+            values = scores.tolist()
         queries = []
-        for index in ranked:
+        for rank, index in enumerate(ranked[:count]):
+            score = float(values[index])
+            next_score = float(values[ranked[rank + 1]]) if rank + 1 < len(ranked) else 0
+            if score < .26 or score - next_score < .025:
+                continue
             queries.extend(PRODUCT_CONCEPTS[index])
+            self.product_evidence.append({"concept": PRODUCT_CONCEPTS[index][0],
+                                          "score": round(score, 4), "margin": round(score - next_score, 4)})
         return queries
 
 
@@ -303,6 +344,55 @@ def build_queries(caption: str) -> list[str]:
     if "car door" in en:
         intent = ["car door hanging cup holder", "car door cup holder", "car door hanging trash can cup holder", "车门 挂式 杯架 垃圾桶"]
     return [q for q in dict.fromkeys((ko, *intent, en, zh)) if q.strip()]
+
+
+def _clean_visual_terms(terms: list[str]) -> list[str]:
+    generic = {"text in image", "person", "people", "human", "car", "vehicle", "video", "image", "photo"}
+    return [term.strip() for term in dict.fromkeys(terms)
+            if term.strip() and term.strip().lower() not in generic and len(term.strip()) >= 3]
+
+
+def _transcript_evidence(settings: Settings, shortcode: str) -> dict[str, str]:
+    paths = sorted(settings.transcript_dir.glob(f"{shortcode}-*/transcript.json"), reverse=True)
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return {key: " ".join(row.get("text", "") for row in data.get(key, []))
+                    for key in ("speech", "screen_text")}
+        except (OSError, json.JSONDecodeError):
+            continue
+    return {"speech": "", "screen_text": ""}
+
+
+def build_grounded_queries(caption: str, visual_queries: list[str], vision_terms: list[str],
+                           transcript: dict[str, str]) -> list[dict]:
+    """캡션·시각·화면 글자·실제 음성의 생성 근거를 검색어별로 남긴다."""
+    sources = {"caption": caption, "vision": " ".join(_clean_visual_terms(vision_terms)),
+               "screen_text": transcript.get("screen_text", ""), "speech": transcript.get("speech", "")}
+    grounded = []
+    roles = {"차문": "place", "주방": "place", "캠핑": "place", "소파": "place",
+             "컵홀더": "product", "홀더": "shape", "수납": "behavior", "청소": "behavior"}
+    for word, (english, chinese) in KO_EN_ZH.items():
+        if english in {"car", "drink", "coffee", "sofa", "shellfish"}:
+            continue
+        evidence = [name for name, body in sources.items() if word in body]
+        if len(evidence) >= 2:
+            for query in (english, chinese):
+                grounded.append({"query": query, "sources": evidence, "confidence": "high",
+                                 "role": roles.get(word, "product")})
+    for query in visual_queries:
+        evidence = ["openclip"]
+        if any(word in caption.lower() for word in query.lower().split() if len(word) >= 4):
+            evidence.append("caption")
+        grounded.append({"query": query, "sources": evidence,
+                         "confidence": "high" if len(evidence) >= 2 else "medium", "role": "product"})
+    if not grounded:
+        grounded = [{"query": query, "sources": ["caption"], "confidence": "low", "role": "fallback"}
+                    for query in build_queries(caption)]
+    deduped = {}
+    for item in grounded:
+        deduped.setdefault(item["query"], item)
+    return list(deduped.values())[:16]
 
 
 def _yt_cookie_args(cookie_file: Path | None) -> list[str]:
@@ -564,29 +654,34 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
     verification_notes = [verifier.error] if verifier.error else []
     visual_queries = verifier.discover_product_queries()
     vision_candidates, vision_terms = search_google_vision(settings, frames, settings.source_max_candidates)
-    queries = list(dict.fromkeys([*visual_queries, *vision_terms, *build_queries(post.caption)]))
+    query_details = build_grounded_queries(post.caption, visual_queries, vision_terms,
+                                           _transcript_evidence(settings, shortcode))
+    queries = [item["query"] for item in query_details]
     progress("영어·중국어로 TikTok·Douyin·Xiaohongshu 검색 중", 32)
     browser_result = {"candidates": [], "terms": [], "notes": []}
     if settings.source_browser_search:
         from .browser_search import browser_search
         browser_result = browser_search(settings, frames, queries, settings.source_max_candidates, root / "browser_debug")
     # Yandex가 반환한 일반 장면·외국어 단어가 제품 키워드를 밀어내지 않도록 뒤에 둔다.
-    queries = list(dict.fromkeys([*queries, *browser_result["terms"]]))
-    candidates = _dedupe([Candidate(**item) for item in browser_result["candidates"]] + vision_candidates)
+    browser_terms = _clean_visual_terms(browser_result["terms"])
+    queries = list(dict.fromkeys([*queries, *browser_terms]))
+    candidates = [Candidate(**item) for item in browser_result["candidates"]] + vision_candidates
     progress("공개 웹 검색 결과를 합치는 중", 42)
-    candidates += search_local_cache(settings, shortcode, min(8, settings.source_max_candidates - len(candidates)))
-    candidates += search_web(queries, min(4, settings.source_max_candidates - len(candidates)))
-    candidates += search_bing(queries, min(6, settings.source_max_candidates - len(candidates)))
-    candidates += search_youtube(queries, min(12, settings.source_max_candidates - len(candidates)),
+    per_platform = max(4, settings.source_max_candidates // 5)
+    candidates += search_local_cache(settings, shortcode, per_platform)
+    candidates += search_web(queries, per_platform)
+    candidates += search_bing(queries, per_platform)
+    candidates += search_youtube(queries, per_platform,
                                  settings.source_browser_cookie_file)
-    candidates += search_pexels(settings, queries, max(0, settings.source_max_candidates - len(candidates)))
-    candidates = _dedupe(candidates)[:settings.source_max_candidates]
+    candidates += search_pexels(settings, queries, per_platform)
+    candidates = round_robin_candidates(_dedupe(candidates), settings.source_max_candidates)
     from .text_overlay import TextOverlayDetector
     overlay_detector = TextOverlayDetector(settings)
     if overlay_detector.note:
         verification_notes.append(overlay_detector.note)
     progress(f"후보 {len(candidates)}개를 확인하는 중", 50)
     probed = 0
+    embeddings = {}
     for i, candidate in enumerate(candidates, 1):
         if probed >= max(settings.source_max_downloads, settings.source_max_probe_downloads):
             break
@@ -595,10 +690,15 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
         if path:
             probed += 1
             candidate.downloaded_file = str(path.relative_to(root))
+            candidate.video_meta = probe_video(path)
+            candidate.file_sha256 = sha256_file(path)
             try:
                 candidate.hash_similarity = compare_videos(frames, path, compare_dir / f"{i:02d}")
                 candidate_frames = sorted((compare_dir / f"{i:02d}").glob("candidate_*.jpg"))
                 candidate.semantic_similarity = verifier.score(candidate_frames)
+                if verifier.last_embedding is not None:
+                    embeddings[id(candidate)] = verifier.last_embedding.clone()
+                candidate.frame_hashes = [f"{dhash(frame):064x}" for frame in candidate_frames]
                 candidate.similarity = round(
                     candidate.hash_similarity if candidate.semantic_similarity is None else
                     candidate.hash_similarity * .55 + candidate.semantic_similarity * .45, 4,
@@ -613,24 +713,30 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
                                "edited-with-text": .2, "unknown": .45}[candidate.source_quality]
                 semantic = candidate.semantic_similarity if candidate.semantic_similarity is not None else candidate.hash_similarity
                 candidate.source_score = round(clean_score * .55 + (semantic or 0) * .30
-                                               + (candidate.hash_similarity or 0) * .15, 4)
+                                               + (candidate.hash_similarity or 0) * .15
+                                               - (.08 if (candidate.video_meta.get("width") or 0) > (candidate.video_meta.get("height") or 0) else 0)
+                                               + (.03 if candidate.rights == "pexels-license" else 0), 4)
                 preview = root / "previews" / f"{i:02d}.jpg"
                 preview.parent.mkdir(exist_ok=True)
                 create_contact_sheet(sorted((compare_dir / f"{i:02d}").glob("candidate_*.jpg"))[:8], preview)
                 candidate.preview_file = str(preview.relative_to(root))
+                candidate.rejection_reasons = [*relevance_reasons(candidate, candidate.video_meta),
+                                               *reuse_reasons(candidate)]
             except Exception as exc:  # noqa: BLE001
                 candidate.error = f"유사도 계산 실패: {exc}"
+                candidate.rejection_reasons = ["verification_failed"]
+        else:
+            candidate.rejection_reasons = ["download_failed"]
         progress(f"후보 다운로드/검증 {i}/{len(candidates)}", min(88, 50 + int(i / max(1, len(candidates)) * 38)))
     candidates.sort(key=lambda c: (c.downloaded_file != "", c.source_score or 0, c.similarity or 0), reverse=True)
-    selected = [candidate for candidate in candidates if candidate.downloaded_file][:settings.source_max_downloads]
-    for candidate in selected:
-        candidate.selected_for_zip = True
+    selected = select_valid_candidates(candidates, settings.source_max_downloads, embeddings)
     downloaded = len(selected)
     quality_counts = {key: sum(c.selected_for_zip and c.source_quality == key for c in candidates)
                       for key in ("clean-source", "light-overlay", "edited-with-text", "unknown")}
     manifest = {
         "job_id": job_id, "created_at": int(time.time()), "shortcode": shortcode, "reference_url": post.url,
-        "caption": post.caption, "queries": queries, "visual_product_queries": visual_queries,
+        "caption": post.caption, "queries": queries, "query_details": query_details,
+        "visual_product_queries": visual_queries, "openclip_product_evidence": verifier.product_evidence,
         "google_vision_terms": vision_terms,
         "reference_frames": [str(p.relative_to(root)) for p in frames],
         "browser_notes": browser_result["notes"], "verification_notes": verification_notes,

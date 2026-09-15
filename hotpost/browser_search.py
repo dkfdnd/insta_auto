@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, quote_plus, unquote, urljoin, urlparse
 
 from .config import Settings
-from .browser_profile import BROWSER_LOCK, export_cookies
+from .browser_profile import BROWSER_LOCK, export_cookies, probe_platform_auth
 
 VIDEO_HOSTS = ("tiktok.com", "douyin.com", "xiaohongshu.com", "youtube.com", "youtu.be", "bilibili.com",
                "vimeo.com", "lazada.", "manuals.plus", "made-in-china.com")
@@ -226,6 +226,9 @@ class BrowserSearcher:
         ]
         per_provider_limit = min(8, max(5, limit // len(platforms)))
         for provider, template in platforms:
+            auth = probe_platform_auth(context, provider)
+            if auth != "authenticated":
+                self.notes.append(f"{provider} 인증 확인: {auth} (공개 검색은 계속 진행)")
             page = context.new_page()
             page.route("**/*", lambda route: route.abort() if route.request.resource_type in {"image", "media", "font"}
                        else route.continue_())

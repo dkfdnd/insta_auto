@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import time
 
-from .browser_profile import BROWSER_LOCK, PLATFORMS, _platform_rows, export_cookies, profile_cookie_status
+from .browser_profile import BROWSER_LOCK, PLATFORMS, _platform_rows, export_cookies, profile_cookie_status, probe_platform_auth
 from .config import Settings
 
 
@@ -17,10 +17,11 @@ class PlatformSessionManager:
         self.message = "저장된 로그인 상태"
         self.error = ""
         self.platforms = profile_cookie_status(settings.source_browser_profile_dir)
+        self.last_auth_checked_at = 0.0
 
     def status(self) -> dict:
         with self.lock:
-            if not self.active:
+            if not self.active and time.time() - self.last_auth_checked_at > 600:
                 self.platforms = profile_cookie_status(self.settings.source_browser_profile_dir)
             return {"active": self.active, "message": self.message, "error": self.error,
                     "platforms": list(self.platforms),
@@ -77,13 +78,15 @@ class PlatformSessionManager:
                         break
                     with self.lock:
                         self.platforms = platforms
-                        connected = sum(item["connected"] for item in platforms)
-                        self.message = f"로그인 창 사용 중 · {connected}/{len(platforms)}개 연결 감지"
+                        present = sum(item["cookie_present"] for item in platforms)
+                        self.message = f"로그인 창 사용 중 · {present}/{len(platforms)}개 쿠키 감지 (인증 미검증)"
                 try:
                     cookies = context.cookies()
                     export_cookies(cookies, self.settings.source_browser_cookie_file)
+                    checks = {key: probe_platform_auth(context, key) for key in PLATFORMS}
                     with self.lock:
-                        self.platforms = _platform_rows(cookies)
+                        self.platforms = _platform_rows(cookies, checks)
+                        self.last_auth_checked_at = time.time()
                 except Exception:
                     pass
         except Exception as exc:  # noqa: BLE001

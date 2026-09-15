@@ -325,7 +325,7 @@
   $('#platform-login').addEventListener('click', () => { sessionModal.hidden = false; refreshPlatformSession(); });
   function renderPlatformSession(data) {
     $('#session-platforms').innerHTML = (data.platforms || []).map((p) =>
-      `<div class="session-platform">${esc(p.label)}<span class="${p.connected ? 'connected' : ''}">${p.connected ? '● 로그인 쿠키 감지' : '○ 로그인 필요'}</span></div>`).join('');
+      `<div class="session-platform">${esc(p.label)}<span class="${p.connected ? 'connected' : ''}">${p.connected ? '● 인증 확인' : p.cookie_present ? '◐ 쿠키 있음 · ' + esc(p.auth_status || '미검증') : '○ 로그인 필요'}</span></div>`).join('');
     const status = $('#session-status');
     status.classList.toggle('error', Boolean(data.error));
     status.innerHTML = `<b>${esc(data.error || data.message || '상태 확인 완료')}</b><small>${data.cookie_file_ready ? '다운로드용 쿠키 파일 준비됨' : '로그인 창에서 인증하면 다운로드용 쿠키가 생성됩니다.'}</small>`;
@@ -430,7 +430,7 @@
       if (job.status === 'error') throw new Error(job.error || '탐색 작업이 실패했습니다.');
       const notes = job.notes && job.notes.length ? `<small class="source-note">${job.notes.map(esc).join('<br>')}</small>` : '';
       const qc = job.quality_counts || {};
-      const resultText = `${job.probed_downloads || job.downloaded}개를 검사해 상위 ${job.downloaded}개 선별 · 클린 소스 ${qc['clean-source'] || 0} · 검토 필요 ${qc['light-overlay'] || 0} · 자막 포함 ${qc['edited-with-text'] || 0}`;
+      const resultText = `${job.probed_downloads || 0}개를 검사해 유효 후보 ${job.downloaded}개 · 클린 소스 ${qc['clean-source'] || 0} · 검토 필요 ${qc['light-overlay'] || 0} · 자막 포함 ${qc['edited-with-text'] || 0}`;
       status.innerHTML = `<b>${esc(job.message)}</b><div class="source-progress"><i style="width:${job.progress || 0}%"></i></div><small>${job.status === 'done' ? `${resultText}. ZIP에서 유형별 폴더로 구분했습니다.` : '모달을 닫아도 서버에서 계속 진행됩니다.'}</small>${notes}`;
       if (job.status === 'done') {
         button.disabled = false; button.textContent = '다시 탐색';

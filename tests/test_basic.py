@@ -7,7 +7,7 @@ from hotpost.models import Post
 from hotpost.sources import extract_username, load_usernames
 from hotpost.source_finder import Candidate, PRODUCT_CONCEPTS, _dedupe, build_queries, dhash
 from hotpost.browser_search import _embedded_candidates, _html_candidates, _is_candidate, _sample_frames
-from hotpost.browser_profile import _platform_rows, export_cookies
+from hotpost.browser_profile import _platform_rows, export_cookies, probe_platform_auth
 from hotpost.text_overlay import classify_overlay
 from hotpost.accounts import AccountRegistry
 from hotpost.scheduler import launch_agent_config
@@ -121,9 +121,28 @@ def test_platform_cookie_status_is_domain_specific():
         {"domain": ".douyin.com", "name": "sessionid", "value": "ok"},
         {"domain": ".xiaohongshu.com", "name": "web_session", "value": "ok"},
     ])
-    status = {row["id"]: row["connected"] for row in rows}
-    assert status["douyin"] and status["xiaohongshu"]
-    assert not status["tiktok"] and not status["youtube"]
+    status = {row["id"]: row for row in rows}
+    assert status["douyin"]["cookie_present"] and status["xiaohongshu"]["cookie_present"]
+    assert not any(row["connected"] for row in rows)
+    assert not status["tiktok"]["cookie_present"] and not status["youtube"]["cookie_present"]
+
+
+def test_platform_auth_probe_requires_response_signal():
+    class Response:
+        status = 200
+        url = "https://www.douyin.com/"
+        def __init__(self, body): self.body = body
+        def text(self): return self.body
+    class Request:
+        def __init__(self, body): self.body = body; self.calls = 0
+        def get(self, *_args, **_kwargs): self.calls += 1; return Response(self.body)
+    class Context:
+        def __init__(self, body): self.request = Request(body)
+    unknown = Context("<html>홈페이지</html>")
+    assert probe_platform_auth(unknown, "douyin") == "unverified"
+    assert unknown.request.calls == 1
+    assert probe_platform_auth(Context('{"isLogin":false}'), "douyin") == "login_required"
+    assert probe_platform_auth(Context('{"isLogin":true}'), "douyin") == "authenticated"
 
 
 def test_cookie_export_is_private_and_netscape_compatible(tmp_path: Path):

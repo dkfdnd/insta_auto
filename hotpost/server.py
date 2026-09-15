@@ -185,10 +185,11 @@ def make_handler(settings: Settings):
                     public["downloaded"] = job["result"]["downloaded"]
                     public["probed_downloads"] = job["result"].get("probed_downloads", job["result"]["downloaded"])
                     public["quality_counts"] = job["result"].get("quality_counts", {})
-                    public["candidates"] = [{k: c[k] for k in ("provider", "title", "uploader", "url", "hash_similarity",
+                    public["candidates"] = [{k: c.get(k) for k in ("provider", "title", "uploader", "url", "original_url", "platform", "hash_similarity",
                                                                         "semantic_similarity", "similarity", "match_quality",
                                                                         "source_quality", "text_overlay_score", "source_score",
-                                                                        "selected_for_zip", "rights", "downloaded_file", "error")}
+                                                                        "selected_for_zip", "selection_reason", "rejection_reasons",
+                                                                        "rights", "downloaded_file", "error")}
                                             for c in job["result"]["candidates"]]
                     public["notes"] = [*job["result"].get("browser_notes", []), *job["result"].get("verification_notes", [])]
                     public["download_url"] = f"/api/source-jobs/{job['id']}/download"
