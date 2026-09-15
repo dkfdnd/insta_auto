@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>모니터링 계정 관리 · Hotpost</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <header class="top">
@@ -27,6 +27,22 @@
     <div><span>마지막 전체 수집</span><b id="last-collection">확인 중…</b></div>
     <div><span>게시물 지표 갱신</span><b id="last-post-update">확인 중…</b></div>
     <div><span>터진 릴스 조회수 추적</span><b id="hot-tracking">확인 중…</b></div>
+    <div><span>마지막 수집 성공</span><b id="last-collection-success">확인 중…</b></div>
+    <div><span>다음 자동 수집</span><b id="next-collection">확인 중…</b></div>
+  </section>
+  <section class="section operational-panel">
+    <div class="section-head"><h2>알림함 <span class="account-count" id="notification-count">0</span></h2></div>
+    <div id="notification-list" class="operational-list">알림을 불러오는 중…</div>
+  </section>
+  <section class="section operational-panel">
+    <div class="section-head"><h2>작업 결과</h2><button class="btn ghost" id="jobs-refresh">새로고침</button></div>
+    <div id="jobs-list" class="operational-list">작업을 불러오는 중…</div>
+  </section>
+  <section class="section operational-panel">
+    <div class="section-head"><h2>저장 공간</h2><button class="btn ghost" id="storage-preview">정리 대상 확인</button></div>
+    <p id="disk-usage" class="hint">사용량 확인 중…</p>
+    <div id="storage-plan" class="operational-list" hidden></div>
+    <button class="btn ghost" id="storage-cleanup" hidden>표시된 임시 파일 정리 실행</button>
   </section>
   <section class="section account-add-panel">
     <div class="section-head">
@@ -55,6 +71,6 @@
   </section>
 </main>
 
-<script src="accounts.js?v=3"></script>
+<script src="accounts.js?v=4"></script>
 </body>
 </html>

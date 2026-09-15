@@ -32,6 +32,7 @@ from .source_quality import (platform_of, round_robin_candidates, sha256_file,
 Progress = Callable[[str, int], None]
 VIDEO_HOSTS = ("tiktok.com", "douyin.com", "xiaohongshu.com", "youtube.com", "youtu.be", "bilibili.com",
                "vimeo.com", "lazada.", "manuals.plus", "made-in-china.com")
+SOURCE_COOLDOWNS: dict[str, float] = {}
 KO_EN_ZH = {
     "차량": ("car", "汽车"), "자동차": ("car", "汽车"), "차문": ("car door", "车门"),
     "차량용품": ("car accessories", "汽车用品"), "문쪽": ("door side", "车门侧"),
@@ -568,6 +569,9 @@ def _dedupe(items: list[Candidate]) -> list[Candidate]:
 
 def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: int,
                        cookie_file: Path | None = None) -> Path | None:
+    if SOURCE_COOLDOWNS.get(candidate.platform, 0) > time.time():
+        candidate.error = "429 쿨다운 중인 플랫폼"
+        return None
     stem = f"{index:02d}_{_safe_name(candidate.provider)}"
     parsed = urlparse(candidate.url)
     video_id = parse_qs(parsed.query).get("v", [""])[0] if "youtube.com" in parsed.netloc else parsed.path.strip("/").split("/")[-1]
@@ -580,31 +584,51 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
             return target
     if candidate.provider == "pexels":
         target = out_dir / f"{stem}.mp4"
-        try:
-            with requests.get(candidate.url, stream=True, timeout=60) as r:
-                r.raise_for_status(); size = 0
-                with target.open("wb") as f:
-                    for chunk in r.iter_content(1024 * 256):
-                        size += len(chunk)
-                        if size > max_mb * 1024 * 1024:
-                            raise RuntimeError("파일 크기 제한 초과")
-                        f.write(chunk)
-            return target
-        except Exception as exc:  # noqa: BLE001
-            target.unlink(missing_ok=True); candidate.error = str(exc)[:240]; return None
+        for attempt in range(3):
+            try:
+                with requests.get(candidate.url, stream=True, timeout=60) as r:
+                    if r.status_code == 429:
+                        SOURCE_COOLDOWNS[candidate.platform] = time.time() + 60
+                        candidate.error = "429 제한 · 60초 쿨다운"
+                        return None
+                    r.raise_for_status(); size = 0
+                    with target.open("wb") as f:
+                        for chunk in r.iter_content(1024 * 256):
+                            size += len(chunk)
+                            if size > max_mb * 1024 * 1024:
+                                raise RuntimeError("파일 크기 제한 초과")
+                            f.write(chunk)
+                return target
+            except Exception as exc:  # noqa: BLE001
+                target.unlink(missing_ok=True); candidate.error = str(exc)[:240]
+                if attempt < 2 and isinstance(exc, requests.RequestException):
+                    time.sleep(2 ** attempt)
+                    continue
+                return None
     ytdlp = shutil.which("yt-dlp")
     if not ytdlp:
         candidate.error = "yt-dlp 실행 파일이 없습니다."
         return None
     template = str(out_dir / f"{stem}_%(id)s.%(ext)s")
-    try:
-        result = _run([ytdlp, *_yt_cookie_args(cookie_file), "--no-playlist", "--no-progress",
-                       "--restrict-filenames", "--write-info-json",
-                       "--max-filesize", f"{max_mb}M", "--format", "bv*+ba/b", "--merge-output-format", "mp4",
-                       "-o", template, "--", candidate.url], timeout=240)
-    except subprocess.TimeoutExpired:
-        candidate.error = "다운로드 제한 시간(240초) 초과"
-        return None
+    command = [ytdlp, *_yt_cookie_args(cookie_file), "--no-playlist", "--no-progress",
+               "--restrict-filenames", "--write-info-json", "--max-filesize", f"{max_mb}M",
+               "--format", "bv*+ba/b", "--merge-output-format", "mp4", "-o", template,
+               "--", candidate.url]
+    for attempt in range(3):
+        try:
+            result = _run(command, timeout=240)
+        except subprocess.TimeoutExpired:
+            candidate.error = "다운로드 제한 시간(240초) 초과"
+            return None
+        diagnostic = (result.stderr or result.stdout).lower()
+        if "429" in diagnostic or "too many requests" in diagnostic:
+            SOURCE_COOLDOWNS[candidate.platform] = time.time() + 60
+            candidate.error = "429 제한 · 60초 쿨다운"
+            return None
+        if result.returncode == 0 or any(word in diagnostic for word in ("login", "captcha", "drm", "private")):
+            break
+        if attempt < 2:
+            time.sleep(2 ** attempt)
     info_file = next(iter(out_dir.glob(f"{stem}_*.info.json")), None)
     if info_file:
         try:
@@ -764,30 +788,14 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
 
 
 class SourceJobManager:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, job_queue=None):
+        from .job_queue import JobQueue
         self.settings = settings
-        self.jobs: dict[str, dict] = {}
-        self.lock = threading.Lock()
+        self.queue = job_queue or JobQueue(settings)
+        self.queue.register("source", lambda shortcode, progress: find_sources(settings, shortcode, progress))
 
     def start(self, shortcode: str) -> dict:
-        with self.lock:
-            active = next((j for j in self.jobs.values() if j["shortcode"] == shortcode and j["status"] in ("queued", "running")), None)
-            if active:
-                return dict(active)
-            job_id = hashlib.sha1(f"{shortcode}-{time.time_ns()}".encode()).hexdigest()[:12]
-            self.jobs[job_id] = {"id": job_id, "shortcode": shortcode, "status": "queued", "progress": 0, "message": "대기 중"}
-        threading.Thread(target=self._work, args=(job_id,), daemon=True).start()
-        return dict(self.jobs[job_id])
-
-    def _work(self, job_id: str) -> None:
-        job = self.jobs[job_id]; job["status"] = "running"
-        def update(message: str, percent: int): job.update(message=message, progress=percent)
-        try:
-            result = find_sources(self.settings, job["shortcode"], update)
-            job.update(status="done", result=result, progress=100, message=f"소스 영상 {result['downloaded']}개 준비 완료")
-        except Exception as exc:  # noqa: BLE001
-            job.update(status="error", error=str(exc), message="탐색 실패")
+        return self.queue.start("source", shortcode)
 
     def get(self, job_id: str) -> dict | None:
-        job = self.jobs.get(job_id)
-        return dict(job) if job else None
+        return self.queue.get(job_id)

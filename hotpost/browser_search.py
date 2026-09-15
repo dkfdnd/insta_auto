@@ -17,6 +17,7 @@ from .browser_profile import BROWSER_LOCK, export_cookies, probe_platform_auth
 VIDEO_HOSTS = ("tiktok.com", "douyin.com", "xiaohongshu.com", "youtube.com", "youtu.be", "bilibili.com",
                "vimeo.com", "lazada.", "manuals.plus", "made-in-china.com")
 SKIP_HOSTS = ("google.com", "gstatic.com", "googleusercontent.com", "yandex.com", "yandex.ru", "yandex.net")
+BROWSER_COOLDOWNS: dict[str, float] = {}
 
 
 def _is_candidate(url: str) -> bool:
@@ -226,6 +227,9 @@ class BrowserSearcher:
         ]
         per_provider_limit = min(8, max(5, limit // len(platforms)))
         for provider, template in platforms:
+            if BROWSER_COOLDOWNS.get(provider, 0) > time.time():
+                self.notes.append(f"{provider} 429 쿨다운 중 · 검색 건너뜀")
+                continue
             auth = probe_platform_auth(context, provider)
             if auth != "authenticated":
                 self.notes.append(f"{provider} 인증 확인: {auth} (공개 검색은 계속 진행)")
@@ -240,10 +244,19 @@ class BrowserSearcher:
                 for query in selected[:4]:
                     encoded = quote(query, safe="") if provider == "douyin" else quote_plus(query)
                     search_url = template.format(encoded)
-                    try:
-                        page.goto(search_url, wait_until="commit", timeout=12000)
-                    except Exception as exc:  # SPA가 계속 로딩 중이어도 이미 받은 DOM에서 후보를 찾는다.
-                        self.notes.append(f"{provider} 페이지 로딩 지연: {type(exc).__name__}")
+                    for attempt in range(2):
+                        try:
+                            response = page.goto(search_url, wait_until="commit", timeout=12000)
+                            if response and response.status == 429:
+                                BROWSER_COOLDOWNS[provider] = time.time() + 60
+                                self.notes.append(f"{provider} 429 제한 · 60초 쿨다운")
+                            break
+                        except Exception as exc:  # SPA 로딩 지연은 1회 재시도한다.
+                            self.notes.append(f"{provider} 페이지 로딩 지연: {type(exc).__name__}")
+                            if attempt == 0:
+                                time.sleep(1)
+                    if BROWSER_COOLDOWNS.get(provider, 0) > time.time():
+                        break
                     page.wait_for_timeout(2000)
                     page.mouse.wheel(0, 900)
                     page.wait_for_timeout(500)

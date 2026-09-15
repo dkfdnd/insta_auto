@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import mimetypes
 import threading
+import time
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -19,11 +21,31 @@ from .scheduler import schedule_status
 from .storage import Storage
 from .report import build_report, write_report
 from .criteria import defaults
+from .job_queue import JobQueue
+from .retention import cleanup_dry_run, cleanup_execute, disk_usage
+
+
+KST = timezone(timedelta(hours=9))
+
+
+def schedule_health(schedule: dict, last_attempt_at: int | None, now: int | None = None) -> dict:
+    now = now or int(time.time())
+    local = datetime.fromtimestamp(now, KST)
+    scheduled = local.replace(hour=int(schedule.get("hour", 7)), minute=int(schedule.get("minute", 0)),
+                              second=0, microsecond=0)
+    missed = bool(schedule.get("installed")
+                  and local >= scheduled + timedelta(minutes=30)
+                  and (last_attempt_at is None or last_attempt_at < int(scheduled.timestamp())))
+    next_run = scheduled if local < scheduled else scheduled + timedelta(days=1)
+    return {"missed_today": missed,
+            "next_run_at": int(next_run.timestamp()) if schedule.get("installed") else None}
 
 
 def make_handler(settings: Settings):
-    manager = SourceJobManager(settings)
-    transcripts = TranscriptJobManager(settings)
+    job_queue = JobQueue(settings)
+    manager = SourceJobManager(settings, job_queue)
+    transcripts = TranscriptJobManager(settings, job_queue)
+    job_queue.resume_queued()
     sessions = PlatformSessionManager(settings)
     accounts = AccountRegistry(settings)
     criteria_lock = threading.Lock()
@@ -69,6 +91,41 @@ def make_handler(settings: Settings):
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path == "/api/storage/cleanup":
+                try:
+                    self._json(cleanup_execute(settings))
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            if path.startswith("/api/notifications/") and path.endswith("/seen"):
+                try:
+                    notification_id = int(path.split("/")[3])
+                except ValueError:
+                    self._json({"error": "잘못된 알림 ID"}, HTTPStatus.BAD_REQUEST); return
+                store = Storage(settings.db_path)
+                try:
+                    changed = store.mark_notification_seen(notification_id)
+                finally:
+                    store.close()
+                self._json({"seen": changed}, HTTPStatus.OK if changed else HTTPStatus.NOT_FOUND); return
+            if path.startswith("/api/jobs/") and path.endswith("/archive"):
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length <= 0 or length > 4096:
+                        raise ValueError("잘못된 요청 크기")
+                    payload = json.loads(self.rfile.read(length))
+                    if not isinstance(payload, dict) or not isinstance(payload.get("archived"), bool):
+                        raise ValueError("archived boolean이 필요합니다")
+                    job_id = path.split("/")[3]
+                    store = Storage(settings.db_path)
+                    try:
+                        changed = store.archive_job(job_id, payload["archived"])
+                    finally:
+                        store.close()
+                    self._json({"archived": payload["archived"]}, HTTPStatus.OK if changed else HTTPStatus.NOT_FOUND)
+                except (ValueError, json.JSONDecodeError) as exc:
+                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             if path == "/api/accounts":
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
@@ -119,14 +176,37 @@ def make_handler(settings: Settings):
                 finally:
                     store.close()
                 self._json({**active, "defaults": defaults(settings)}); return
+            if path == "/api/notifications":
+                store = Storage(settings.db_path)
+                try:
+                    items = store.notifications()
+                finally:
+                    store.close()
+                self._json({"notifications": items, "unseen": sum(item["seen_at"] is None for item in items)}); return
+            if path == "/api/jobs":
+                store = Storage(settings.db_path)
+                try:
+                    items = store.list_jobs()
+                finally:
+                    store.close()
+                self._json({"jobs": items}); return
+            if path == "/api/storage":
+                self._json(disk_usage(settings)); return
+            if path == "/api/storage/dry-run":
+                self._json(cleanup_dry_run(settings)); return
             if path == "/api/collection-status":
                 store = Storage(settings.db_path)
                 try:
                     collection = store.collection_status()
                     hot_tracking = store.hot_tracking_status()
+                    schedule = schedule_status()
+                    health = schedule_health(schedule, collection["last_attempt_at"])
+                    if health["missed_today"]:
+                        store.notify("schedule_missed", f"missed-{datetime.now(KST).date()}",
+                                     "오늘 예정된 자동 수집이 실행되지 않았습니다")
                 finally:
                     store.close()
-                self._json({"collection": collection, "schedule": schedule_status(),
+                self._json({"collection": collection, "schedule": {**schedule, **health},
                             "hot_tracking": hot_tracking,
                             "registered_accounts": len(accounts.usernames())}); return
             if path == "/api/platform-session":

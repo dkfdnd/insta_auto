@@ -18,6 +18,8 @@ import sys
 import time
 import webbrowser
 import fcntl
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from .config import load_settings, Settings
@@ -27,6 +29,18 @@ from .accounts import AccountRegistry
 
 def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
+
+
+def _operational_event(settings: Settings, message: str) -> None:
+    logger = logging.getLogger(f"hotpost.operational.{settings.data_dir.resolve()}")
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        handler = RotatingFileHandler(settings.data_dir / "operational.log",
+                                      maxBytes=max(1, settings.operational_log_max_mb) * 1024 * 1024,
+                                      backupCount=max(1, settings.operational_log_backups), encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        logger.addHandler(handler)
+    logger.info(message)
 
 
 # ------------------------------------------------------------------ commands
@@ -66,6 +80,7 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
     ok = failed = total = 0
     notes: list[str] = []
     started = int(time.time())
+    run_id = store.start_run(started, source)
     for i, name in enumerate(usernames, 1):
         _log(f"[{i}/{len(usernames)}] @{name} 수집 중...")
         try:
@@ -80,22 +95,42 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
                 _log(f"    터진 릴스 조회수 추적 {len(tracked_extra)}개")
         except CollectError as e:
             failed += 1
+            health = store.record_account_collection(name, False, "수집 오류")
+            if health["consecutive_failures"] >= 3:
+                store.notify("collection_failures", f"fail-{name}-{health['consecutive_failures']}",
+                             f"@{name} 연속 수집 실패 {health['consecutive_failures']}회")
+            if any(word in str(e).lower() for word in ("session", "세션", "login", "로그인")):
+                store.notify("instagram_session", f"session-{int(time.time()) // 86400}",
+                             "Instagram 세션을 확인해 주세요")
             notes.append(f"@{name}: {e}")
             _log(f"    실패: {e}")
             continue
         except Exception as e:  # noqa: BLE001
             failed += 1
+            store.record_account_collection(name, False, type(e).__name__)
             notes.append(f"@{name}: 예기치 못한 오류 {type(e).__name__}: {e}")
             _log(f"    실패(예외): {type(e).__name__}: {e}")
             continue
+        prior_missing = store.account_observation_health(name)["views_missing_rate"]
         store.upsert_profile(profile)
         store.upsert_posts(posts, observations=observations)
+        store.record_account_collection(name, True)
+        if any(o.http_status == 429 for o in observations):
+            store.notify("instagram_429", f"429-{name}-{int(time.time()) // 86400}",
+                         f"@{name} Instagram 조회 요청이 429 제한을 받았습니다")
+        current_missing = store.account_observation_health(name)["views_missing_rate"]
+        if current_missing >= .3 and current_missing - prior_missing >= .15:
+            store.notify("views_missing_spike", f"missing-{name}-{int(time.time()) // 86400}",
+                         f"@{name} 조회수 누락률이 {round(current_missing * 100)}%로 증가했습니다")
         ok += 1
         total += len(posts)
         _log(f"    {len(posts)}개 게시물 (팔로워 {profile.followers:,})")
         if source != "demo" and i < len(usernames):
             time.sleep(settings.sleep_between_accounts)
-    store.record_run(started, source, ok, failed, total, "\n".join(notes))
+    store.finish_run(run_id, ok, failed, total, "\n".join(notes))
+    if failed:
+        store.notify("collection_run", f"run-{started}",
+                     f"수집 {'전체 실패' if ok == 0 else '부분 실패'} · 성공 {ok}계정 / 실패 {failed}계정")
     store.finalize_hot_tracking()
     return ok, failed, total, notes
 
@@ -119,6 +154,7 @@ def cmd_run(settings: Settings, args) -> int:
 def _cmd_run_locked(settings: Settings, args) -> int:
     from .report import build_report, write_report
     usernames = AccountRegistry(settings).usernames()
+    _operational_event(settings, "수집 실행 시작")
     if not usernames:
         _log("관리 중인 계정이 없습니다. 웹의 계정 관리 페이지에서 먼저 등록하세요.")
         return 2
@@ -128,6 +164,7 @@ def _cmd_run_locked(settings: Settings, args) -> int:
     store = Storage(db)
     ok, failed, total, notes = collect(settings, store, args.source, usernames)
     _log(f"수집 완료: 성공 {ok} / 실패 {failed} / 게시물 {total}")
+    _operational_event(settings, f"수집 완료 성공={ok} 실패={failed} 게시물={total}")
     if ok == 0 and args.source != "demo":
         _log("수집된 계정이 없어 리포트를 만들지 않습니다. (세션 만료/차단 여부를 확인하세요)")
         return 1

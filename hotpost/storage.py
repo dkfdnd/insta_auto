@@ -89,17 +89,48 @@ CREATE INDEX IF NOT EXISTS idx_observations_request ON metric_observations(reque
 class Storage:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite3.connect(path, timeout=10)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA busy_timeout=10000")
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
-        tracking_columns = {row[1] for row in self.conn.execute("PRAGMA table_info(hot_view_tracking)")}
-        for column, definition in {
-            "finalized_at": "INTEGER", "final_views": "INTEGER",
-            "max_views_per_hour": "REAL", "max_acceleration": "REAL",
-        }.items():
-            if column not in tracking_columns:
-                self.conn.execute(f"ALTER TABLE hot_view_tracking ADD COLUMN {column} {definition}")
+        self._migrate()
+
+    def _migrate(self) -> None:
+        self.conn.execute("CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL)")
+        self.conn.execute("INSERT OR IGNORE INTO schema_version VALUES (1,0)")
         self.conn.commit()
+        for version in range(1, 4):
+            self.conn.execute("BEGIN IMMEDIATE")
+            current = self.conn.execute("SELECT version FROM schema_version WHERE id=1").fetchone()[0]
+            if current >= version:
+                self.conn.commit(); continue
+            if version == 1:
+                columns = {row[1] for row in self.conn.execute("PRAGMA table_info(hot_view_tracking)")}
+                for column, definition in {
+                    "finalized_at": "INTEGER", "final_views": "INTEGER",
+                    "max_views_per_hour": "REAL", "max_acceleration": "REAL",
+                }.items():
+                    if column not in columns:
+                        self.conn.execute(f"ALTER TABLE hot_view_tracking ADD COLUMN {column} {definition}")
+            elif version == 2:
+                self.conn.execute("""CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY, kind TEXT NOT NULL, shortcode TEXT NOT NULL,
+                    status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0,
+                    message TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
+                    result_json TEXT, result_path TEXT, archived INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER)""")
+                self.conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active_reel
+                    ON jobs(kind,shortcode) WHERE status IN ('queued','running')""")
+            elif version == 3:
+                self.conn.execute("""CREATE TABLE IF NOT EXISTS account_collection_health (
+                    username TEXT PRIMARY KEY, last_attempt INTEGER, last_success INTEGER,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '')""")
+                self.conn.execute("""CREATE TABLE IF NOT EXISTS notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT NOT NULL UNIQUE,
+                    message TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER)""")
+            self.conn.execute("UPDATE schema_version SET version=? WHERE id=1", (version,))
+            self.conn.commit()
 
     # ---- write ----
     def upsert_profile(self, p: Profile) -> None:
@@ -156,6 +187,118 @@ class Storage:
         )
         self.conn.commit()
 
+    def start_run(self, started: int, source: str) -> int:
+        cursor = self.conn.execute("INSERT INTO runs (started_at,source,accounts_ok,accounts_failed,posts) VALUES (?,?,0,0,0)",
+                                   (started, source))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def finish_run(self, run_id: int, ok: int, failed: int, posts: int, notes: str = "") -> None:
+        self.conn.execute(
+            "UPDATE runs SET finished_at=?,accounts_ok=?,accounts_failed=?,posts=?,notes=? WHERE id=?",
+            (int(time.time()), ok, failed, posts, notes, run_id),
+        )
+        self.conn.commit()
+
+    def record_account_collection(self, username: str, success: bool, error: str = "") -> dict:
+        now = int(time.time())
+        if success:
+            self.conn.execute("""INSERT INTO account_collection_health
+                (username,last_attempt,last_success,consecutive_failures,last_error) VALUES (?,?,?,?,?)
+                ON CONFLICT(username) DO UPDATE SET last_attempt=excluded.last_attempt,
+                last_success=excluded.last_success,consecutive_failures=0,last_error=''""",
+                (username, now, now, 0, ""))
+        else:
+            self.conn.execute("""INSERT INTO account_collection_health
+                (username,last_attempt,last_success,consecutive_failures,last_error) VALUES (?,?,?,?,?)
+                ON CONFLICT(username) DO UPDATE SET last_attempt=excluded.last_attempt,
+                consecutive_failures=account_collection_health.consecutive_failures+1,
+                last_error=excluded.last_error""",
+                (username, now, None, 1, error[:300]))
+        self.conn.commit()
+        return dict(self.conn.execute(
+            "SELECT * FROM account_collection_health WHERE username=?", (username,)).fetchone())
+
+    def notify(self, kind: str, key: str, message: str) -> bool:
+        cursor = self.conn.execute(
+            "INSERT OR IGNORE INTO notifications (kind,key,message,created_at) VALUES (?,?,?,?)",
+            (kind, key, message[:500], int(time.time())),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def notifications(self, limit: int = 50) -> list[dict]:
+        return [dict(row) for row in self.conn.execute(
+            "SELECT id,kind,message,created_at,seen_at FROM notifications ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()]
+
+    def mark_notification_seen(self, notification_id: int) -> bool:
+        cursor = self.conn.execute("UPDATE notifications SET seen_at=? WHERE id=?",
+                                   (int(time.time()), notification_id))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def create_job(self, job_id: str, kind: str, shortcode: str) -> tuple[dict, bool]:
+        self.conn.execute("BEGIN IMMEDIATE")
+        active = self.conn.execute(
+            "SELECT * FROM jobs WHERE kind=? AND shortcode=? AND status IN ('queued','running') LIMIT 1",
+            (kind, shortcode),
+        ).fetchone()
+        if active:
+            self.conn.commit()
+            return self._job_dict(active), False
+        now = int(time.time())
+        self.conn.execute("INSERT INTO jobs (id,kind,shortcode,status,message,created_at) VALUES (?,?,?,?,?,?)",
+                          (job_id, kind, shortcode, "queued", "대기 중", now))
+        self.conn.commit()
+        return self.job_for(job_id), True
+
+    @staticmethod
+    def _job_dict(row: sqlite3.Row) -> dict:
+        result = dict(row)
+        payload = result.pop("result_json")
+        result["result"] = json.loads(payload) if payload else None
+        return result
+
+    def job_for(self, job_id: str) -> dict | None:
+        row = self.conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        return self._job_dict(row) if row else None
+
+    def list_jobs(self, limit: int = 50) -> list[dict]:
+        return [dict(row) for row in self.conn.execute(
+            """SELECT id,kind,shortcode,status,progress,message,error,archived,
+                      created_at,started_at,finished_at FROM jobs ORDER BY created_at DESC,id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()]
+
+    def queued_jobs(self) -> list[dict]:
+        return [self._job_dict(row) for row in self.conn.execute(
+            "SELECT * FROM jobs WHERE status='queued' ORDER BY created_at,id").fetchall()]
+
+    def interrupt_running_jobs(self) -> int:
+        cursor = self.conn.execute(
+            "UPDATE jobs SET status='interrupted',message='서버 재시작으로 중단',finished_at=? WHERE status='running'",
+            (int(time.time()),),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def update_job(self, job_id: str, **values) -> None:
+        allowed = {"status", "progress", "message", "error", "result_json", "result_path",
+                   "started_at", "finished_at", "archived"}
+        if not values or set(values) - allowed:
+            raise ValueError("잘못된 작업 업데이트")
+        self.conn.execute("UPDATE jobs SET " + ",".join(f"{key}=?" for key in values) + " WHERE id=?",
+                          (*values.values(), job_id))
+        self.conn.commit()
+
+    def archive_job(self, job_id: str, archived: bool) -> bool:
+        cursor = self.conn.execute("UPDATE jobs SET archived=? WHERE id=? AND status='done'",
+                                   (int(archived), job_id))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
     def initialize_managed_accounts(self, accounts: list[tuple[str, str]]) -> bool:
         """최초 한 번만 레거시 텍스트 목록을 가져온다. 빈 목록도 초기화 상태로 기록한다."""
         done = self.conn.execute("SELECT 1 FROM app_meta WHERE key='managed_accounts_initialized'").fetchone()
@@ -182,7 +325,15 @@ class Storage:
                GROUP BY m.username
                ORDER BY m.created_at,m.username"""
         ).fetchall()
-        return [{**dict(row), **self.account_observation_health(row["username"])} for row in rows]
+        output = []
+        for row in rows:
+            health = self.conn.execute(
+                "SELECT * FROM account_collection_health WHERE username=?", (row["username"],)
+            ).fetchone()
+            output.append({**dict(row), **self.account_observation_health(row["username"]),
+                           "consecutive_failures": health["consecutive_failures"] if health else 0,
+                           "last_collection_success": health["last_success"] if health else None})
+        return output
 
     def upsert_managed_account(self, username: str, note: str = "") -> bool:
         exists = self.conn.execute("SELECT 1 FROM managed_accounts WHERE username=?", (username,)).fetchone()
@@ -285,21 +436,36 @@ class Storage:
 
     def collection_status(self) -> dict:
         last = self.last_run()
+        last_success = self.conn.execute(
+            "SELECT * FROM runs WHERE accounts_ok>0 ORDER BY id DESC LIMIT 1").fetchone()
         newest_update = self.conn.execute("SELECT MAX(updated_at) FROM posts").fetchone()[0]
         newest_post = self.conn.execute("SELECT MAX(taken_at) FROM posts").fetchone()[0]
-        return {"last_run": last, "newest_post_update": newest_update, "newest_published_post": newest_post}
+        state = ("none" if not last else "running" if last["finished_at"] is None else
+                 "success" if last["accounts_failed"] == 0 else
+                 "partial_failure" if last["accounts_ok"] else "failure")
+        return {"last_run": last, "last_attempt_at": (last["finished_at"] or last["started_at"]) if last else None,
+                "last_success_at": last_success["finished_at"] if last_success else None,
+                "state": state, "newest_post_update": newest_update,
+                "newest_published_post": newest_post}
 
     def register_hot_view_tracking(self, posts: list[Post], days: int, detected_at: int | None = None) -> int:
         """한 번 터진 릴스는 게시일부터 정해진 기간까지 추적 대상으로 고정한다."""
         now = detected_at or int(time.time())
         rows = [(p.shortcode, p.username, p.taken_at, p.taken_at + days * 86400, now)
                 for p in posts if p.is_video and p.media_id and p.taken_at + days * 86400 >= now]
-        before = self.conn.total_changes
-        self.conn.executemany(
-            """INSERT OR IGNORE INTO hot_view_tracking
-               (shortcode,username,posted_at,track_until,detected_at) VALUES (?,?,?,?,?)""", rows)
+        inserted = 0
+        for row in rows:
+            cursor = self.conn.execute(
+                """INSERT OR IGNORE INTO hot_view_tracking
+                   (shortcode,username,posted_at,track_until,detected_at) VALUES (?,?,?,?,?)""", row)
+            if cursor.rowcount:
+                inserted += 1
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO notifications (kind,key,message,created_at) VALUES (?,?,?,?)",
+                    ("new_hot_reel", f"new-hot-{row[0]}", f"@{row[1]} 신규 터진 릴스 {row[0]} 최초 감지", now),
+                )
         self.conn.commit()
-        return self.conn.total_changes - before
+        return inserted
 
     def tracked_hot_posts(self, username: str, now: int | None = None, limit: int = 50) -> list[Post]:
         now = now or int(time.time())

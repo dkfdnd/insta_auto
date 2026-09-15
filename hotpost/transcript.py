@@ -239,34 +239,14 @@ def extract_transcript(settings: Settings, shortcode: str,
 
 
 class TranscriptJobManager:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, job_queue=None):
+        from .job_queue import JobQueue
         self.settings = settings
-        self.jobs: dict[str, dict] = {}
-        self.lock = threading.Lock()
+        self.queue = job_queue or JobQueue(settings)
+        self.queue.register("transcript", lambda shortcode, progress: extract_transcript(settings, shortcode, progress))
 
     def start(self, shortcode: str) -> dict:
-        with self.lock:
-            active = next((job for job in self.jobs.values() if job["shortcode"] == shortcode
-                           and job["status"] in ("queued", "running")), None)
-            if active:
-                return dict(active)
-            job_id = hashlib.sha1(f"{shortcode}-{time.time_ns()}".encode()).hexdigest()[:12]
-            self.jobs[job_id] = {"id": job_id, "shortcode": shortcode, "status": "queued",
-                                 "progress": 0, "message": "대기 중"}
-        threading.Thread(target=self._work, args=(job_id,), daemon=True).start()
-        return dict(self.jobs[job_id])
-
-    def _work(self, job_id: str) -> None:
-        job = self.jobs[job_id]
-        job["status"] = "running"
-        def update(message: str, percent: int) -> None:
-            job.update(message=message, progress=percent)
-        try:
-            result = extract_transcript(self.settings, job["shortcode"], update)
-            job.update(status="done", result=result, progress=100, message="대본 추출 완료")
-        except Exception as exc:
-            job.update(status="error", error=str(exc), message="대본 추출 실패")
+        return self.queue.start("transcript", shortcode)
 
     def get(self, job_id: str) -> dict | None:
-        job = self.jobs.get(job_id)
-        return dict(job) if job else None
+        return self.queue.get(job_id)

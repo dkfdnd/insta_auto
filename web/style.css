@@ -209,7 +209,7 @@ tr.acc.on td { background: var(--accent-soft); }
 
 /* ---- 모니터링 계정 관리 ---- */
 .accounts-page { padding-bottom: 40px; }
-.collection-health { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 20px; }
+.collection-health { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 20px; }
 .collection-health > div { display: flex; flex-direction: column; gap: 3px; padding: 13px 15px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
 .collection-health span { color: var(--muted); font-size: 12px; font-weight: 600; }
 .collection-health b { font-size: 14px; }
@@ -230,11 +230,15 @@ tr.acc.on td { background: var(--accent-soft); }
 .account-main a { font-weight: 800; text-decoration: none; }
 .account-main > div span { color: var(--muted); margin-left: 8px; font-size: 13px; }
 .account-main p { margin: 3px 0 0; font-size: 13px; }
-.account-stats { display: flex; gap: 18px; color: var(--muted); font-size: 12px; }
+.account-stats { display: flex; flex-wrap: wrap; gap: 12px 18px; color: var(--muted); font-size: 12px; }
 .account-stats span { display: flex; flex-direction: column; }
 .account-stats b { color: var(--text); font-size: 13px; }
 .account-delete { color: #c33; }
 .account-delete:hover { border-color: #c33; }
+.operational-panel { padding: 18px 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin-top: 18px; }
+.operational-list { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.operational-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.operational-item small { color: var(--muted); }
 @media (max-width: 800px) {
   .top-right { flex-wrap: wrap; justify-content: flex-end; }
   .account-form { grid-template-columns: 1fr; }

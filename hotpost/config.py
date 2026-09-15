@@ -31,6 +31,11 @@ class Settings:
     views_refresh_days: int = 14      # 이 일수보다 오래된 릴스는 이전 조회수 재사용
     hot_view_tracking_days: int = 14  # 터진 릴스는 게시일부터 이 기간까지 매일 조회수 추적
     hot_view_tracking_limit: int = 50 # 계정당 하루 최대 추적 릴스 수
+    job_concurrency: int = 1         # 브라우저/OpenCLIP/Whisper 작업 기본 동시 실행 수
+    cleanup_retention_days: int = 30 # 미보관 임시 파일 보관 기간
+    cleanup_max_gb: float = 10.0     # 정리 판단용 최대 데이터 용량
+    operational_log_max_mb: int = 10
+    operational_log_backups: int = 3
     download_thumbs: bool = True
     thumb_width: int = 640
 

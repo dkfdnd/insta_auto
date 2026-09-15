@@ -100,6 +100,18 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
     store.register_hot_view_tracking(
         [scored.post for scored in all_scored if scored.tier >= 1], settings.hot_view_tracking_days, now
     )
+    if source != "demo":
+        last_run = store.last_run()
+        if last_run:
+            for scored in all_scored:
+                if scored.tier < 1 or scored.post.is_video:
+                    continue
+                first_seen = store.conn.execute(
+                    "SELECT first_seen FROM posts WHERE shortcode=?", (scored.post.shortcode,)
+                ).fetchone()
+                if first_seen and first_seen[0] >= last_run["started_at"]:
+                    store.notify("new_hot_post", f"new-hot-{scored.post.shortcode}",
+                                 f"@{scored.post.username} 신규 터진 게시물 {scored.post.shortcode} 최초 감지")
     report = {
         "version": __version__,
         "generated_at": now,
