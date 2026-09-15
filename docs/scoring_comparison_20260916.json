@@ -1,0 +1,154 @@
+{
+  "generated_at": 1789493837,
+  "criteria_version": 1,
+  "compared_posts": 292,
+  "old_hot": 65,
+  "new_hot": 50,
+  "old_only_hot": 20,
+  "new_only_hot": 5,
+  "changed_tier": 38,
+  "median_absolute_multiplier_change": 0.145,
+  "largest_tier_changes": [
+    {
+      "shortcode": "DcdMiqtqH-7",
+      "old_tier": 3,
+      "new_tier": 2,
+      "old_multiplier": 12.73,
+      "new_multiplier": 4.43
+    },
+    {
+      "shortcode": "DcRzUkbTl7U",
+      "old_tier": 3,
+      "new_tier": 0,
+      "old_multiplier": 8.4,
+      "new_multiplier": 1.0
+    },
+    {
+      "shortcode": "DcanDO8KPtZ",
+      "old_tier": 3,
+      "new_tier": 1,
+      "old_multiplier": 9.71,
+      "new_multiplier": 2.46
+    },
+    {
+      "shortcode": "DcLKRVmzyeE",
+      "old_tier": 3,
+      "new_tier": 0,
+      "old_multiplier": 6.11,
+      "new_multiplier": 0.3
+    },
+    {
+      "shortcode": "Db-WCI4TQuR",
+      "old_tier": 3,
+      "new_tier": 0,
+      "old_multiplier": 5.34,
+      "new_multiplier": 0.18
+    },
+    {
+      "shortcode": "DcIqDV5p4jy",
+      "old_tier": 2,
+      "new_tier": 0,
+      "old_multiplier": 4.62,
+      "new_multiplier": 0.31
+    },
+    {
+      "shortcode": "DcTK09RzT0Z",
+      "old_tier": 2,
+      "new_tier": 0,
+      "old_multiplier": 4.53,
+      "new_multiplier": 0.66
+    },
+    {
+      "shortcode": "DciV00eqSv4",
+      "old_tier": 3,
+      "new_tier": 2,
+      "old_multiplier": 5.89,
+      "new_multiplier": 3.29
+    },
+    {
+      "shortcode": "DcdgfxUKBUG",
+      "old_tier": 1,
+      "new_tier": 0,
+      "old_multiplier": 2.79,
+      "new_multiplier": 0.43
+    },
+    {
+      "shortcode": "DcVoJ_TGI5o",
+      "old_tier": 1,
+      "new_tier": 2,
+      "old_multiplier": 2.35,
+      "new_multiplier": 4.29
+    },
+    {
+      "shortcode": "DcyBQ1LzQ8j",
+      "old_tier": 1,
+      "new_tier": 2,
+      "old_multiplier": 2.84,
+      "new_multiplier": 4.69
+    },
+    {
+      "shortcode": "Dczbqc-pcps",
+      "old_tier": 2,
+      "new_tier": 1,
+      "old_multiplier": 3.57,
+      "new_multiplier": 1.81
+    },
+    {
+      "shortcode": "DccCcGlzJz3",
+      "old_tier": 2,
+      "new_tier": 1,
+      "old_multiplier": 4.06,
+      "new_multiplier": 2.49
+    },
+    {
+      "shortcode": "Dc-wPQzqGBw",
+      "old_tier": 2,
+      "new_tier": 1,
+      "old_multiplier": 3.52,
+      "new_multiplier": 2.09
+    },
+    {
+      "shortcode": "Dcfi31iR5jm",
+      "old_tier": 1,
+      "new_tier": 0,
+      "old_multiplier": 2.89,
+      "new_multiplier": 1.51
+    },
+    {
+      "shortcode": "DcxwniyzsIG",
+      "old_tier": 1,
+      "new_tier": 2,
+      "old_multiplier": 2.05,
+      "new_multiplier": 3.4
+    },
+    {
+      "shortcode": "DcOE0G3q0wj",
+      "old_tier": 1,
+      "new_tier": 0,
+      "old_multiplier": 1.87,
+      "new_multiplier": 0.53
+    },
+    {
+      "shortcode": "DcLEamlJDFh",
+      "old_tier": 1,
+      "new_tier": 0,
+      "old_multiplier": 2.17,
+      "new_multiplier": 0.88
+    },
+    {
+      "shortcode": "Dcm8AoNynOr",
+      "old_tier": 1,
+      "new_tier": 2,
+      "old_multiplier": 1.9,
+      "new_multiplier": 3.18
+    },
+    {
+      "shortcode": "Dcnjbukqr1n",
+      "old_tier": 1,
+      "new_tier": 0,
+      "old_multiplier": 2.26,
+      "new_multiplier": 1.05
+    }
+  ],
+  "method": "Same post metrics and generated_at; legacy 60-post mixed-time baseline versus server historical 30-post baseline."
+}
