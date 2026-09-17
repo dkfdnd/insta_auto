@@ -26,7 +26,12 @@ class Settings:
     collect_posts_per_account: int = 5  # 매 수집 때 Instagram에서 새로 확인할 최신 게시물 수
     posts_per_account: int = 30       # DB에서 평소 성과 기준선 계산에 사용할 과거 게시물 수
     recent_days: int = 30             # 이 기간 밖의 게시물은 리포트에서 제외
-    sleep_between_accounts: float = 3.0
+    # 계정 사이에 일정하지 않은 간격을 두어 연속 요청과 오류 전파를 줄인다.
+    # 기존 sleep_between_accounts는 하한으로 유지해 config.json/HOTPOST_* 호환성을 보존한다.
+    sleep_between_accounts: float = 4.0
+    sleep_between_accounts_max: float = 9.0
+    sleep_after_error_min: float = 20.0
+    sleep_after_error_max: float = 45.0
     views_lookup_limit: int = 5       # 계정당 조회수(media info)를 새로 조회할 릴스 수
     views_refresh_days: int = 14      # 이 일수보다 오래된 릴스는 이전 조회수 재사용
     hot_view_tracking_days: int = 14  # 터진 릴스는 게시일부터 이 기간까지 매일 조회수 추적
@@ -36,6 +41,7 @@ class Settings:
     cleanup_max_gb: float = 10.0     # 정리 판단용 최대 데이터 용량
     operational_log_max_mb: int = 10
     operational_log_backups: int = 3
+    instagram_diagnostic_log_max_mb: int = 10
     download_thumbs: bool = True
     thumb_width: int = 640
 

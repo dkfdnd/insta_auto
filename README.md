@@ -186,5 +186,11 @@ CAPTCHA를 요구할 수 있다. Yandex와 플랫폼 직접 검색은 독립적�
 ## 문제 해결
 
 - `로그인이 필요합니다` / `세션 만료` → `python -m hotpost login --user 아이디 --browser chrome`
-- `429` / `feedback_required` → 몇 시간 뒤 재시도. `config.json` 의 `sleep_between_accounts` 를 늘린다.
+- 계정 사이에는 기본 4~9초의 무작위 간격을 두며 오류 뒤에는 20~45초 기다린다. `config.json`의
+  `sleep_between_accounts`, `sleep_between_accounts_max`, `sleep_after_error_min`,
+  `sleep_after_error_max`로 범위를 조절한다. 성공과 실패 모두 다음 계정 전에 대기한다.
+- `429` / `feedback_required` → 몇 시간 뒤 재시도하고 위 간격을 늘린다.
 - `doc_id 를 찾지 못했습니다` → 인스타 웹 구조 변경. `data/graphql_docs.json` 삭제 후 재실행. 계속 실패하면 `tools/browser_dump.js` 로 우회.
+- `data/operational.log`에는 계정별 성공·실패, 처리 시간과 다음 계정 전 대기 시간이 기록된다.
+  `data/instagram_diagnostics.log`에는 GraphQL 쿼리명, 문서 ID, HTTP 상태, 오류 코드, 응답 시간과
+  요청 ID가 JSON 한 줄 형식으로 기록된다. 쿠키·CSRF/LSD 토큰·전체 요청 변수는 기록하지 않는다.

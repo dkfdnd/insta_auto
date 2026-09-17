@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import html as htmllib
 import json
+import logging
 import random
 import re
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import requests
@@ -53,6 +55,23 @@ QUERIES = {
 }
 
 
+def _diagnostic_logger(settings: Settings) -> logging.Logger:
+    """Instagram 요청 진단만 별도 순환 로그에 남긴다."""
+    logger = logging.getLogger(f"hotpost.instagram.{settings.data_dir.resolve()}")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    if not logger.handlers:
+        handler = RotatingFileHandler(
+            settings.data_dir / "instagram_diagnostics.log",
+            maxBytes=max(1, settings.instagram_diagnostic_log_max_mb) * 1024 * 1024,
+            backupCount=max(1, settings.operational_log_backups),
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        logger.addHandler(handler)
+    return logger
+
+
 class _DocCache:
     def __init__(self, path: Path):
         self.path = path
@@ -80,6 +99,7 @@ class WebGraphQLCollector:
         self.s.headers.update({"User-Agent": UA, "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8", **CLIENT_HINTS})
         self._load_cookies()
         self.docs = _DocCache(settings.data_dir / "graphql_docs.json")
+        self._diagnostics = _diagnostic_logger(settings)
         self.lsd = self.dtsg = ""
         self._bundle_urls: list[str] = []
         self._current_user = ""
@@ -107,6 +127,17 @@ class WebGraphQLCollector:
 
     def _sleep(self, lo=1.2, hi=2.6) -> None:
         time.sleep(random.uniform(lo, hi))
+
+    def _diagnostic(self, event: str, **fields) -> None:
+        logger = getattr(self, "_diagnostics", None)
+        if logger is None:
+            logger = self._diagnostics = _diagnostic_logger(self.settings)
+        safe = {"event": event}
+        for key, value in fields.items():
+            if value is None:
+                continue
+            safe[key] = " ".join(str(value).split())[:500] if isinstance(value, str) else value
+        logger.info(json.dumps(safe, ensure_ascii=False, separators=(",", ":")))
 
     # ------------------------------------------------------------ html / tokens
     def _profile_html(self, username: str) -> str:
@@ -219,9 +250,29 @@ class WebGraphQLCollector:
             "accept": "*/*", "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty",
         }
         for attempt in range(3):
-            r = self.s.post("https://www.instagram.com/api/graphql", data=params, headers=headers, timeout=40)
+            request_started = time.monotonic()
+            try:
+                r = self.s.post("https://www.instagram.com/api/graphql", data=params, headers=headers, timeout=40)
+            except requests.RequestException as exc:
+                self._diagnostic(
+                    "graphql_response", query=qname, doc_id=doc_id, attempt=attempt + 1,
+                    outcome="network_error", elapsed_ms=int((time.monotonic() - request_started) * 1000),
+                    error_type=type(exc).__name__,
+                )
+                raise CollectError(f"{qname}: 네트워크 오류 {type(exc).__name__}") from exc
+            common = {
+                "query": qname,
+                "doc_id": doc_id,
+                "attempt": attempt + 1,
+                "http_status": r.status_code,
+                "elapsed_ms": int((time.monotonic() - request_started) * 1000),
+                "request_id": r.headers.get("x-fb-request-id") or r.headers.get("x-request-id"),
+                "retry_after": r.headers.get("retry-after"),
+                "response_bytes": len(r.content),
+            }
             if r.status_code == 429:
                 wait = 45 * (attempt + 1)
+                self._diagnostic("graphql_response", **common, outcome="rate_limited", wait_seconds=wait)
                 print(f"    429 제한 → {wait}s 대기", flush=True)
                 time.sleep(wait)
                 continue
@@ -232,18 +283,25 @@ class WebGraphQLCollector:
                 except ValueError:
                     err = {}
                 code = err.get("error")
+                self._diagnostic(
+                    "graphql_response", **common, outcome="instagram_error",
+                    error_code=code, error_summary=err.get("errorSummary", ""),
+                )
                 if code == 1357001:
                     raise CollectError("로그인이 필요합니다 (세션 만료). `python -m hotpost login ...` 을 다시 실행하세요.")
                 raise CollectError(f"{qname}: 인스타 오류 {code} {err.get('errorSummary', '')}")
             try:
                 j = r.json()
             except ValueError as e:
+                self._diagnostic("graphql_response", **common, outcome="non_json")
                 raise CollectError(f"{qname}: JSON 아님 (HTTP {r.status_code})") from e
             if j.get("errors") and not j.get("data"):
                 msg = j["errors"][0].get("message", "")
+                self._diagnostic("graphql_response", **common, outcome="graphql_error", error_message=msg)
                 if "missing_required_variable" in msg or "field_exception" in msg:
                     self._forget(qname)
                 raise CollectError(f"{qname}: {msg[:120]}")
+            self._diagnostic("graphql_response", **common, outcome="ok", has_data=bool(j.get("data")))
             return j
         raise CollectError(f"{qname}: 반복된 429 제한")
 

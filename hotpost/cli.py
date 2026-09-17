@@ -19,6 +19,7 @@ import time
 import webbrowser
 import fcntl
 import logging
+import random
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -41,6 +42,29 @@ def _operational_event(settings: Settings, message: str) -> None:
         handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
         logger.addHandler(handler)
     logger.info(message)
+
+
+def _safe_log_text(value: object, limit: int = 500) -> str:
+    """운영 로그 한 줄을 유지하고 과도한 예외 본문은 잘라낸다."""
+    return " ".join(str(value).split())[:limit]
+
+
+def _sleep_after_account(settings: Settings, source: str, username: str,
+                         outcome: str, has_next: bool) -> float:
+    """성공·실패와 무관하게 다음 계정 전에 무작위 간격을 둔다."""
+    if source == "demo" or not has_next:
+        return 0.0
+    if outcome == "failure":
+        low = max(0.0, settings.sleep_after_error_min)
+        high = max(low, settings.sleep_after_error_max)
+    else:
+        low = max(0.0, settings.sleep_between_accounts)
+        high = max(low, settings.sleep_between_accounts_max)
+    delay = random.uniform(low, high)
+    _log(f"    다음 계정 전 {delay:.1f}초 대기 ({outcome})")
+    _operational_event(settings, f"계정 간 대기 username=@{username} outcome={outcome} seconds={delay:.2f}")
+    time.sleep(delay)
+    return delay
 
 
 # ------------------------------------------------------------------ commands
@@ -82,6 +106,7 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
     started = int(time.time())
     run_id = store.start_run(started, source)
     for i, name in enumerate(usernames, 1):
+        account_started = time.monotonic()
         _log(f"[{i}/{len(usernames)}] @{name} 수집 중...")
         try:
             existing = {p.shortcode: p for p in store.posts_for(name, limit=settings.posts_per_account * 2)}
@@ -104,12 +129,24 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
                              "Instagram 세션을 확인해 주세요")
             notes.append(f"@{name}: {e}")
             _log(f"    실패: {e}")
+            _operational_event(
+                settings,
+                f"계정 수집 실패 username=@{name} elapsed_ms={int((time.monotonic() - account_started) * 1000)} "
+                f"error_type={type(e).__name__} error={_safe_log_text(e)}",
+            )
+            _sleep_after_account(settings, source, name, "failure", i < len(usernames))
             continue
         except Exception as e:  # noqa: BLE001
             failed += 1
             store.record_account_collection(name, False, type(e).__name__)
             notes.append(f"@{name}: 예기치 못한 오류 {type(e).__name__}: {e}")
             _log(f"    실패(예외): {type(e).__name__}: {e}")
+            _operational_event(
+                settings,
+                f"계정 수집 실패 username=@{name} elapsed_ms={int((time.monotonic() - account_started) * 1000)} "
+                f"error_type={type(e).__name__} error={_safe_log_text(e)}",
+            )
+            _sleep_after_account(settings, source, name, "failure", i < len(usernames))
             continue
         prior_missing = store.account_observation_health(name)["views_missing_rate"]
         store.upsert_profile(profile)
@@ -125,8 +162,12 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
         ok += 1
         total += len(posts)
         _log(f"    {len(posts)}개 게시물 (팔로워 {profile.followers:,})")
-        if source != "demo" and i < len(usernames):
-            time.sleep(settings.sleep_between_accounts)
+        _operational_event(
+            settings,
+            f"계정 수집 성공 username=@{name} elapsed_ms={int((time.monotonic() - account_started) * 1000)} "
+            f"posts={len(posts)} observations={len(observations)}",
+        )
+        _sleep_after_account(settings, source, name, "success", i < len(usernames))
     store.finish_run(run_id, ok, failed, total, "\n".join(notes))
     if failed:
         store.notify("collection_run", f"run-{started}",
