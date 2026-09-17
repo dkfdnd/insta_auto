@@ -5,3 +5,4 @@ data/*
 !data/.gitkeep
 web/data.js
 web/thumbs/
+docs/HANDOFF.md

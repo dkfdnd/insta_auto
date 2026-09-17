@@ -10,6 +10,7 @@
 - `git status --short`로 기존 변경사항을 확인하고 다른 작업을 덮어쓰지 않는다.
 - `hotpost/config.py`의 `Settings`와 `config.json`/`HOTPOST_*` 환경변수 우선순위를 확인한다.
 - `data/`는 DB, Instagram 세션, 플랫폼 쿠키, 다운로드 영상, ML 모델, 대본이 있는 로컬 상태이며 Git에서 제외된다. 커밋하거나 로그에 비밀값을 출력하지 않는다.
+- `docs/HANDOFF.md`는 세션 전환을 위한 로컬 전용 문서다. 계정명과 운영 상태가 포함될 수 있으므로 Git에 추가·커밋·푸시하지 않는다.
 - `web/data.js`는 `hotpost/report.py`가 만드는 파일이다. 프런트엔드 데이터 모델을 바꾸면 리포트 생성 코드와 화면 코드를 같이 검토한다.
 
 ## 주요 경로와 계약
