@@ -50,6 +50,7 @@
 
   // ---------- 판정 기준 ----------
   const S = R.settings;
+  const acctMap = Object.fromEntries((R.accounts || []).map((account) => [account.username, account]));
   const W = R.weights || { video: { views: .5, comments: .3, likes: .2 }, image: { likes: .6, comments: .4 } };
   const DEFAULT = R.criteria_defaults || {
     t1: S.hot_multiplier, t2: S.tier2_multiplier, t3: S.tier3_multiplier,
