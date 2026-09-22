@@ -118,3 +118,40 @@ def test_workflow_synthesizes_spoken_script_before_capcut(tmp_path):
     )
     assert result["status"] == "completed"
     assert result["voicebench"]["voicebench_request_id"] == 9
+
+
+def test_workflow_preserves_approved_script(tmp_path):
+    settings = _settings(tmp_path)
+    source_dir = settings.data_dir / "source_jobs" / "source-1"
+    source_dir.mkdir(parents=True)
+    video = source_dir / "clip.mp4"
+    video.touch()
+    manifest = source_dir / "manifest.json"
+    manifest.write_text(json.dumps({"candidates": [{
+        "selected_for_zip": True, "downloaded_file": "clip.mp4",
+    }]}), encoding="utf-8")
+    transcript = settings.data_dir / "transcript.json"
+    transcript.write_text(json.dumps({"speech": [{"text": "오인식 문장"}]},
+                                     ensure_ascii=False), encoding="utf-8")
+    approved = settings.data_dir / "approved.txt"
+    approved.write_text("검수한 문장\n", encoding="utf-8")
+
+    class Voice:
+        def synthesize(self, text, output_path, progress=None):
+            assert text == "검수한 문장\n"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"RIFF" + b"\0" * 4 + b"WAVE" + b"\0" * 32)
+            return {"status": "succeeded"}
+
+    class CapCut:
+        def build(self, **kwargs):
+            assert kwargs["script_path"].read_text(encoding="utf-8") == "검수한 문장\n"
+            return {"contract_version": "1.0", "job_id": kwargs["job_id"],
+                    "status": "completed", "draft_path": "draft"}
+
+    result = build_with_voicebench(
+        settings, job_id="edit-approved", manifest_path=manifest,
+        transcript_path=transcript, approved_script_path=approved,
+        draft_name="edit-approved-v1", voicebench=Voice(), auto_capcut=CapCut(),
+    )
+    assert result["status"] == "completed"

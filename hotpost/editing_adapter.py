@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -143,6 +144,7 @@ class AutoCapcutAdapter:
 def build_with_voicebench(
     settings: Settings, *, job_id: str, manifest_path: Path,
     transcript_path: Path, draft_name: str,
+    approved_script_path: Path | None = None,
     voicebench=None, auto_capcut: AutoCapcutAdapter | None = None,
     progress: Callable[[str, int], None] | None = None,
 ) -> dict:
@@ -151,7 +153,19 @@ def build_with_voicebench(
 
     progress = progress or (lambda _message, _percent: None)
     job_dir = settings.editing_dir / job_id
-    script_path = script_from_transcript(transcript_path, job_dir / "words.txt")
+    script_path = job_dir / "words.txt"
+    if approved_script_path is None:
+        script_from_transcript(transcript_path, script_path)
+    else:
+        approved = approved_script_path.expanduser().resolve(strict=True)
+        data_root = settings.data_dir.resolve()
+        if not approved.is_file() or not approved.is_relative_to(data_root):
+            raise ValueError(f"approved script must be a file under {data_root}.")
+        if not approved.read_text(encoding="utf-8").strip():
+            raise ValueError("approved script is empty.")
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        if approved != script_path.resolve():
+            shutil.copy2(approved, script_path)
     videos = selected_source_videos(manifest_path)
     voice_path = job_dir / "voice.wav"
     tts = (voicebench or VoiceBenchAdapter(settings)).synthesize(
