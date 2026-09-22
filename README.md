@@ -173,13 +173,14 @@ CAPTCHA를 요구할 수 있다. Yandex와 플랫폼 직접 검색은 독립적�
 
 웹 서버에서 릴스 카드를 열고 **대본 추출**을 누른다. 저장된 Instagram 게시물의 기준 영상과
 로그인 세션을 사용하므로, DB에 없는 shortcode나 접근할 수 없는 영상은 실패한다. ffmpeg로 16kHz
-음성을 분리하고 Apple Silicon의 `mlx-whisper`로 시간별 대사를 전사한다. 화면 글자는 1초 간격으로
+음성을 분리하고 Apple Silicon의 `mlx-whisper` 또는 Windows의 `faster-whisper`로
+시간별 대사를 전사한다. 화면 글자는 1초 간격으로
 프레임을 뽑아 EasyOCR(`ko+en`)로 읽고, 실패 시 Tesseract로 대체한다. **음성**과 **화면 글자**는
 서로 다른 출처로 보존하며, 보이지 않거나 들리지 않는 문구를 추정해서 만들지 않는다.
 
 - 필수: `ffmpeg`, `ffprobe`; Python 의존성은 `requirements.txt`에 있다.
-- Apple Silicon에서는 첫 실행 시 공개 Whisper 모델을 `data/models/`에 받는다. EasyOCR 모델도 첫 실행 시 받는다.
-- 현재 음성 전사 구현은 `mlx-whisper` 기반이므로 다른 OS에서는 설치 가능한 전사 백엔드를 추가해야 한다. 음성 모델이 없으면 화면 글자만 반환한다.
+- 첫 실행 시 공개 Whisper 모델을 `data/models/`에 받는다. Windows는 CUDA FP16을
+  우선 사용하고 불가하면 CPU INT8로 자동 전환한다. EasyOCR 모델도 첫 실행 시 받는다.
 - 결과: `data/transcripts/<shortcode>-<작업시각>/transcript.txt`, `transcript.json`과 기준 영상. 대시보드에서도 TXT/JSON을 다운로드할 수 있다.
 - 자동 전사와 OCR에는 오타가 남는다. 특히 화면 자막과 음성 대사를 합치거나 OCR을 실제 발화로 간주하지 말고 원본과 대조한다.
 

@@ -9,6 +9,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -42,13 +43,59 @@ def _audio(video: Path, target: Path) -> bool:
     return result.returncode == 0 and target.is_file() and target.stat().st_size > 32000
 
 
-def _speech(settings: Settings, audio: Path, notes: list[str]) -> tuple[list[dict], str]:
+def _speech(settings: Settings, audio: Path,
+            notes: list[str]) -> tuple[list[dict], str, str]:
+    if sys.platform == "win32":
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            notes.append("faster-whisper가 설치되지 않아 음성 전사를 건너뛰었습니다.")
+            return [], "", "unavailable"
+        model_root = settings.source_model_dir / "faster-whisper"
+        model_root.mkdir(parents=True, exist_ok=True)
+
+        def transcribe(device: str, compute_type: str):
+            model = WhisperModel(
+                settings.transcript_faster_whisper_model,
+                device=device,
+                compute_type=compute_type,
+                download_root=str(model_root),
+            )
+            return model.transcribe(
+                str(audio), language=None, beam_size=5, vad_filter=True,
+                condition_on_previous_text=False,
+            )
+
+        try:
+            raw_segments, info = transcribe("cuda", "float16")
+            engine = "faster-whisper-cuda"
+            raw_segments = list(raw_segments)
+        except Exception as exc:
+            notes.append(
+                f"faster-whisper GPU 전사를 사용할 수 없어 CPU로 전환했습니다: "
+                f"{type(exc).__name__}"
+            )
+            raw_segments, info = transcribe("cpu", "int8")
+            engine = "faster-whisper-cpu"
+            raw_segments = list(raw_segments)
+        segments = []
+        for item in raw_segments:
+            text = re.sub(r"\s+", " ", str(getattr(item, "text", "") or "")).strip()
+            if text:
+                segments.append({
+                    "source": "speech",
+                    "start": round(float(getattr(item, "start", 0) or 0), 2),
+                    "end": round(float(getattr(item, "end", 0) or 0), 2),
+                    "text": text,
+                })
+        return segments, str(getattr(info, "language", "") or ""), engine
+
     try:
         import mlx_whisper
         from huggingface_hub import snapshot_download
     except ImportError:
         notes.append("mlx-whisper가 설치되지 않아 음성 전사를 건너뛰었습니다.")
-        return [], ""
+        return [], "", "unavailable"
     model_dir = settings.source_model_dir / "whisper-small-mlx-8bit"
     if not (model_dir / "weights.npz").is_file():
         snapshot_download(repo_id=settings.transcript_model, local_dir=str(model_dir),
@@ -67,7 +114,7 @@ def _speech(settings: Settings, audio: Path, notes: list[str]) -> tuple[list[dic
             continue
         segments.append({"source": "speech", "start": round(float(item.get("start") or 0), 2),
                          "end": round(float(item.get("end") or 0), 2), "text": text})
-    return segments, str(result.get("language") or "")
+    return segments, str(result.get("language") or ""), "mlx-whisper"
 
 
 def _ocr_text(frame: Path, tessdata: Path) -> str:
@@ -206,11 +253,11 @@ def extract_transcript(settings: Settings, shortcode: str,
     video = _download_reference(settings, post, root / "reference.mp4")
     duration = _duration(video)
     progress("실제 음성을 전사하는 중", 35)
-    speech: list[dict] = []; language = ""
+    speech: list[dict] = []; language = ""; speech_method = "unavailable"
     audio = root / "audio.wav"
     if _audio(video, audio):
         try:
-            speech, language = _speech(settings, audio, notes)
+            speech, language, speech_method = _speech(settings, audio, notes)
         except Exception as exc:  # OCR은 음성 모델 실패와 독립적으로 실행한다.
             notes.append(f"음성 전사 실패: {type(exc).__name__}: {str(exc)[:180]}")
     else:
@@ -225,7 +272,7 @@ def extract_transcript(settings: Settings, shortcode: str,
     result = {"shortcode": shortcode, "reference_url": post.url, "duration": round(duration, 2),
               "language": language, "speech": speech, "screen_text": screen, "lines": lines,
               "notes": notes, "created_at": int(time.time()),
-              "methods": {"speech": "mlx-whisper", "screen_text": "easyocr-or-tesseract"}}
+              "methods": {"speech": speech_method, "screen_text": "easyocr-or-tesseract"}}
     json_path = root / "transcript.json"; text_path = root / "transcript.txt"
     json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     text_lines = [f"Instagram 릴스 {shortcode} · {_clock(duration)}", f"원본: {post.url}",

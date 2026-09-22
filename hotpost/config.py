@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -20,6 +21,15 @@ class Settings:
     # 저장 위치
     data_dir: Path = ROOT / "data"
     web_dir: Path = ROOT / "web"
+    auto_capcut_root: Path = ROOT.parent / "auto_capcut"
+    auto_capcut_python: Path = ROOT.parent / "auto_capcut" / ".venv" / (
+        "Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    auto_capcut_timeout: int = 7200
+    voicebench_root: Path = ROOT.parent / "VoiceBench"
+    voicebench_url: str = "http://127.0.0.1:8877"
+    voicebench_api_key_file: Path = ROOT.parent / "VoiceBench" / ".runtime" / "external-api-key.txt"
+    voicebench_timeout: int = 14400
+    voicebench_poll_interval: float = 5.0
 
     # 수집
     ig_user: str = ""                 # 로그인에 사용할 인스타 아이디 (세션 파일 이름)
@@ -61,6 +71,7 @@ class Settings:
     source_openclip_pretrained: str = "openai"
     source_detect_text_overlays: bool = True
     transcript_model: str = "mlx-community/whisper-small-mlx-8bit"
+    transcript_faster_whisper_model: str = "small"
     transcript_ocr_fps: float = 1.0
 
     # 분석
@@ -97,6 +108,10 @@ class Settings:
     @property
     def transcript_dir(self) -> Path:
         return self.data_dir / "transcripts"
+
+    @property
+    def editing_dir(self) -> Path:
+        return self.data_dir / "editing_jobs"
 
     @property
     def source_browser_profile_dir(self) -> Path:
@@ -147,6 +162,7 @@ def load_settings() -> Settings:
     s.session_dir.mkdir(parents=True, exist_ok=True)
     s.source_dir.mkdir(parents=True, exist_ok=True)
     s.transcript_dir.mkdir(parents=True, exist_ok=True)
+    s.editing_dir.mkdir(parents=True, exist_ok=True)
     s.source_browser_profile_dir.mkdir(parents=True, exist_ok=True)
     s.source_model_dir.mkdir(parents=True, exist_ok=True)
     s.source_tessdata_dir.mkdir(parents=True, exist_ok=True)

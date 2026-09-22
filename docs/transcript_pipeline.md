@@ -11,8 +11,10 @@
 ## 분석 순서
 
 1. `ffprobe`로 실제 영상 길이를 읽고 `ffmpeg`로 16kHz 모노 WAV를 만든다.
-2. Apple Silicon의 `mlx-whisper`와 설정된 공개 모델(`Settings.transcript_model`)로
-   실제 오디오를 시간 구간별로 전사한다. 무음·낮은 확률의 일부 결과는 제외한다.
+2. Apple Silicon은 `mlx-whisper`와 `Settings.transcript_model`을, Windows는
+   `faster-whisper`와 `Settings.transcript_faster_whisper_model`을 사용해 실제
+   오디오를 시간 구간별로 전사한다. Windows에서는 먼저 CUDA FP16을
+   시도하고 실행할 수 없으면 CPU INT8로 전환한다.
 3. 별도로 `ffmpeg`가 기본 1fps(`Settings.transcript_ocr_fps`)로 화면 프레임을 만든다.
    EasyOCR `ko+en` 모델로 읽고 화면 가장자리의 광고 표시·워터마크와 낮은 신뢰도의
    문자 조각을 제한한다. EasyOCR를 실행할 수 없으면 Tesseract로 대체한다.

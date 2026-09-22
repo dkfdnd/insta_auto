@@ -27,6 +27,8 @@
 - 수집·분석은 `hotpost/cli.py` → `hotpost/collectors/` → `hotpost/storage.py` → `hotpost/analyze.py` → `hotpost/report.py` 순서다. 수동 수집과 macOS LaunchAgent 수집은 `data/collect.lock`으로 중복 실행을 막는다. 일정 설치/삭제는 사용자 OS 상태를 변경하므로 명시적 요청 없이 실행하지 않는다.
 - 소스 찾기는 `hotpost/source_finder.py`와 `hotpost/browser_search.py`가 담당한다. 후보를 실제로 받은 뒤 유사도와 텍스트 오버레이를 검사하여 최대 20개를 ZIP에 넣는다. 기준 Instagram 릴스는 분석용이며 ZIP에 포함하지 않는다. `manifest.json`의 원 URL·권리 상태를 유지한다.
 - 대본 추출은 `hotpost/transcript.py`가 담당한다. `speech`는 실제 오디오 전사, `screen_text`는 프레임 OCR이며 둘을 같은 종류의 대사로 취급하지 않는다. API는 `POST /api/transcript-jobs`, `GET /api/transcript-jobs/{id}`, `GET /api/transcript-jobs/{id}/download?format=txt|json`이다. 서버의 작업 상태는 메모리 안에 있으므로 재시작 후 이전 작업 ID를 조회할 수 없지만 결과 파일은 `data/transcripts/`에 남는다.
+- CapCut 연동은 `hotpost/editing_adapter.py`가 버전된 JSON 계약으로 별도 `auto_capcut` 프로세스를 실행한다. 두 패키지를 직접 import하거나 가상환경을 합치지 않는다. 전사 결과에서 `speech`만 `words.txt`로 변환하고 `screen_text`를 발화 자막으로 승격하지 않는다.
+- VoiceBench 연동은 `hotpost/voicebench_adapter.py`의 로컬 HTTP API 경계를 사용한다. VoiceBench 패키지를 import하거나 엔진·레퍼런스·Seed를 클라이언트에서 덮어쓰지 않는다. API 키는 환경변수 또는 VoiceBench의 Git 제외 파일에서만 읽는다.
 - 서버는 표준 라이브러리 `ThreadingHTTPServer`, 화면은 빌드 단계 없는 HTML/CSS/JS다. 백엔드 API를 바꾸면 `web/app.js`의 모달 요청·표시·다운로드도 함께 점검한다.
 
 ## 개발·검증

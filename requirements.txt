@@ -8,4 +8,5 @@ kiwipiepy>=0.18
 playwright>=1.50
 open_clip_torch>=3.0
 mlx-whisper>=0.4.3; sys_platform == "darwin" and platform_machine == "arm64"
+faster-whisper>=1.2.0; sys_platform == "win32"
 easyocr>=1.7.2
