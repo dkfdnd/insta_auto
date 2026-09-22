@@ -1,11 +1,12 @@
 """소스 검색용 Chrome 프로필과 다운로드 쿠키를 안전하게 공유한다."""
 from __future__ import annotations
 
-import os
 import sqlite3
 import threading
 import time
 from pathlib import Path
+
+from .private_file import private_output_path
 
 BROWSER_LOCK = threading.Lock()
 
@@ -117,8 +118,5 @@ def export_cookies(cookies: list[dict], target: Path) -> None:
         lines.append("\t".join((prefix + domain, "TRUE" if domain.startswith(".") else "FALSE",
                                 str(cookie.get("path") or "/"), "TRUE" if cookie.get("secure") else "FALSE",
                                 str(max(0, expires)), name, value)))
-    temp = target.with_suffix(target.suffix + ".tmp")
-    temp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.chmod(temp, 0o600)
-    temp.replace(target)
-    os.chmod(target, 0o600)
+    with private_output_path(target) as temp:
+        temp.write_text("\n".join(lines) + "\n", encoding="utf-8")

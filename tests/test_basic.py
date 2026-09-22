@@ -1,3 +1,4 @@
+import os
 import time
 from pathlib import Path
 
@@ -145,13 +146,100 @@ def test_platform_auth_probe_requires_response_signal():
     assert probe_platform_auth(Context('{"isLogin":true}'), "douyin") == "authenticated"
 
 
-def test_cookie_export_is_private_and_netscape_compatible(tmp_path: Path):
+def _assert_private_file(path: Path):
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+        return
+    import win32api
+    import win32con
+    import win32security
+
+    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+    try:
+        user = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+    finally:
+        token.Close()
+    user_sid = win32security.ConvertSidToStringSid(user)
+    sd = win32security.GetNamedSecurityInfo(
+        str(path), win32security.SE_FILE_OBJECT, win32security.DACL_SECURITY_INFORMATION,
+    )
+    assert sd.GetSecurityDescriptorControl()[0] & win32security.SE_DACL_PROTECTED
+    acl = sd.GetSecurityDescriptorDacl()
+    assert acl is not None
+    grants = {}
+    for i in range(acl.GetAceCount()):
+        (kind, flags), mask, sid = acl.GetAce(i)
+        assert kind == win32security.ACCESS_ALLOWED_ACE_TYPE
+        assert not flags & win32security.INHERITED_ACE
+        grants[win32security.ConvertSidToStringSid(sid)] = mask
+    assert set(grants) == {user_sid, "S-1-5-18", "S-1-5-32-544"}
+    assert grants[user_sid] & 0x1F01FF == 0x1F01FF
+
+
+def test_cookie_export_is_private_and_netscape_compatible(tmp_path: Path, monkeypatch):
+    from hotpost.private_file import private_output_path
+    from hotpost.collectors.instaloader_collector import make_loader
+    import pytest
+
+    if os.name == "nt":
+        import win32security
+
+        def directory_acl():
+            return win32security.GetNamedSecurityInfo(
+                str(tmp_path), win32security.SE_FILE_OBJECT, win32security.DACL_SECURITY_INFORMATION,
+            )
+
+        def directory_sddl():
+            return win32security.ConvertSecurityDescriptorToStringSecurityDescriptor(
+                directory_acl(), win32security.SDDL_REVISION_1, win32security.DACL_SECURITY_INFORMATION,
+            )
+
+        # Deliberately broad ACL on this disposable fixture directory only.
+        acl = directory_acl().GetSecurityDescriptorDacl()
+        acl.AddAccessAllowedAceEx(
+            win32security.ACL_REVISION,
+            win32security.OBJECT_INHERIT_ACE | win32security.CONTAINER_INHERIT_ACE,
+            0x1F01FF, win32security.CreateWellKnownSid(win32security.WinWorldSid),
+        )
+        win32security.SetNamedSecurityInfo(
+            str(tmp_path), win32security.SE_FILE_OBJECT,
+            win32security.DACL_SECURITY_INFORMATION, None, None, acl, None,
+        )
+        parent_acl = directory_sddl()
+
+    original_write = Path.write_text
+
+    def checked_write(path, *args, **kwargs):
+        _assert_private_file(path)  # Already private before any cookie bytes are written.
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", checked_write)
     target = tmp_path / "cookies.txt"
-    export_cookies([{"domain": ".douyin.com", "name": "sessionid", "value": "secret", "path": "/",
-                     "secure": True, "httpOnly": True, "expires": int(time.time()) + 3600}], target)
+    cookies = [{"domain": ".douyin.com", "name": "sessionid", "value": "secret", "path": "/",
+                "secure": True, "httpOnly": True, "expires": int(time.time()) + 3600}]
+    for _ in range(2):  # Creation and replacement must both remain private.
+        export_cookies(cookies, target)
+        _assert_private_file(target)
     text = target.read_text()
     assert "#HttpOnly_.douyin.com\tTRUE\t/\tTRUE" in text
-    assert target.stat().st_mode & 0o777 == 0o600
+
+    # Serialize an inert in-memory session: no login or network request.
+    loader = make_loader()
+    loader.context.username = "offline_fixture"
+    session = tmp_path / "session-fixture"
+    with private_output_path(session) as temp:
+        _assert_private_file(temp)
+        loader.save_session_to_file(str(temp))
+    _assert_private_file(session)
+
+    with pytest.raises(RuntimeError, match="fixture failure"):
+        with private_output_path(target) as temp:
+            temp.write_text("incomplete", encoding="utf-8")
+            raise RuntimeError("fixture failure")
+    assert target.read_text() == text
+    assert not list(tmp_path.glob(".*.tmp"))
+    if os.name == "nt":
+        assert directory_sddl() == parent_acl
 
 
 def test_text_overlay_classification_prioritizes_clean_sources():
@@ -203,7 +291,8 @@ def test_daily_launch_agent_runs_collection_at_seven(tmp_path: Path):
     config = launch_agent_config(settings)
     assert config["StartCalendarInterval"] == {"Hour": 7, "Minute": 0}
     assert config["ProgramArguments"][-3:] == ["-m", "hotpost", "run"]
-    assert config["StandardOutPath"].endswith("data/daily_collect.log")
+    assert Path(config["StandardOutPath"]) == settings.data_dir / "daily_collect.log"
+    assert config["StandardErrorPath"] == config["StandardOutPath"]
 
 
 def test_daily_collection_checks_five_posts_but_keeps_thirty_for_baseline():

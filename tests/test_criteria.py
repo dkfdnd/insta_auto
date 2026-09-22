@@ -85,8 +85,9 @@ def test_criteria_api_reanalyzes_and_tracking_uses_same_tier(tmp_path):
         latest = next(p for p in result["report"]["posts"] if p["shortcode"] == "latest")
         assert latest["tier"] == 0
         assert result["report"]["criteria"]["values"] == values
-        assert json.loads(settings.report_path.read_text())["criteria"]["version"] == 2
-        assert "window.HOTPOST_REPORT" in (settings.web_dir / "data.js").read_text()
+        assert json.loads(settings.report_path.read_text(encoding="utf-8"))["criteria"]["version"] == 2
+        assert "window.HOTPOST_REPORT" in (
+            settings.web_dir / "data.js").read_text(encoding="utf-8")
 
         values["t1"], values["t2"], values["t3"] = 1.1, 2, 3
         request = Request(base + "/api/criteria", data=json.dumps({"values": values}).encode(),

@@ -47,7 +47,7 @@ def cleanup_dry_run(settings: Settings, now: int | None = None) -> dict:
                     candidates.append(target)
             if root == settings.source_dir:
                 candidates.extend(job_dir.glob("videos/*.part"))
-    entries = [{"path": str(path.relative_to(settings.data_dir)), "bytes": _size(path)}
+    entries = [{"path": path.relative_to(settings.data_dir).as_posix(), "bytes": _size(path)}
                for path in candidates]
     return {"retention_days": settings.cleanup_retention_days,
             "disk": disk_usage(settings), "items": entries,

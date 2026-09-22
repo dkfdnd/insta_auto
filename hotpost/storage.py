@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -86,15 +87,23 @@ CREATE INDEX IF NOT EXISTS idx_observations_request ON metric_observations(reque
 """
 
 
+# Schema creation and PRAGMA journal_mode both take an exclusive database
+# lock.  SQLite's busy timeout does not reliably serialize simultaneous
+# first-use connections on Windows, so initialization is guarded inside the
+# process.  Normal reads/writes remain concurrent under WAL.
+_INITIALIZE_LOCK = threading.Lock()
+
+
 class Storage:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, timeout=10)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA busy_timeout=10000")
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.executescript(SCHEMA)
-        self._migrate()
+        with _INITIALIZE_LOCK:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.executescript(SCHEMA)
+            self._migrate()
 
     def _migrate(self) -> None:
         self.conn.execute("CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL)")

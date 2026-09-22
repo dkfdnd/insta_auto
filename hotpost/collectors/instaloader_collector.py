@@ -16,6 +16,7 @@ import instaloader
 from ..config import Settings
 from ..models import Post, Profile
 from ..observations import MetricObservation
+from ..private_file import private_output_path
 from .base import CollectError
 
 _HASHTAG_RE = re.compile(r"#([\w가-힣]+)")
@@ -25,11 +26,11 @@ def session_file(settings: Settings, user: str) -> Path:
     return settings.session_dir / f"session-{user}"
 
 
-def make_loader() -> instaloader.Instaloader:
+def make_loader(*, quiet: bool = True) -> instaloader.Instaloader:
     return instaloader.Instaloader(
         download_pictures=False, download_videos=False, download_video_thumbnails=False,
         download_geotags=False, download_comments=False, save_metadata=False,
-        compress_json=False, quiet=True, max_connection_attempts=2,
+        compress_json=False, quiet=quiet, max_connection_attempts=2,
         user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
     )
@@ -49,10 +50,11 @@ def load_session(settings: Settings) -> instaloader.Instaloader:
 
 def login_with_password(settings: Settings, user: str) -> Path:
     """터미널에서 비밀번호를 직접 입력받아 로그인하고 세션을 저장한다 (2단계 인증 지원)."""
-    L = make_loader()
+    L = make_loader(quiet=False)
     L.interactive_login(user)
     f = session_file(settings, user)
-    L.save_session_to_file(str(f))
+    with private_output_path(f) as temp:
+        L.save_session_to_file(str(temp))
     return f
 
 
@@ -77,7 +79,8 @@ def login_from_browser(settings: Settings, user: str, browser: str) -> Path:
     L.context.username = detected
     name = user or detected
     f = session_file(settings, name)
-    L.save_session_to_file(str(f))
+    with private_output_path(f) as temp:
+        L.save_session_to_file(str(temp))
     return f
 
 

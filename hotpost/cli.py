@@ -13,15 +13,22 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
+import os
 import sys
+import threading
 import time
 import webbrowser
-import fcntl
 import logging
 import random
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 from .config import load_settings, Settings
 from .storage import Storage
@@ -178,18 +185,30 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
 
 def cmd_run(settings: Settings, args) -> int:
     lock_path = settings.data_dir / "collect.lock"
-    lock_file = lock_path.open("w")
+    lock_file = lock_path.open("a+b")
     try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        if os.name == "nt":
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
         lock_file.close()
+        if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+            raise
         _log("다른 수집 작업이 이미 실행 중입니다.")
         return 3
     try:
         return _cmd_run_locked(settings, args)
     finally:
-        fcntl.flock(lock_file, fcntl.LOCK_UN)
-        lock_file.close()
+        try:
+            if os.name == "nt":
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
 
 
 def _cmd_run_locked(settings: Settings, args) -> int:
@@ -264,17 +283,27 @@ def cmd_analyze(settings: Settings, args) -> int:
 
 
 def cmd_serve(settings: Settings, args) -> int:
-    from .server import serve
+    from .server import serve_many
     port = getattr(args, "port", 8765)
-    httpd = serve(settings, port)
+    hosts = getattr(args, "hosts", None) or ["127.0.0.1"]
+    httpds = serve_many(settings, hosts, port)
     url = f"http://localhost:{port}/"
     _log(f"웹페이지: {url}  (Ctrl+C 로 종료)")
+    _log("바인드: " + ", ".join(f"http://{host}:{port}/" for host in hosts))
     if not getattr(args, "no_browser", False):
         webbrowser.open(url)
+    threads = [threading.Thread(target=httpd.serve_forever, daemon=True) for httpd in httpds[1:]]
+    for thread in threads:
+        thread.start()
     try:
-        httpd.serve_forever()
+        httpds[0].serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        for httpd in httpds[1:]:
+            httpd.shutdown()
+        for httpd in httpds:
+            httpd.server_close()
     return 0
 
 
@@ -304,6 +333,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--only", nargs="*", help="특정 계정만 수집")
     p.add_argument("--serve", action="store_true", help="완료 후 웹서버 실행")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--host", dest="hosts", action="append", help="명시적 바인드 주소 (여러 번 지정 가능)")
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(fn=cmd_run)
 
@@ -321,6 +351,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("serve", help="웹페이지 서버")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--host", dest="hosts", action="append", help="명시적 바인드 주소 (여러 번 지정 가능)")
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(fn=cmd_serve)
 

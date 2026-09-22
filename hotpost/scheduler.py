@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import plistlib
 import subprocess
+import sys
 from pathlib import Path
 
 from .config import ROOT, Settings
@@ -64,6 +65,10 @@ def uninstall_schedule() -> dict:
 
 
 def schedule_status() -> dict:
+    if sys.platform != "darwin":
+        return {"installed": False, "loaded": False, "supported": False,
+                "hour": DEFAULT_HOUR, "minute": DEFAULT_MINUTE,
+                "label": LABEL, "path": ""}
     target = launch_agent_path()
     domain = f"gui/{os.getuid()}"
     loaded = subprocess.run(["launchctl", "print", f"{domain}/{LABEL}"],

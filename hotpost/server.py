@@ -291,5 +291,23 @@ def make_handler(settings: Settings):
     return partial(Handler, directory=str(settings.web_dir))
 
 
-def serve(settings: Settings, port: int = 8765) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer(("127.0.0.1", port), make_handler(settings))
+def serve(settings: Settings, port: int = 8765, host: str = "127.0.0.1",
+          handler=None) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), handler or make_handler(settings))
+
+
+def serve_many(settings: Settings, hosts: list[str], port: int = 8765) -> list[ThreadingHTTPServer]:
+    """Create servers on explicit interfaces while sharing one set of API managers."""
+    hosts = list(dict.fromkeys(hosts))
+    if not hosts:
+        raise ValueError("하나 이상의 바인드 주소가 필요합니다.")
+    handler = make_handler(settings)
+    servers = []
+    try:
+        for host in hosts:
+            servers.append(serve(settings, port, host, handler))
+    except Exception:
+        for httpd in servers:
+            httpd.server_close()
+        raise
+    return servers
