@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import zipfile
@@ -33,6 +34,16 @@ Progress = Callable[[str, int], None]
 VIDEO_HOSTS = ("tiktok.com", "douyin.com", "xiaohongshu.com", "youtube.com", "youtu.be", "bilibili.com",
                "vimeo.com", "lazada.", "manuals.plus", "made-in-china.com")
 SOURCE_COOLDOWNS: dict[str, float] = {}
+
+
+def _executable(name: str) -> str | None:
+    """Find a command on PATH or beside the active virtualenv Python."""
+    found = shutil.which(name)
+    if found:
+        return found
+    suffix = ".exe" if os.name == "nt" else ""
+    candidate = Path(sys.executable).with_name(name + suffix)
+    return str(candidate) if candidate.is_file() else None
 KO_EN_ZH = {
     "차량": ("car", "汽车"), "자동차": ("car", "汽车"), "차문": ("car door", "车门"),
     "차량용품": ("car accessories", "汽车用品"), "문쪽": ("door side", "车门侧"),
@@ -145,26 +156,64 @@ def _download_reference(settings: Settings, post, out: Path) -> Path:
     if not post.media_id:
         raise RuntimeError("이 게시물에는 media_id가 없어 기준 영상을 가져올 수 없습니다.")
     collector = WebGraphQLCollector(settings)
-    r = collector.s.get(
-        f"https://www.instagram.com/api/v1/media/{post.media_id}/info/",
-        headers=collector._api_headers(post.url), timeout=30,
-    )
-    r.raise_for_status()
-    item = ((r.json() or {}).get("items") or [{}])[0]
-    versions = item.get("video_versions") or []
-    if not versions:
-        raise RuntimeError("Instagram 응답에 다운로드 가능한 video_versions가 없습니다.")
-    source = max(versions, key=lambda v: (v.get("width", 0) * v.get("height", 0), v.get("type", 0)))
-    video = collector.s.get(source["url"], stream=True, timeout=60)
-    video.raise_for_status()
+    source_url = ""
+    try:
+        r = collector.s.get(
+            f"https://www.instagram.com/api/v1/media/{post.media_id}/info/",
+            headers=collector._api_headers(post.url), timeout=30,
+            allow_redirects=False,
+        )
+        if r.status_code == 200:
+            item = ((r.json() or {}).get("items") or [{}])[0]
+            versions = item.get("video_versions") or []
+            if versions:
+                source = max(
+                    versions,
+                    key=lambda v: (
+                        v.get("width", 0) * v.get("height", 0), v.get("type", 0)
+                    ),
+                )
+                source_url = str(source.get("url") or "")
+    except (requests.RequestException, ValueError):
+        source_url = ""
+
+    # New web sessions can access GraphQL while the legacy media-info route
+    # redirects to /accounts/login/. Instaloader still exposes the signed CDN
+    # URL embedded in post metadata, so use that as a bounded fallback.
+    if not source_url:
+        import instaloader
+        from .collectors.instaloader_collector import load_session
+
+        loader = load_session(settings)
+        reference = instaloader.Post.from_shortcode(loader.context, post.shortcode)
+        if not reference.is_video:
+            raise RuntimeError("Instagram 게시물이 영상이 아닙니다.")
+        source_url = str(reference.video_url or "")
+
+    parsed = urlparse(source_url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (
+        host == "cdninstagram.com" or host.endswith(".cdninstagram.com")
+        or host == "fbcdn.net" or host.endswith(".fbcdn.net")
+    ):
+        raise RuntimeError("Instagram이 허용된 CDN 영상 URL을 반환하지 않았습니다.")
+    video = requests.get(source_url, stream=True, timeout=60)
+    if video.status_code != 200:
+        video.close()
+        raise RuntimeError(
+            f"Instagram CDN 영상 다운로드 실패 (HTTP {video.status_code})."
+        )
     limit = settings.source_max_file_mb * 1024 * 1024
     size = 0
-    with out.open("wb") as f:
-        for chunk in video.iter_content(1024 * 256):
-            size += len(chunk)
-            if size > limit:
-                raise RuntimeError("기준 영상이 설정된 최대 크기를 초과했습니다.")
-            f.write(chunk)
+    try:
+        with out.open("wb") as f:
+            for chunk in video.iter_content(1024 * 256):
+                size += len(chunk)
+                if size > limit:
+                    raise RuntimeError("기준 영상이 설정된 최대 크기를 초과했습니다.")
+                f.write(chunk)
+    finally:
+        video.close()
     return out
 
 
@@ -402,7 +451,7 @@ def _yt_cookie_args(cookie_file: Path | None) -> list[str]:
 
 def search_youtube(queries: list[str], limit: int, cookie_file: Path | None = None) -> list[Candidate]:
     """yt-dlp의 공개 YouTube 검색 추출기로 Shorts/제품 시연 후보를 찾는다."""
-    ytdlp = shutil.which("yt-dlp")
+    ytdlp = _executable("yt-dlp")
     if not ytdlp or limit <= 0:
         return []
     out: list[Candidate] = []
@@ -605,20 +654,27 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
                     time.sleep(2 ** attempt)
                     continue
                 return None
-    ytdlp = shutil.which("yt-dlp")
+    ytdlp = _executable("yt-dlp")
     if not ytdlp:
         candidate.error = "yt-dlp 실행 파일이 없습니다."
         return None
     template = str(out_dir / f"{stem}_%(id)s.%(ext)s")
     command = [ytdlp, *_yt_cookie_args(cookie_file), "--no-playlist", "--no-progress",
                "--restrict-filenames", "--write-info-json", "--max-filesize", f"{max_mb}M",
+               "--socket-timeout", "15", "--retries", "1", "--fragment-retries", "1",
+               "--extractor-retries", "1",
                "--format", "bv*+ba/b", "--merge-output-format", "mp4", "-o", template,
                "--", candidate.url]
+    # ``platform_of`` groups YouTube and Bilibili as ``youtube_bilibili``.
+    # The provider still identifies Bilibili, so use both signals here instead
+    # of checking for a platform value that can never be produced.
+    is_bilibili = candidate.provider == "bilibili" or "bilibili.com" in candidate.url
+    process_timeout = 35 if is_bilibili else 90
     for attempt in range(3):
         try:
-            result = _run(command, timeout=240)
+            result = _run(command, timeout=process_timeout)
         except subprocess.TimeoutExpired:
-            candidate.error = "다운로드 제한 시간(240초) 초과"
+            candidate.error = f"다운로드 제한 시간({process_timeout}초) 초과"
             return None
         diagnostic = (result.stderr or result.stdout).lower()
         if "429" in diagnostic or "too many requests" in diagnostic:
@@ -705,10 +761,12 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
         verification_notes.append(overlay_detector.note)
     progress(f"후보 {len(candidates)}개를 확인하는 중", 50)
     probed = 0
+    attempted = 0
     embeddings = {}
     for i, candidate in enumerate(candidates, 1):
-        if probed >= max(settings.source_max_downloads, settings.source_max_probe_downloads):
+        if attempted >= max(settings.source_max_downloads, settings.source_max_probe_downloads):
             break
+        attempted += 1
         path = download_candidate(candidate, candidates_dir, i, settings.source_max_file_mb,
                                   settings.source_browser_cookie_file)
         if path:
@@ -765,7 +823,7 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
         "reference_frames": [str(p.relative_to(root)) for p in frames],
         "browser_notes": browser_result["notes"], "verification_notes": verification_notes,
         "candidates": [asdict(c) for c in candidates], "downloaded": downloaded,
-        "probed_downloads": probed,
+        "probe_attempts": attempted, "probed_downloads": probed,
         "quality_counts": quality_counts,
         "rights_notice": "각 파일의 저작권과 상업적 이용 허가를 원 출처에서 확인한 뒤 사용하세요. Pexels 항목만 Pexels 라이선스로 표시됩니다.",
     }

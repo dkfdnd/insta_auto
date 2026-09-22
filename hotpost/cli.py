@@ -325,6 +325,10 @@ def cmd_sources(settings: Settings, args) -> int:
 # ------------------------------------------------------------------ main
 
 def main(argv: list[str] | None = None) -> None:
+    if os.name == "nt":
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="hotpost", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 

@@ -22,6 +22,14 @@ def test_platform_round_robin_prevents_one_pool_from_filling_forty():
     assert len(mixed) == 10
 
 
+def test_platform_round_robin_prioritizes_visual_matches():
+    keyword = _candidate("https://tiktok.com/@u/video/1", "tiktok")
+    keyword.match_kind = "keyword"
+    visual = _candidate("https://tiktok.com/@u/video/2", "google-lens")
+    visual.match_kind = "visual-match"
+    assert round_robin_candidates([keyword, visual], 2)[0] is visual
+
+
 def test_relevance_gate_and_reuse_gate_do_not_fill_to_twenty():
     meta = {"duration": 25, "width": 720, "height": 1280}
     clean = _candidate("https://youtube.com/watch?v=good", "youtube")
@@ -37,6 +45,14 @@ def test_relevance_gate_and_reuse_gate_do_not_fill_to_twenty():
     assert "low_product_or_scene_similarity" in unrelated.rejection_reasons
     assert "heavy_text_overlay" in captions.rejection_reasons
     assert "not_crop_friendly" in landscape.rejection_reasons
+
+
+def test_unknown_overlay_is_kept_for_manual_review():
+    candidate = _candidate("https://youtube.com/watch?v=unknown", "youtube",
+                           quality="unknown")
+    candidate.rejection_reasons = reuse_reasons(candidate)
+    assert select_valid_candidates([candidate], 1) == [candidate]
+    assert candidate.selection_reason == "relevant_unique_overlay_unclassified"
 
 
 def test_cross_platform_reupload_removed_by_file_and_multiple_frames():

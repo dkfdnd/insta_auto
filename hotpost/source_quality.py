@@ -23,7 +23,9 @@ def platform_of(provider: str, url: str) -> str:
 
 def round_robin_candidates(items: list, limit: int) -> list:
     pools = defaultdict(deque)
-    for item in items:
+    priority = {"visual-match": 0, "local-cache": 1,
+                "platform-search": 2, "keyword": 3}
+    for item in sorted(items, key=lambda row: priority.get(row.match_kind, 4)):
         pools[platform_of(item.provider, item.url)].append(item)
     order = ("tiktok", "douyin", "xiaohongshu", "youtube_bilibili", "stock", "other")
     result = []
@@ -78,8 +80,6 @@ def relevance_reasons(candidate, meta: dict) -> list[str]:
 def reuse_reasons(candidate) -> list[str]:
     if candidate.source_quality == "edited-with-text":
         return ["heavy_text_overlay"]
-    if candidate.source_quality == "unknown":
-        return ["overlay_quality_unknown"]
     return []
 
 
@@ -109,6 +109,10 @@ def select_valid_candidates(candidates: list, limit: int, embeddings: dict | Non
             candidate.rejection_reasons = [f"duplicate_of:{duplicate.original_url}"]
             continue
         candidate.selected_for_zip = True
-        candidate.selection_reason = "relevant_reusable_unique"
+        candidate.selection_reason = (
+            "relevant_unique_overlay_unclassified"
+            if candidate.source_quality == "unknown"
+            else "relevant_reusable_unique"
+        )
         selected.append(candidate)
     return selected

@@ -4,6 +4,8 @@ import sys
 
 import pytest
 
+import hotpost.source_finder as source_finder
+
 from hotpost.config import ROOT, Settings
 
 
@@ -68,3 +70,30 @@ def test_server_can_bind_multiple_explicit_interfaces(tmp_path):
     finally:
         for server in servers:
             server.server_close()
+
+
+def test_virtualenv_tool_is_found_beside_python(tmp_path, monkeypatch):
+    python = tmp_path / "python.exe"
+    tool = tmp_path / "yt-dlp.exe"
+    python.touch()
+    tool.touch()
+    monkeypatch.setattr(source_finder.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(source_finder.sys, "executable", str(python))
+    assert source_finder._executable("yt-dlp") == str(tool)
+
+
+def test_bilibili_download_uses_short_timeout(tmp_path, monkeypatch):
+    candidate = source_finder.Candidate(
+        url="https://www.bilibili.com/video/BV1example",
+        provider="browser-search",
+        original_url="https://www.bilibili.com/video/BV1example",
+    )
+    monkeypatch.setattr(source_finder, "_executable", lambda _name: "yt-dlp.exe")
+
+    def timeout_stub(_command, *, timeout):
+        assert timeout == 35
+        raise subprocess.TimeoutExpired("yt-dlp", timeout)
+
+    monkeypatch.setattr(source_finder, "_run", timeout_stub)
+    assert source_finder.download_candidate(candidate, tmp_path, 1, 100, None) is None
+    assert "35" in candidate.error
