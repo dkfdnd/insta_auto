@@ -41,7 +41,9 @@ def script_from_transcript(transcript_path: Path, target: Path) -> Path:
     return target
 
 
-def selected_source_videos(manifest_path: Path) -> list[Path]:
+def selected_source_videos(
+    manifest_path: Path, *, allow_unclassified: bool = False,
+) -> list[Path]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     root = manifest_path.parent.resolve()
     selected: list[Path] = []
@@ -54,6 +56,14 @@ def selected_source_videos(manifest_path: Path) -> list[Path]:
         path = (root / relative).resolve()
         if not path.is_relative_to(root):
             raise ValueError("Source manifest contains a path outside its job.")
+        quality = str(item.get("source_quality") or "unknown")
+        if quality == "edited-with-text":
+            raise ValueError("Selected source contains a detected text overlay.")
+        if quality == "unknown" and not allow_unclassified:
+            raise ValueError(
+                "Selected source overlay quality is unclassified; manual review "
+                "is required before final editing."
+            )
         if path.is_file():
             selected.append(path)
     if not selected:
@@ -77,12 +87,19 @@ class AutoCapcutAdapter:
     def build(self, *, job_id: str, video_paths: list[Path | str],
               draft_name: str, voice_path: Path | str | None = None,
               script_path: Path | str | None = None,
-              whisper_model: str = "small") -> dict:
+              whisper_model: str = "small",
+              video_labels: list[str] | None = None,
+              audio_profile: str = "recorded_voice",
+              narration_speed: float = 1.0) -> dict:
         if not _JOB_ID.fullmatch(job_id):
             raise ValueError("job_id contains unsupported characters.")
         if not video_paths:
             raise ValueError("At least one source video is required.")
         videos = [self._asset(path, "video") for path in video_paths]
+        labels = video_labels or [path.stem for path in videos]
+        if len(labels) != len(videos) or not all(
+                isinstance(label, str) and label.strip() for label in labels):
+            raise ValueError("video_labels must match video_paths.")
         voice = self._asset(voice_path, "voice") if voice_path else None
         script = self._asset(script_path, "script") if script_path else None
         python = self.settings.auto_capcut_python.resolve()
@@ -101,10 +118,13 @@ class AutoCapcutAdapter:
             "contract_version": CONTRACT_VERSION,
             "job_id": job_id,
             "video_paths": [str(path) for path in videos],
+            "video_labels": labels,
             "voice_path": str(voice) if voice else None,
             "script_path": str(script) if script else None,
             "draft_name": draft_name,
             "whisper_model": whisper_model,
+            "audio_profile": audio_profile,
+            "narration_speed": narration_speed,
         }
         _atomic_json(request_path, request)
         command = [str(python), "-m", "auto_capcut.job_runner",
@@ -149,6 +169,9 @@ def build_with_voicebench(
     settings: Settings, *, job_id: str, manifest_path: Path,
     transcript_path: Path, draft_name: str,
     approved_script_path: Path | None = None,
+    video_labels: list[str] | None = None,
+    allow_unclassified_sources: bool = False,
+    narration_speed: float = 1.12,
     voicebench=None, auto_capcut: AutoCapcutAdapter | None = None,
     progress: Callable[[str, int], None] | None = None,
 ) -> dict:
@@ -170,7 +193,8 @@ def build_with_voicebench(
         script_path.parent.mkdir(parents=True, exist_ok=True)
         if approved != script_path.resolve():
             shutil.copy2(approved, script_path)
-    videos = selected_source_videos(manifest_path)
+    videos = selected_source_videos(
+        manifest_path, allow_unclassified=allow_unclassified_sources)
     voice_path = job_dir / "voice.wav"
     tts = (voicebench or VoiceBenchAdapter(settings)).synthesize(
         script_path.read_text(encoding="utf-8"), voice_path,
@@ -183,6 +207,9 @@ def build_with_voicebench(
         voice_path=voice_path,
         script_path=script_path,
         draft_name=draft_name,
+        video_labels=video_labels,
+        audio_profile="clean_tts",
+        narration_speed=narration_speed,
     )
     return {
         **result,

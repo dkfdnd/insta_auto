@@ -91,6 +91,7 @@ def test_workflow_synthesizes_spoken_script_before_capcut(tmp_path):
     manifest = source_dir / "manifest.json"
     manifest.write_text(json.dumps({"candidates": [{
         "selected_for_zip": True, "downloaded_file": "clip.mp4",
+        "source_quality": "clean",
     }]}), encoding="utf-8")
     transcript_dir = settings.data_dir / "transcripts" / "transcript-1"
     transcript_dir.mkdir(parents=True)
@@ -112,6 +113,8 @@ def test_workflow_synthesizes_spoken_script_before_capcut(tmp_path):
             assert kwargs["video_paths"] == [video]
             assert kwargs["voice_path"].is_file()
             assert kwargs["script_path"].read_text(encoding="utf-8") == "들리는 대사\n"
+            assert kwargs["audio_profile"] == "clean_tts"
+            assert kwargs["narration_speed"] == 1.12
             return {"contract_version": "1.0", "job_id": kwargs["job_id"],
                     "status": "completed", "draft_path": "draft"}
 
@@ -133,6 +136,7 @@ def test_workflow_preserves_approved_script(tmp_path):
     manifest = source_dir / "manifest.json"
     manifest.write_text(json.dumps({"candidates": [{
         "selected_for_zip": True, "downloaded_file": "clip.mp4",
+        "source_quality": "clean",
     }]}), encoding="utf-8")
     transcript = settings.data_dir / "transcript.json"
     transcript.write_text(json.dumps({"speech": [{"text": "오인식 문장"}]},
@@ -159,3 +163,19 @@ def test_workflow_preserves_approved_script(tmp_path):
         draft_name="edit-approved-v1", voicebench=Voice(), auto_capcut=CapCut(),
     )
     assert result["status"] == "completed"
+
+
+def test_unclassified_source_requires_explicit_spike_override(tmp_path):
+    root = tmp_path / "source-job"
+    root.mkdir()
+    video = root / "clip.mp4"
+    video.touch()
+    manifest = root / "manifest.json"
+    manifest.write_text(json.dumps({"candidates": [{
+        "selected_for_zip": True,
+        "downloaded_file": "clip.mp4",
+        "source_quality": "unknown",
+    }]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="manual review"):
+        selected_source_videos(manifest)
+    assert selected_source_videos(manifest, allow_unclassified=True) == [video]
