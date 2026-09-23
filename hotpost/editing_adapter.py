@@ -109,10 +109,14 @@ class AutoCapcutAdapter:
         _atomic_json(request_path, request)
         command = [str(python), "-m", "auto_capcut.job_runner",
                    "--request", str(request_path), "--result", str(result_path)]
+        child_env = os.environ.copy()
+        child_env.setdefault("PYTHONUTF8", "1")
+        child_env.setdefault("PYTHONIOENCODING", "utf-8")
         try:
             proc = self.runner(command, cwd=str(repo), capture_output=True,
-                               text=True, timeout=self.settings.auto_capcut_timeout,
-                               check=False)
+                               text=True, encoding="utf-8", errors="replace",
+                               env=child_env,
+                               timeout=self.settings.auto_capcut_timeout, check=False)
         except subprocess.TimeoutExpired as exc:
             result = {
                 "contract_version": CONTRACT_VERSION,

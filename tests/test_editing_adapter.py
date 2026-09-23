@@ -53,6 +53,10 @@ def test_adapter_passes_json_contract_and_accepts_blocked_result(tmp_path):
     video.touch()
 
     def fake_run(command, **kwargs):
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "replace"
+        assert kwargs["env"]["PYTHONUTF8"] == "1"
+        assert kwargs["env"]["PYTHONIOENCODING"] == "utf-8"
         request_path = Path(command[command.index("--request") + 1])
         result_path = Path(command[command.index("--result") + 1])
         request = json.loads(request_path.read_text(encoding="utf-8"))
