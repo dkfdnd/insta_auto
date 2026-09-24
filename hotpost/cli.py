@@ -363,7 +363,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("shortcode", help="Instagram 릴스 shortcode (예: Dcp3P-WyMFe)")
     p.set_defaults(fn=cmd_sources)
 
-    p = sub.add_parser("schedule", help="macOS 매일 자동 수집 일정 관리")
+    p = sub.add_parser("schedule", help="Windows/macOS 매일 자동 수집 일정 관리")
     p.add_argument("action", choices=["install", "status", "uninstall"])
     p.add_argument("--hour", type=int, default=7)
     p.add_argument("--minute", type=int, default=0)

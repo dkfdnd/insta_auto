@@ -47,7 +47,7 @@ sys.exit(cli.cmd_run(Settings(data_dir=Path(sys.argv[1])), None))
 def test_non_macos_schedule_status_does_not_launch_programs(monkeypatch):
     from hotpost import scheduler
 
-    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "platform", "linux")
 
     def unexpected(*args, **kwargs):
         pytest.fail("Non-macOS status must not launch launchctl")
