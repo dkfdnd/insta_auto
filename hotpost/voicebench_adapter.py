@@ -49,7 +49,9 @@ class VoiceBenchAdapter:
         return data
 
     def synthesize(self, text: str, output_path: Path,
-                   progress: Callable[[str, int], None] | None = None) -> dict:
+                   progress: Callable[[str, int], None] | None = None,
+                   request_id: int | None = None,
+                   on_submitted: Callable[[int], None] | None = None) -> dict:
         script = text.strip()
         if not script:
             raise ValueError("VoiceBench cannot synthesize an empty script.")
@@ -63,10 +65,17 @@ class VoiceBenchAdapter:
         timeout = min(60.0, float(self.settings.voicebench_timeout))
         progress("VoiceBench 음성 생성을 요청하는 중", 5)
         try:
-            submitted = self._response_json(self.session.post(
-                self._url("/v1/tts"), json={"text": script}, headers=headers,
-                timeout=timeout,
-            ))
+            if request_id is None:
+                submitted = self._response_json(self.session.post(
+                    self._url("/v1/tts"), json={"text": script}, headers=headers,
+                    timeout=timeout,
+                ))
+            else:
+                if type(request_id) is not int or request_id <= 0:
+                    raise ValueError("Invalid persisted VoiceBench request ID.")
+                submitted = self._response_json(self.session.get(
+                    self._url(f"/v1/tts/{request_id}"), headers=headers, timeout=timeout))
+                submitted.setdefault('id', request_id)
         except requests.RequestException as exc:
             raise RuntimeError(
                 f"VoiceBench is not reachable at {self.settings.voicebench_url}."
@@ -74,6 +83,8 @@ class VoiceBenchAdapter:
         request_id = submitted.get("id")
         if not isinstance(request_id, int):
             raise RuntimeError("VoiceBench did not return a request ID.")
+        if on_submitted:
+            on_submitted(request_id)
 
         deadline = time.monotonic() + float(self.settings.voicebench_timeout)
         status = submitted

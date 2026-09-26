@@ -7,7 +7,7 @@
   python -m hotpost login --user ID --browser chrome   # 브라우저 쿠키로 세션 저장
   python -m hotpost import dump.json    # 브라우저 덤프(tools/browser_dump.js) 가져오기
   python -m hotpost analyze             # DB 에 있는 데이터로 리포트만 다시 생성
-  python -m hotpost serve               # 웹페이지 열기 (http://localhost:8765)
+  python -m hotpost serve               # 웹페이지 열기 (http://localhost:8775)
   python -m hotpost list                # 인플루언서 목록 파싱 결과 확인
 """
 from __future__ import annotations
@@ -231,6 +231,12 @@ def _cmd_run_locked(settings: Settings, args) -> int:
     report = build_report(settings, store, source=args.source, notes=notes, usernames=usernames)
     write_report(settings, report)
     _log(f"리포트 생성: {settings.report_path}  (핫 게시물 {report['summary']['hot']}개 / 전체 {report['summary']['posts']}개)")
+    if getattr(args, 'acquire', False) and args.source != 'demo':
+        from .acquisition import acquire
+        results = acquire(settings, report, _log)
+        if any(row['status'] == 'error' for row in results):
+            _log('일부 자료 확보가 실패했습니다. 작업 기록에서 확인하세요.')
+            return 1
     if args.serve:
         return cmd_serve(settings, args)
     return 0
@@ -284,7 +290,7 @@ def cmd_analyze(settings: Settings, args) -> int:
 
 def cmd_serve(settings: Settings, args) -> int:
     from .server import serve_many
-    port = getattr(args, "port", 8765)
+    port = getattr(args, "port", 8775)
     hosts = getattr(args, "hosts", None) or ["127.0.0.1"]
     httpds = serve_many(settings, hosts, port)
     url = f"http://localhost:{port}/"
@@ -336,7 +342,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--source", default="web", choices=["web", "instaloader", "demo"])
     p.add_argument("--only", nargs="*", help="특정 계정만 수집")
     p.add_argument("--serve", action="store_true", help="완료 후 웹서버 실행")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument('--acquire', action='store_true', help='팔로워 대비 조회수 기준으로 대본·소스까지 확보')
+    p.add_argument("--port", type=int, default=8775)
     p.add_argument("--host", dest="hosts", action="append", help="명시적 바인드 주소 (여러 번 지정 가능)")
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(fn=cmd_run)
@@ -354,7 +361,7 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(fn=cmd_analyze)
 
     p = sub.add_parser("serve", help="웹페이지 서버")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=int, default=8775)
     p.add_argument("--host", dest="hosts", action="append", help="명시적 바인드 주소 (여러 번 지정 가능)")
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(fn=cmd_serve)
@@ -363,7 +370,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("shortcode", help="Instagram 릴스 shortcode (예: Dcp3P-WyMFe)")
     p.set_defaults(fn=cmd_sources)
 
-    p = sub.add_parser("schedule", help="macOS 매일 자동 수집 일정 관리")
+    p = sub.add_parser("schedule", help="Windows/macOS 매일 수집·자료 확보 일정 관리")
     p.add_argument("action", choices=["install", "status", "uninstall"])
     p.add_argument("--hour", type=int, default=7)
     p.add_argument("--minute", type=int, default=0)

@@ -290,7 +290,7 @@ def test_daily_launch_agent_runs_collection_at_seven(tmp_path: Path):
     settings = Settings(data_dir=tmp_path / "data")
     config = launch_agent_config(settings)
     assert config["StartCalendarInterval"] == {"Hour": 7, "Minute": 0}
-    assert config["ProgramArguments"][-3:] == ["-m", "hotpost", "run"]
+    assert config["ProgramArguments"][-4:] == ["-m", "hotpost", "run", '--acquire']
     assert Path(config["StandardOutPath"]) == settings.data_dir / "daily_collect.log"
     assert config["StandardErrorPath"] == config["StandardOutPath"]
 

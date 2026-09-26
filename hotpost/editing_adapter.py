@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -90,7 +91,8 @@ class AutoCapcutAdapter:
               whisper_model: str = "small",
               video_labels: list[str] | None = None,
               audio_profile: str = "recorded_voice",
-              narration_speed: float = 1.0) -> dict:
+              narration_speed: float = 1.0, edit_style: str = 'house',
+              source_ranges: list | None = None) -> dict:
         if not _JOB_ID.fullmatch(job_id):
             raise ValueError("job_id contains unsupported characters.")
         if not video_paths:
@@ -125,6 +127,9 @@ class AutoCapcutAdapter:
             "whisper_model": whisper_model,
             "audio_profile": audio_profile,
             "narration_speed": narration_speed,
+            'edit_style': edit_style,
+            'source_ranges': source_ranges if source_ranges is not None else [None] * len(videos),
+            'script_sha256': hashlib.sha256(script.read_bytes()).hexdigest() if script else None,
         }
         _atomic_json(request_path, request)
         command = [str(python), "-m", "auto_capcut.job_runner",
@@ -182,7 +187,7 @@ def build_with_voicebench(
     job_dir = settings.editing_dir / job_id
     script_path = job_dir / "words.txt"
     if approved_script_path is None:
-        script_from_transcript(transcript_path, script_path)
+        raise ValueError("rewritten_script_required: PersonalProject1에서 재가공한 대본을 선택하세요.")
     else:
         approved = approved_script_path.expanduser().resolve(strict=True)
         data_root = settings.data_dir.resolve()

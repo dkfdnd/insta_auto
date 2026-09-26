@@ -27,21 +27,23 @@ It does not import VoiceBench or select its engine, reference, quality mode, or
 Seed. The API key is read from `VOICEBENCH_API_KEY` or VoiceBench's ignored
 `.runtime/external-api-key.txt`; it is never written into a job request or log.
 
-The default local URL is `http://127.0.0.1:8877` because insta_auto normally
-uses port 8765. Start VoiceBench on 8877 before synthesis. The intended flow is:
+VoiceBench uses `http://127.0.0.1:8765`, insta_auto uses port 8775, and
+PersonalProject1 uses port 18765. The integrated flow is:
 
-1. Convert transcript `speech` to `words.txt`.
-2. Synthesize that exact file through VoiceBench into
-   `data/editing_jobs/<job_id>/voice.wav`.
-3. Pass selected source videos, `words.txt`, and `voice.wav` to
+1. Send original `speech` and reference video to PersonalProject1 for rewriting.
+2. Select a reviewed rewrite and transformation plan in the production UI.
+3. Synthesize the selected script through VoiceBench into a versioned WAV under
+   `data/productions/<production_id>/`.
+4. Pass selected source videos, scene labels/ranges, script hash, and WAV to
    `AutoCapcutAdapter`.
 
-VoiceBench builds use the `clean_tts` audio profile and default to a modest
-1.12x pitch-preserving tempo. This avoids applying microphone denoise,
+Integrated builds use the `clean_tts` audio profile and 1.0x tempo.
+The legacy helper retains its 1.12x default. This avoids applying microphone denoise,
 podcast color, vocal beautification, and +20dB gain to a clean generated WAV.
 
-`build_with_voicebench` implements those three steps as the application-level
-orchestrator. The orchestration layer depends on both adapters; neither
+`hotpost.production.ProductionManager` persists the entire handoff, revision,
+and resume state. The legacy `build_with_voicebench` helper requires an explicit
+approved script and no longer falls back to original speech. Neither
 VoiceBench nor auto_capcut depends on the other subsystem.
 
 Configuration can be overridden with `HOTPOST_AUTO_CAPCUT_ROOT`,

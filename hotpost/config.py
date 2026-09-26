@@ -25,11 +25,21 @@ class Settings:
     auto_capcut_python: Path = ROOT.parent / "auto_capcut" / ".venv" / (
         "Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     auto_capcut_timeout: int = 7200
-    voicebench_root: Path = ROOT.parent / "VoiceBench"
-    voicebench_url: str = "http://127.0.0.1:8877"
-    voicebench_api_key_file: Path = ROOT.parent / "VoiceBench" / ".runtime" / "external-api-key.txt"
+    voicebench_root: Path = ROOT.parent / "Voice"
+    voicebench_url: str = "http://127.0.0.1:8765"
+    voicebench_api_key_file: Path = ROOT.parent / "Voice" / ".runtime" / "external-api-key.txt"
     voicebench_timeout: int = 14400
     voicebench_poll_interval: float = 5.0
+    studio_url: str = "http://127.0.0.1:18765"
+    studio_api_key_file: Path = ROOT.parent / "PersonalProject1" / "data" / "access-token.txt"
+    studio_timeout: int = 7200
+    acquisition_min_views_per_follower: float = 1.8
+    acquisition_min_views: int = 1000
+    acquisition_daily_limit: int = 5
+
+    @property
+    def production_dir(self) -> Path:
+        return self.data_dir / "productions"
 
     # 수집
     ig_user: str = ""                 # 로그인에 사용할 인스타 아이디 (세션 파일 이름)
