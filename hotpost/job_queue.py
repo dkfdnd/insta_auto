@@ -89,7 +89,8 @@ class JobQueue:
                     path = result.get("zip_path") or result.get("json_path") or ""
                     store.update_job(job_id, status="done", progress=100,
                                      message=(f"소스 영상 {result.get('downloaded', 0)}개 준비 완료"
-                                              if job["kind"] == "source" else "대본 추출 완료"),
+                                              if job["kind"] == "source" else
+                                              "쇼츠 두 버전 제작 완료" if job["kind"] == "production" else "대본 추출 완료"),
                                      result_json=json.dumps(result, ensure_ascii=False),
                                      result_path=path, finished_at=int(time.time()))
                     if job["kind"] == "source" and any("429" in note for note in

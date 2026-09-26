@@ -10,6 +10,14 @@ class CollectError(Exception):
     """한 계정 수집 실패. 전체 파이프라인은 계속 진행한다."""
 
 
+class CollectionBlocked(CollectError):
+    """공통 장애. 추가 계정 요청 없이 실행을 종료한다."""
+
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
 class Collector(Protocol):
     name: str
 

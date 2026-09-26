@@ -40,6 +40,7 @@ class Scored:
     flags: list[str] = field(default_factory=list)
     confidence: str = "high"
     velocity: dict | None = None   # 스냅샷이 2개 이상일 때 시간당 증가량
+    unadjusted_multiplier: float = 1.0
 
 
 def _median(xs: list[float]) -> float | None:
@@ -60,7 +61,7 @@ def score_account(posts: list[Post], settings: Settings, now: int | None = None,
     c = criteria or defaults(settings)
     out: list[Scored] = []
     for p in posts:
-        older = [q for q in posts if q.taken_at < p.taken_at]
+        older = sorted((q for q in posts if q.taken_at < p.taken_at), key=lambda q: q.taken_at, reverse=True)
         same_kind = [q for q in older if q.is_video == p.is_video]
         other_kind = [q for q in older if q.is_video != p.is_video]
         peer_limit = min(30, max(1, settings.posts_per_account))
@@ -75,27 +76,34 @@ def score_account(posts: list[Post], settings: Settings, now: int | None = None,
             base_views = None
 
         age_h = max(0.0, (now - p.taken_at) / 3600.0)
-        maturity = min(1.0, 0.35 + 0.65 * age_h / settings.maturity_hours)
+        maturity = min(1.0, 0.35 + 0.65 * age_h / max(1.0, settings.maturity_hours))
 
         m = maturity if c["maturity"] else 1.0
         r_likes = _ratio(p.likes, base_likes, m) or 1.0
         r_comments = _ratio(p.comments, base_comments, m) or 1.0
         r_views = _ratio(p.views, base_views, m) if p.is_video else None
 
-        if r_views is not None:
-            names = ("wvViews", "wvComments", "wvLikes")
-            ratios = (r_views, r_comments, r_likes)
-        else:
-            names = ("wiLikes", "wiComments")
-            ratios = (r_likes, r_comments)
+        metrics = [("wvViews", r_views, _ratio(p.views, base_views, 1)),
+                   ("wvComments", _ratio(p.comments, base_comments, m), _ratio(p.comments, base_comments, 1)),
+                   ("wvLikes", _ratio(p.likes, base_likes, m), _ratio(p.likes, base_likes, 1))] if p.is_video else [
+                   ("wiLikes", _ratio(p.likes, base_likes, m), _ratio(p.likes, base_likes, 1)),
+                   ("wiComments", _ratio(p.comments, base_comments, m), _ratio(p.comments, base_comments, 1))]
+        # Missing video views must not silently switch to the image weight controls.
+        metrics = [(name, ratio, raw) for name, ratio, raw in metrics if ratio is not None and c[name] > 0]
+        names = [row[0] for row in metrics]
+        ratios = [row[1] for row in metrics]
         total_weight = sum(c[name] for name in names)
         weights = [(ratio, c[name] / total_weight) for ratio, name in zip(ratios, names)]
         log_mult = sum(w * math.log2(max(r, 1e-6)) for r, w in weights)
         multiplier = 2 ** log_mult
+        raw_ratios = [row[2] for row in metrics]
+        unadjusted = 2 ** sum(c[name] / total_weight * math.log2(max(ratio, 1e-6))
+                             for name, ratio in zip(names, raw_ratios))
 
         engagement = (p.likes or 0) + (p.comments or 0) * 5 + (p.views or 0) / 50
         if engagement < c["minEng"] or not peers:
             multiplier = min(multiplier, 1.0)
+            unadjusted = min(unadjusted, 1.0)
 
         if multiplier >= c["t3"]:
             tier = 3
@@ -126,12 +134,13 @@ def score_account(posts: list[Post], settings: Settings, now: int | None = None,
 
         confidence_rank = {"low": 0, "medium": 1, "high": 2}
         gated = (
-            (c["followersMin"] and followers < c["followersMin"])
+            not metrics or not peers or engagement < c["minEng"]
+            or (c["followersMin"] and followers < c["followersMin"])
             or (c["followersMax"] and followers > c["followersMax"])
             or (c["confidence"] != "all" and confidence_rank[confidence] < confidence_rank[c["confidence"]])
             or (c["minRatioViews"] and (r_views is None or r_views < c["minRatioViews"]))
-            or (c["minRatioComments"] and r_comments < c["minRatioComments"])
-            or (c["minRatioLikes"] and r_likes < c["minRatioLikes"])
+            or (c["minRatioComments"] and (p.comments is None or base_comments is None or r_comments < c["minRatioComments"]))
+            or (c["minRatioLikes"] and (p.likes is None or base_likes is None or r_likes < c["minRatioLikes"]))
             or (c["minViews"] and (p.views is None or p.views < c["minViews"]))
             or (c["minComments"] and (p.comments is None or p.comments < c["minComments"]))
             or (c["minLikes"] and (p.likes is None or p.likes < c["minLikes"]))
@@ -158,12 +167,46 @@ def score_account(posts: list[Post], settings: Settings, now: int | None = None,
             post=p,
             baseline={"likes": base_likes, "comments": base_comments, "views": base_views,
                       "peers": len(peers), "same_kind_peers": len(same_kind[:peer_limit]),
+                      "view_peers": sum(q.is_video and q.views is not None for q in peers),
                       "supplemented": supplemented},
             ratios={"likes": r_likes, "comments": r_comments, "views": r_views},
             multiplier=multiplier, tier=tier, rank_score=rank_score, age_hours=age_h, maturity=maturity,
             flags=flags, confidence=confidence, velocity=velocity,
+            unadjusted_multiplier=unadjusted,
         ))
     return out
+
+
+def assessment(scored: Scored, observations: list[dict], now: int, settings: Settings,
+               criteria: dict, updated_at: int | None = None) -> dict:
+    """후보 배수와 실제 관측에 근거한 상대 성과 확인을 구분한다."""
+    reasons = []
+    required = max(settings.min_peers_for_baseline, settings.confirmation_min_peers)
+    if scored.baseline['same_kind_peers'] < required:
+        reasons.append(f"같은 유형 비교 표본 {scored.baseline['same_kind_peers']}/{required}개")
+    if scored.unadjusted_multiplier < criteria['t1'] and scored.tier > 0:
+        reasons.append("신규 게시물 보정으로 기준 통과")
+    if scored.post.likes is None or scored.post.comments is None:
+        reasons.append("반응 지표 누락")
+    last_at = updated_at
+    if scored.post.is_video:
+        good = sorted((o for o in observations if o.get('success') and o.get('views') is not None
+                       and o.get('observed_at') is not None), key=lambda o: o['observed_at'])
+        last_at = good[-1]['observed_at'] if good else None
+        if scored.post.views is None or scored.baseline.get('view_peers', 0) < required:
+            reasons.append("조회수 기준선 부족")
+        if len(good) < 2 or good[-1]['observed_at'] - good[0]['observed_at'] < 3 * 3600:
+            reasons.append("3시간 이상 간격의 후속 조회 필요")
+        if observations and not observations[-1].get('success'):
+            reasons.append("최근 조회 실패")
+    if last_at is None or now - last_at > settings.metric_freshness_hours * 3600:
+        reasons.append("최신 관측 필요")
+    status = 'normal' if scored.tier == 0 else 'provisional' if reasons else 'confirmed'
+    return {'status': status, 'label': {'normal': '일반 게시물', 'provisional': '잠정 후보',
+                                       'confirmed': '성과 확인'}[status],
+            'reasons': reasons, 'last_observed_at': last_at,
+            'unadjusted_multiplier': round(scored.unadjusted_multiplier, 2),
+            'scope': 'account_relative'}
 
 
 def _velocity(snaps: list[dict]) -> dict | None:

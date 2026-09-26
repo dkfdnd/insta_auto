@@ -15,6 +15,7 @@
       <p class="sub" id="meta">데이터를 불러오는 중…</p>
     </div>
     <div class="top-right">
+      <a class="btn" href="studio.html">▣ 제작실</a>
       <span class="badge" id="source-badge"></span>
       <a class="btn ghost" href="accounts.html">👥 모니터링 계정 관리</a>
       <a class="btn ghost" href="production.html">릴스 제작 작업실</a>
@@ -25,7 +26,9 @@
 </header>
 
 <main class="wrap" id="app">
+  <div id="studio-selection" style="position:sticky;top:8px;z-index:20;background:#245f50;color:#fff;border-radius:10px;padding:12px 18px;display:flex;align-items:center;gap:14px;margin-bottom:12px" hidden><b id="studio-selected-count">0개 선택</b><span style="flex:1">선택한 소재를 준비하고 대본부터 검토합니다</span><button class="btn" id="studio-add-selected">제작실에 추가 →</button></div>
   <div id="banner" class="banner" hidden></div>
+  <div id="collection-health" class="banner" role="status">수집 상태 확인 중…</div>
 
   <section class="stats" id="stats"></section>
   <section class="section"><div class="section-head"><h2>팔로워 대비 조회수 · 제작 후보</h2></div>
@@ -69,7 +72,7 @@
         <button data-v="all" class="on">전체</button><button data-v="video">릴스</button><button data-v="image">사진</button>
       </div>
       <select id="tier">
-        <option value="1">🔥 이상 (터진 것만)</option>
+        <option value="1">🔥 이상 (잠정 후보 포함)</option>
         <option value="2">🔥🔥 이상</option>
         <option value="3">🔥🔥🔥 만</option>
         <option value="0">전체 게시물</option>
@@ -80,6 +83,11 @@
         <option value="comments">댓글순</option>
         <option value="likes">좋아요순</option>
         <option value="recent">최신순</option>
+      </select>
+      <select id="assessment" aria-label="판정 상태">
+        <option value="all">모든 판정 상태</option>
+        <option value="confirmed">성과 확인</option>
+        <option value="provisional">잠정 후보</option>
       </select>
       <select id="account"><option value="">모든 계정</option></select>
       <input id="q" type="search" placeholder="캡션·해시태그 검색">

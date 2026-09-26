@@ -64,7 +64,7 @@
         ? `매일 ${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}` :
         schedule.installed ? '자동 수집 로드 실패' : '자동 수집 미등록';
       $('#last-collection').textContent = collection.state === 'running' ? '수집 실행 중' : last ?
-        `${new Date(last.finished_at * 1000).toLocaleString('ko-KR')} · ${collection.state === 'success' ? '성공' : collection.state === 'partial_failure' ? '부분 실패' : '전체 실패'}` : '실행 기록 없음';
+        `${new Date(last.finished_at * 1000).toLocaleString('ko-KR')} · ${collection.state === 'blocked' ? '중단: ' + last.stop_reason : collection.state === 'success' ? '성공' : collection.state === 'partial_failure' ? '부분 실패' : '전체 실패'} · 성공 ${last.accounts_ok} / 실패 ${last.accounts_failed} / 건너뜀 ${last.accounts_skipped || 0}` : '실행 기록 없음';
       $('#last-collection-success').textContent = collection.last_success_at
         ? new Date(collection.last_success_at * 1000).toLocaleString('ko-KR') : '성공 기록 없음';
       $('#next-collection').textContent = schedule.missed_today ? '오늘 7시 수집 누락' : schedule.next_run_at

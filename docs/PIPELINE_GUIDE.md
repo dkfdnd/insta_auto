@@ -18,7 +18,10 @@ VoiceBench는 음성 합성, auto_capcut은 컷·자막·효과를 담당한다.
 insta_auto의 `HOTPOST_STUDIO_URL`, `HOTPOST_STUDIO_API_KEY_FILE`,
 `HOTPOST_VOICEBENCH_URL`, `HOTPOST_VOICEBENCH_API_KEY_FILE`,
 `HOTPOST_AUTO_CAPCUT_ROOT`, `HOTPOST_AUTO_CAPCUT_PYTHON`으로 배포 위치를 변경할 수 있다.
-기본 VoiceBench 폴더명은 `Voice`이다. 키 내용은 설정 문서에 복사하지 않는다.
+이 Windows 작업공간의 폴더명은 `VoiceBench`와 `script_auto`(PersonalProject1)이다.
+대본 API 키 기본 경로는 `../script_auto/data/access-token.txt`이다.
+VoiceBench 코드 기본 포트는 8877이며, 현재 로컬 설정은 위 표의 8765를 사용한다.
+키 내용은 설정 문서에 복사하지 않는다.
 insta_auto의 전용 환경은 `requirements.txt`, auto_capcut은 자기 `requirements.txt`로 설치한다.
 모델·FFmpeg·CapCut 및 로그인 세션은 별도 런타임 전제다.
 
@@ -75,9 +78,32 @@ PersonalProject1은 원본을 다른 관점·상황·설명 순서로 재작성�
 
 Windows/macOS에서 `python -m hotpost schedule install`로 매일 7시 자료 확보 작업을
 등록할 수 있다. 이번 구현 작업에서는 OS 예약을 설치하지 않았다.
-Windows 예약은 한국 시간이며 사용자가 로그인한 세션에서 실행한다. PC가 꺼져 있거나
+Windows 예약은 PC의 현지 시간(현재 한국 시간)이며 사용자가 로그인한 세션에서 실행한다. PC가 꺼져 있거나
 로그아웃 상태이면 정각 실행을 보장하지 않는다. macOS LaunchAgent는 시스템 현지 시간을 사용한다.
 실행 상태 확인은 `python -m hotpost schedule status`, 제거는 `schedule uninstall`이다.
+
+## 2026-09-26 로컬 기능 병합
+
+- 새 통합 경로는 `production.html` / `/api/productions`이며 위의 대본 외부 위임 절차를 따른다.
+- 기존 승인형 편집 화면은 `studio.html` / `/api/studio`로 유지한다. 두 제작실의 작업·승인 상태는
+  아직 통합하지 않았다. 같은 자료를 두 경로에서 동시에 제작하지 않는다.
+- 이전 자동 제작 기록(`state.json`)과 다운로드는 `/api/legacy-productions`로 분리했다.
+  자동 제작 감시를 다시 켜지 않으며, 기존 작업 재시도는 승인형 제작실로 연결된다.
+- 기존 썸네일·블러 마스크·검토된 장면 계획·무료 내보내기 프로필과 자막 전체 폭 설정을 유지했다.
+  이것이 새 통합 화면에서 모든 편집 옵션을 설정할 수 있다는 뜻은 아니다.
+- `source_ranges`와 블러 마스크를 함께 전달하면 마스크의 원본 시간 좌표를 잘라낸 영상 좌표로 변환한다.
+  검토된 장면 계획이 있으면 원본 해시를 보존하기 위해 미리 자르지 않고, 계획의 모든 샷이 선택 구간 안에 있는지 검사한다.
+- Windows 예약 실행의 UTF-8 로그·일시 오류 1회 재시도를 유지하면서 `run --acquire`를 연결했다.
+  설치된 작업 설정이나 실행 중인 서버를 이번 병합에서 재시작하지 않았다.
+
+두 제작실을 하나로 합치는 것은 별도 작업이다. 기존 제작실의 내부 대본 생성 경로를
+폐기하거나 `script_auto`로 이관하는 결정을 Git 병합만으로 대신하지 않는다.
+
+병합 후 로컬 확인: insta_auto 테스트 166개, auto_capcut 테스트 141개 통과.
+VoiceBench의 인증된 `/v1/health`는 200을 반환했다. 반면 script_auto 기본 키 파일은
+없었고, 18765 포트의 비인증 `/api/health`는 404를 반환하여 해당 포트의 프로세스를
+정상 script_auto 서비스로 확인하지 못했다. 올바른 실행 위치·주소·키를 연결하기 전에는
+새 통합 경로의 실제 대본 재가공부터 최종 제작까지 검증 완료로 취급하지 않는다.
 
 ## 유지되는 한계
 

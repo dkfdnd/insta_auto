@@ -108,7 +108,7 @@ def test_cleanup_dry_run_matches_actual_and_preserves_archived_results(tmp_path)
 def test_collection_alerts_schedule_miss_and_schema_version(tmp_path):
     settings = _settings(tmp_path)
     store = Storage(settings.db_path)
-    assert store.conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+    assert store.conn.execute("SELECT version FROM schema_version").fetchone()[0] == 4
     assert store.conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     health = store.record_account_collection("creator", False)
     assert health["consecutive_failures"] == 1

@@ -23,6 +23,9 @@ from .storage import Storage
 from .report import build_report, write_report
 from .criteria import defaults
 from .job_queue import JobQueue
+from .legacy_production import ProductionManager as LegacyProductionManager
+from .studio import Studio
+from .studio_http import StudioHTTP
 from .retention import cleanup_dry_run, cleanup_execute, disk_usage
 from .production import ProductionManager
 
@@ -47,13 +50,18 @@ def make_handler(settings: Settings):
     job_queue = JobQueue(settings)
     manager = SourceJobManager(settings, job_queue)
     transcripts = TranscriptJobManager(settings, job_queue)
+    production = LegacyProductionManager(settings, job_queue)
+    studio = Studio(settings)
+    # Old queued automatic jobs now enter the approval workflow. Legacy results
+    # remain readable; no new background watcher bypasses the approval gates.
+    job_queue.register("production", lambda code, progress: {"studio": studio.create(code)})
     job_queue.resume_queued()
     sessions = PlatformSessionManager(settings)
     accounts = AccountRegistry(settings)
     productions = ProductionManager(settings)
     criteria_lock = threading.Lock()
 
-    class Handler(SimpleHTTPRequestHandler):
+    class Handler(StudioHTTP, SimpleHTTPRequestHandler):
         def log_message(self, *_args) -> None:
             return
 
@@ -93,6 +101,7 @@ def make_handler(settings: Settings):
             return
 
         def do_POST(self) -> None:  # noqa: N802
+            if self.studio_post(studio): return
             path = urlparse(self.path).path
             if path == '/api/productions' or path.startswith('/api/productions/'):
                 try:
@@ -117,6 +126,20 @@ def make_handler(settings: Settings):
                     self._json(result, HTTPStatus.ACCEPTED)
                 except (ValueError, OSError, RuntimeError) as exc:
                     self._json({'error': str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            if path.startswith("/api/legacy-productions/") and path.endswith("/retry"):
+                try:
+                    code = path.split("/")[3]
+                    store = Storage(settings.db_path)
+                    try:
+                        post = store.conn.execute("SELECT kind FROM posts WHERE shortcode=?", (code,)).fetchone()
+                    finally:
+                        store.close()
+                    if not post or post["kind"] not in ("reel", "video"):
+                        raise ValueError("수집된 동영상 게시물을 선택하세요.")
+                    self._json(studio.create(code), HTTPStatus.ACCEPTED)
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if path == "/api/storage/cleanup":
                 try:
@@ -192,6 +215,7 @@ def make_handler(settings: Settings):
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
         def do_GET(self) -> None:  # noqa: N802
+            if self.studio_get(studio): return
             path = urlparse(self.path).path
             if path == '/api/production-health':
                 from .production_health import check
@@ -242,6 +266,30 @@ def make_handler(settings: Settings):
                     self._json(result)
                 except (ValueError, OSError) as exc:
                     self._json({'error': str(exc)}, HTTPStatus.NOT_FOUND)
+                return
+            if path == "/api/legacy-productions":
+                self._json({"enabled": settings.production_enabled, "productions": production.list()}); return
+            if path.startswith("/api/legacy-productions/"):
+                parts = path.strip("/").split("/")
+                try:
+                    code = parts[2]
+                    if len(parts) == 4 and parts[3] == "download":
+                        asset = parse_qs(urlparse(self.path).query).get("asset", [""])[0]
+                        target = production.artifact(code, asset)
+                        if target is None:
+                            self._json({"error": "완료된 결과 파일이 없습니다."}, HTTPStatus.NOT_FOUND); return
+                        self.send_response(HTTPStatus.OK)
+                        self.send_header("Content-Type", mimetypes.guess_type(target.name)[0] or "application/octet-stream")
+                        self.send_header("Content-Disposition", f'attachment; filename="{code}-{asset}{target.suffix}"')
+                        self.send_header("Content-Length", str(target.stat().st_size)); self.end_headers()
+                        with target.open("rb") as stream:
+                            while chunk := stream.read(256 * 1024): self.wfile.write(chunk)
+                        return
+                    if len(parts) != 3:
+                        self.send_error(HTTPStatus.NOT_FOUND); return
+                    self._json(production.public(production.read(code)))
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if path == "/api/accounts":
                 items = accounts.list()
@@ -340,6 +388,9 @@ def make_handler(settings: Settings):
                 public = {k: v for k, v in job.items() if k != "result"}
                 if job["status"] == "done":
                     public["downloaded"] = job["result"]["downloaded"]
+                    public['probe_attempts'] = job['result'].get('probe_attempts', 0)
+                    public['funnel'] = job['result'].get('funnel', {})
+                    public['query_details'] = job['result'].get('query_details', [])
                     public["probed_downloads"] = job["result"].get("probed_downloads", job["result"]["downloaded"])
                     public["quality_counts"] = job["result"].get("quality_counts", {})
                     public["candidates"] = [{k: c.get(k) for k in ("provider", "title", "uploader", "url", "original_url", "platform", "hash_similarity",

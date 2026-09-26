@@ -190,3 +190,43 @@ def test_unclassified_source_requires_explicit_spike_override(tmp_path):
     with pytest.raises(ValueError, match="manual review"):
         selected_source_videos(manifest)
     assert selected_source_videos(manifest, allow_unclassified=True) == [video]
+
+
+def test_visual_contract_is_explicit_and_rejects_old_runner_response(tmp_path):
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    video = settings.data_dir / "video.mp4"
+    image = settings.data_dir / "image.png"
+    video.touch()
+    image.touch()
+    def fake_run(command, **kwargs):
+        request = json.loads(Path(command[-3]).read_text(encoding="utf-8"))
+        assert request["contract_version"] == "1.1"
+        assert request["thumbnail"]["image_path"] == str(image)
+        assert request["watermark_masks"] == []
+        Path(command[-1]).write_text(json.dumps({"contract_version": "1.0",
+            "job_id": request["job_id"], "status": "completed"}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+    with pytest.raises(RuntimeError, match="incompatible"):
+        AutoCapcutAdapter(settings, runner=fake_run).build(
+            job_id="visual", video_paths=[video], draft_name="visual",
+            thumbnail={"image_path": str(image), "text": "백팩", "provider": "google_flow", "reviewed": True})
+
+
+def test_editorial_plan_uses_versioned_process_boundary(tmp_path):
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    video = settings.data_dir / "video.mp4"
+    video.touch()
+    plan = {"version": "1.0", "reviewed": True, "shots": [], "beats": []}
+    def fake_run(command, **kwargs):
+        request = json.loads(Path(command[-3]).read_text(encoding="utf-8"))
+        assert request["contract_version"] == "1.2"
+        assert request["editorial_plan"] == plan
+        assert request["watermark_masks"] == []
+        Path(command[-1]).write_text(json.dumps({"contract_version": "1.2",
+            "job_id": request["job_id"], "status": "blocked"}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 2, stdout="", stderr="")
+    assert AutoCapcutAdapter(settings, runner=fake_run).build(
+        job_id="evidence", video_paths=[video], draft_name="evidence",
+        editorial_plan=plan)["status"] == "blocked"

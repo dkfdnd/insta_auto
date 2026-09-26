@@ -2,14 +2,34 @@
 from __future__ import annotations
 
 import json
+import io
 import os
+import shutil
 import time
+import uuid
+import wave
 from pathlib import Path
 from typing import Callable
 
 import requests
 
 from .config import Settings
+
+
+def verify_wav(payload: bytes) -> dict:
+    """Reject header-only, truncated and zero-duration synthesis responses."""
+    try:
+        with wave.open(io.BytesIO(payload), 'rb') as audio:
+            frames, rate = audio.getnframes(), audio.getframerate()
+            channels, width = audio.getnchannels(), audio.getsampwidth()
+            if frames <= 0 or rate <= 0 or channels <= 0 or width <= 0:
+                raise ValueError('empty audio')
+            if len(audio.readframes(frames)) != frames * channels * width:
+                raise ValueError('truncated audio')
+            return {'duration': frames / rate, 'sample_rate': rate,
+                    'channels': channels, 'sample_width': width}
+    except (wave.Error, EOFError, ValueError) as exc:
+        raise RuntimeError('VoiceBench returned an invalid WAV payload.') from exc
 
 
 class VoiceBenchAdapter:
@@ -129,11 +149,12 @@ class VoiceBenchAdapter:
                 f"VoiceBench audio download failed for request {request_id}."
             ) from exc
         payload = audio.content
-        if len(payload) < 44 or payload[:4] != b"RIFF" or payload[8:12] != b"WAVE":
-            raise RuntimeError("VoiceBench returned an invalid WAV payload.")
+        audio_info = verify_wav(payload)
         temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
         try:
             temporary.write_bytes(payload)
+            if target.is_file():
+                shutil.copy2(target, target.with_name(f'{target.stem}.backup-{uuid.uuid4().hex[:12]}.wav'))
             os.replace(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
@@ -141,6 +162,7 @@ class VoiceBenchAdapter:
             "voicebench_request_id": request_id,
             "status": "succeeded",
             "output_path": str(target),
+            "audio": audio_info,
             "quality_control": status.get("quality_control"),
             "speech_plan": status.get("speech_plan"),
             "reused": bool(submitted.get("reused")),

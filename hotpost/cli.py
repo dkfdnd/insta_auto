@@ -99,83 +99,122 @@ def cmd_login(settings: Settings, args) -> int:
     except CollectError as e:
         _log(f"로그인 실패: {e}")
         return 1
-    _log(f"세션 저장 완료: {f}")
+    _log(f"{'브라우저 수집 준비 완료' if args.browser == 'dedicated' else '세션 저장 완료'}: {f}")
     _log("이제 `python -m hotpost run` 으로 실제 데이터를 수집할 수 있습니다.")
     return 0
 
 
 def collect(settings: Settings, store: Storage, source: str, usernames: list[str]) -> tuple[int, int, int, list[str]]:
     from .collectors import get_collector
-    from .collectors.base import CollectError
-    collector = get_collector(source, settings)
+    from .collectors.base import CollectError, CollectionBlocked
+    collector = None
+    stop_reason = ""
     ok = failed = total = 0
     notes: list[str] = []
     started = int(time.time())
     run_id = store.start_run(started, source)
-    for i, name in enumerate(usernames, 1):
-        account_started = time.monotonic()
-        _log(f"[{i}/{len(usernames)}] @{name} 수집 중...")
-        try:
-            existing = {p.shortcode: p for p in store.posts_for(name, limit=settings.posts_per_account * 2)}
-            tracked = store.tracked_hot_posts(name, limit=settings.hot_view_tracking_limit)
-            profile, posts, observations = collector.fetch(name, settings.collect_posts_per_account, existing=existing)
-            fresh_codes = {post.shortcode for post in posts}
-            tracked_extra = [post for post in tracked if post.shortcode not in fresh_codes]
-            if tracked_extra and hasattr(collector, "refresh_video_views"):
-                observations.extend(collector.refresh_video_views(tracked_extra, settings.hot_view_tracking_limit))
-                posts.extend(tracked_extra)
-                _log(f"    터진 릴스 조회수 추적 {len(tracked_extra)}개")
-        except CollectError as e:
-            failed += 1
-            health = store.record_account_collection(name, False, "수집 오류")
-            if health["consecutive_failures"] >= 3:
-                store.notify("collection_failures", f"fail-{name}-{health['consecutive_failures']}",
-                             f"@{name} 연속 수집 실패 {health['consecutive_failures']}회")
-            if any(word in str(e).lower() for word in ("session", "세션", "login", "로그인")):
-                store.notify("instagram_session", f"session-{int(time.time()) // 86400}",
-                             "Instagram 세션을 확인해 주세요")
-            notes.append(f"@{name}: {e}")
-            _log(f"    실패: {e}")
+    try:
+        collector = get_collector(source, settings)
+        if hasattr(collector, "preflight"):
+            collector.preflight()
+    except Exception as exc:
+        reason = getattr(exc, "reason", "initialization_error")
+        message = str(exc) if isinstance(exc, CollectError) else type(exc).__name__
+        notes.append(f"수집 전 점검 중단 [{reason}]: {message}")
+        store.finish_run(run_id, 0, 0, 0, "\n".join(notes), skipped=len(usernames), stop_reason=reason)
+        store.notify("collection_blocked", f"blocked-{run_id}", notes[-1])
+        _log(notes[-1])
+        if collector and hasattr(collector, "close"):
+            collector.close()
+        return 0, 0, 0, notes
+    try:
+        for i, name in enumerate(usernames, 1):
+            account_started = time.monotonic()
+            _log(f"[{i}/{len(usernames)}] @{name} 수집 중...")
+            try:
+                existing = {p.shortcode: p for p in store.posts_for(name, limit=max(settings.collect_recovery_limit, settings.posts_per_account * 2))}
+                tracked = store.tracked_hot_posts(name, limit=settings.hot_view_tracking_limit)
+                target = min(31, settings.posts_per_account + 1)
+                fetch_limit = (max(settings.collect_posts_per_account, target)
+                               if len(existing) < target else settings.collect_posts_per_account)
+                profile, posts, observations = collector.fetch(name, fetch_limit, existing=existing)
+                fresh_codes = {post.shortcode for post in posts}
+                tracked_extra = [post for post in tracked if post.shortcode not in fresh_codes]
+                rotating = store.recent_view_candidates(name, settings.hot_view_tracking_days,
+                                                        fresh_codes | {p.shortcode for p in tracked_extra},
+                                                        settings.recent_views_lookup_limit)
+                if hasattr(collector, "refresh_video_views") and not any(o.http_status == 429 for o in observations):
+                    if tracked_extra:
+                        observations.extend(collector.refresh_video_views(tracked_extra, settings.hot_view_tracking_limit))
+                        posts.extend(tracked_extra)
+                    if rotating and not any(o.http_status == 429 for o in observations):
+                        observations.extend(collector.refresh_video_views(rotating, settings.recent_views_lookup_limit))
+                        posts.extend(rotating)
+                for note in getattr(collector, "collection_notes", []):
+                    notes.append(f"@{name}: {note}")
+            except CollectionBlocked as e:
+                failed += 1
+                stop_reason = e.reason
+                store.record_account_collection(name, False, e.reason)
+                notes.append(f"@{name}: 공통 장애 [{e.reason}] {e}")
+                store.notify("collection_blocked", f"blocked-{run_id}", notes[-1])
+                _log(notes[-1])
+                break
+            except CollectError as e:
+                failed += 1
+                health = store.record_account_collection(name, False, "수집 오류")
+                if health["consecutive_failures"] >= 3:
+                    store.notify("collection_failures", f"fail-{name}-{health['consecutive_failures']}",
+                                 f"@{name} 연속 수집 실패 {health['consecutive_failures']}회")
+                if any(word in str(e).lower() for word in ("session", "세션", "login", "로그인")):
+                    store.notify("instagram_session", f"session-{int(time.time()) // 86400}",
+                                 "Instagram 세션을 확인해 주세요")
+                notes.append(f"@{name}: {e}")
+                _log(f"    실패: {e}")
+                _operational_event(
+                    settings,
+                    f"계정 수집 실패 username=@{name} elapsed_ms={int((time.monotonic() - account_started) * 1000)} "
+                    f"error_type={type(e).__name__} error={_safe_log_text(e)}",
+                )
+                _sleep_after_account(settings, source, name, "failure", i < len(usernames))
+                continue
+            except Exception as e:  # noqa: BLE001
+                failed += 1
+                store.record_account_collection(name, False, type(e).__name__)
+                notes.append(f"@{name}: 예기치 못한 오류 {type(e).__name__}: {e}")
+                _log(f"    실패(예외): {type(e).__name__}: {e}")
+                _operational_event(
+                    settings,
+                    f"계정 수집 실패 username=@{name} elapsed_ms={int((time.monotonic() - account_started) * 1000)} "
+                    f"error_type={type(e).__name__} error={_safe_log_text(e)}",
+                )
+                _sleep_after_account(settings, source, name, "failure", i < len(usernames))
+                continue
+            prior_missing = store.account_observation_health(name)["views_missing_rate"]
+            store.upsert_profile(profile)
+            store.upsert_posts(posts, observations=observations)
+            store.record_account_collection(name, True)
+            if any(o.http_status == 429 for o in observations):
+                store.notify("instagram_429", f"429-{name}-{int(time.time()) // 86400}",
+                             f"@{name} Instagram 조회 요청이 429 제한을 받았습니다")
+            current_missing = store.account_observation_health(name)["views_missing_rate"]
+            if current_missing >= .3 and current_missing - prior_missing >= .15:
+                store.notify("views_missing_spike", f"missing-{name}-{int(time.time()) // 86400}",
+                             f"@{name} 조회수 누락률이 {round(current_missing * 100)}%로 증가했습니다")
+            ok += 1
+            total += len(posts)
+            _log(f"    {len(posts)}개 게시물 (팔로워 {profile.followers:,})")
             _operational_event(
                 settings,
-                f"계정 수집 실패 username=@{name} elapsed_ms={int((time.monotonic() - account_started) * 1000)} "
-                f"error_type={type(e).__name__} error={_safe_log_text(e)}",
+                f"계정 수집 성공 username=@{name} elapsed_ms={int((time.monotonic() - account_started) * 1000)} "
+                f"posts={len(posts)} observations={len(observations)}",
             )
-            _sleep_after_account(settings, source, name, "failure", i < len(usernames))
-            continue
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            store.record_account_collection(name, False, type(e).__name__)
-            notes.append(f"@{name}: 예기치 못한 오류 {type(e).__name__}: {e}")
-            _log(f"    실패(예외): {type(e).__name__}: {e}")
-            _operational_event(
-                settings,
-                f"계정 수집 실패 username=@{name} elapsed_ms={int((time.monotonic() - account_started) * 1000)} "
-                f"error_type={type(e).__name__} error={_safe_log_text(e)}",
-            )
-            _sleep_after_account(settings, source, name, "failure", i < len(usernames))
-            continue
-        prior_missing = store.account_observation_health(name)["views_missing_rate"]
-        store.upsert_profile(profile)
-        store.upsert_posts(posts, observations=observations)
-        store.record_account_collection(name, True)
-        if any(o.http_status == 429 for o in observations):
-            store.notify("instagram_429", f"429-{name}-{int(time.time()) // 86400}",
-                         f"@{name} Instagram 조회 요청이 429 제한을 받았습니다")
-        current_missing = store.account_observation_health(name)["views_missing_rate"]
-        if current_missing >= .3 and current_missing - prior_missing >= .15:
-            store.notify("views_missing_spike", f"missing-{name}-{int(time.time()) // 86400}",
-                         f"@{name} 조회수 누락률이 {round(current_missing * 100)}%로 증가했습니다")
-        ok += 1
-        total += len(posts)
-        _log(f"    {len(posts)}개 게시물 (팔로워 {profile.followers:,})")
-        _operational_event(
-            settings,
-            f"계정 수집 성공 username=@{name} elapsed_ms={int((time.monotonic() - account_started) * 1000)} "
-            f"posts={len(posts)} observations={len(observations)}",
-        )
-        _sleep_after_account(settings, source, name, "success", i < len(usernames))
-    store.finish_run(run_id, ok, failed, total, "\n".join(notes))
+            _sleep_after_account(settings, source, name, "success", i < len(usernames))
+    finally:
+        if collector and hasattr(collector, "close"):
+            collector.close()
+    store.finish_run(run_id, ok, failed, total, "\n".join(notes),
+                     skipped=len(usernames)-ok-failed, stop_reason=stop_reason)
     if failed:
         store.notify("collection_run", f"run-{started}",
                      f"수집 {'전체 실패' if ok == 0 else '부분 실패'} · 성공 {ok}계정 / 실패 {failed}계정")
@@ -239,7 +278,7 @@ def _cmd_run_locked(settings: Settings, args) -> int:
             return 1
     if args.serve:
         return cmd_serve(settings, args)
-    return 0
+    return 1 if failed or (store.last_run() or {}).get('stop_reason') else 0
 
 
 def cmd_schedule(settings: Settings, args) -> int:
@@ -282,7 +321,9 @@ def cmd_analyze(settings: Settings, args) -> int:
     store = Storage(settings.db_path)
     last = store.last_run()
     source = (last or {}).get("source") or "unknown"
-    report = build_report(settings, store, source=source, usernames=AccountRegistry(settings).usernames())
+    report = build_report(settings, store, source=source,
+                          notes=((last or {}).get('notes') or '').splitlines(),
+                          usernames=AccountRegistry(settings).usernames())
     write_report(settings, report)
     _log(f"리포트 재생성: 핫 {report['summary']['hot']} / 전체 {report['summary']['posts']}")
     return 0
@@ -339,7 +380,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("run", help="수집 + 분석 + 리포트")
-    p.add_argument("--source", default="web", choices=["web", "instaloader", "demo"])
+    p.add_argument("--source", default=None, choices=["browser", "web", "instaloader", "demo"])
     p.add_argument("--only", nargs="*", help="특정 계정만 수집")
     p.add_argument("--serve", action="store_true", help="완료 후 웹서버 실행")
     p.add_argument('--acquire', action='store_true', help='팔로워 대비 조회수 기준으로 대본·소스까지 확보')
@@ -350,7 +391,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("login", help="인스타 로그인 세션 저장")
     p.add_argument("--user", help="인스타 아이디")
-    p.add_argument("--browser", help="chrome / firefox / safari / edge 등 브라우저 쿠키에서 가져오기")
+    p.add_argument("--browser", default="dedicated", help="기본 dedicated: 수집과 같은 전용 Chrome / chrome, firefox, edge: 레거시 웹 수집용 쿠키 가져오기")
     p.set_defaults(fn=cmd_login)
 
     p = sub.add_parser("import", help="브라우저 덤프 JSON 가져오기")
@@ -381,4 +422,6 @@ def main(argv: list[str] | None = None) -> None:
 
     args = ap.parse_args(argv)
     settings = load_settings()
+    if args.cmd == "run" and args.source is None:
+        args.source = settings.collection_source
     sys.exit(args.fn(settings, args))

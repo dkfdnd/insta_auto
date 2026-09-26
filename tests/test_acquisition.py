@@ -70,8 +70,9 @@ def test_windows_schedule_status_is_read_only(monkeypatch):
     monkeypatch.setattr(scheduler.sys, 'platform', 'win32')
     calls = []
     def run(args, **kwargs):
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0, windows_task_xml(), '')
+        import json
+        calls.append(json.loads(kwargs['input']))
+        return subprocess.CompletedProcess(args, 0, '{"hour":7,"installed":true}', '')
     monkeypatch.setattr(scheduler.subprocess, 'run', run)
     assert scheduler.schedule_status()['hour'] == 7
-    assert len(calls) == 1 and '/Query' in calls[0]
+    assert len(calls) == 1 and calls[0]['action'] == 'status'

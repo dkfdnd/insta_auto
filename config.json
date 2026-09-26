@@ -8,5 +8,7 @@
   "sleep_between_accounts": 4.0,
   "sleep_between_accounts_max": 9.0,
   "sleep_after_error_min": 20.0,
-  "sleep_after_error_max": 45.0
+  "sleep_after_error_max": 45.0,
+  "voicebench_url": "http://127.0.0.1:8765",
+  "production_enabled": true
 }

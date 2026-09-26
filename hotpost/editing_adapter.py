@@ -78,6 +78,30 @@ class AutoCapcutAdapter:
         self.settings = settings
         self.runner = runner or subprocess.run
 
+    def export(self, *, job_id: str, draft_name: str, draft_path: Path) -> dict:
+        if not _JOB_ID.fullmatch(job_id):
+            raise ValueError("Invalid export job ID")
+        job_dir = self.settings.editing_dir / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        request_path, result_path = job_dir / "export-request.json", job_dir / "export-result.json"
+        output = job_dir / "shorts.mp4"
+        request = {"job_id": job_id, "draft_name": draft_name, "draft_path": str(draft_path.resolve()),
+                   "output_path": str(output.resolve())}
+        _atomic_json(request_path, request)
+        command = [str(self.settings.auto_capcut_python.resolve()), "-X", "utf8", "-m", "auto_capcut.export_runner",
+                   "--request", str(request_path), "--result", str(result_path)]
+        proc = self.runner(command, cwd=str(self.settings.auto_capcut_root), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=1500, check=False)
+        (job_dir / "export.log").write_text((proc.stdout or "") + (proc.stderr or ""), encoding="utf-8")
+        if not result_path.is_file():
+            raise RuntimeError("CapCut 내보내기 결과 응답이 없습니다.")
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        if result.get("job_id") != job_id or result.get("status") != "completed":
+            raise RuntimeError(result.get("message") or "CapCut 내보내기가 완료되지 않았습니다.")
+        if not output.is_file() or output.stat().st_size < 1024 or not result.get("verified"):
+            raise RuntimeError("내보낸 영상 파일이 검증되지 않았습니다.")
+        return {**result, "video_path": str(output)}
+
     def _asset(self, value: Path | str, label: str) -> Path:
         path = Path(value).expanduser().resolve(strict=True)
         data_root = self.settings.data_dir.resolve()
@@ -91,8 +115,12 @@ class AutoCapcutAdapter:
               whisper_model: str = "small",
               video_labels: list[str] | None = None,
               audio_profile: str = "recorded_voice",
-              narration_speed: float = 1.0, edit_style: str = 'house',
-              source_ranges: list | None = None) -> dict:
+              narration_speed: float = 1.0, edit_style: str = "house",
+              source_ranges: list | None = None,
+              export_profile: str = "standard",
+              thumbnail: dict | None = None,
+              watermark_masks: list[dict] | None = None,
+              editorial_plan: dict | None = None) -> dict:
         if not _JOB_ID.fullmatch(job_id):
             raise ValueError("job_id contains unsupported characters.")
         if not video_paths:
@@ -104,6 +132,18 @@ class AutoCapcutAdapter:
             raise ValueError("video_labels must match video_paths.")
         voice = self._asset(voice_path, "voice") if voice_path else None
         script = self._asset(script_path, "script") if script_path else None
+        if thumbnail is not None:
+            if not isinstance(thumbnail, dict):
+                raise ValueError("thumbnail must be an object")
+            thumbnail = {**thumbnail, "image_path": str(self._asset(
+                thumbnail.get("image_path", ""), "thumbnail"))}
+        version = "1.1" if thumbnail is not None or watermark_masks is not None else CONTRACT_VERSION
+        if editorial_plan is not None:
+            version = "1.2"
+        if export_profile not in {"standard", "free"}:
+            raise ValueError("Unsupported export profile")
+        if export_profile == "free":
+            version = "1.3"
         python = self.settings.auto_capcut_python.resolve()
         repo = self.settings.auto_capcut_root.resolve()
         if not python.is_file():
@@ -117,7 +157,7 @@ class AutoCapcutAdapter:
         result_path = job_dir / "result.json"
         log_path = job_dir / "runner.log"
         request = {
-            "contract_version": CONTRACT_VERSION,
+            "contract_version": version,
             "job_id": job_id,
             "video_paths": [str(path) for path in videos],
             "video_labels": labels,
@@ -131,6 +171,12 @@ class AutoCapcutAdapter:
             'source_ranges': source_ranges if source_ranges is not None else [None] * len(videos),
             'script_sha256': hashlib.sha256(script.read_bytes()).hexdigest() if script else None,
         }
+        if version in {"1.1", "1.2", "1.3"}:
+            request.update(thumbnail=thumbnail, watermark_masks=watermark_masks or [])
+        if export_profile == "free":
+            request["export_profile"] = "free"
+        if editorial_plan is not None:
+            request["editorial_plan"] = editorial_plan
         _atomic_json(request_path, request)
         command = [str(python), "-m", "auto_capcut.job_runner",
                    "--request", str(request_path), "--result", str(result_path)]
@@ -144,7 +190,7 @@ class AutoCapcutAdapter:
                                timeout=self.settings.auto_capcut_timeout, check=False)
         except subprocess.TimeoutExpired as exc:
             result = {
-                "contract_version": CONTRACT_VERSION,
+                "contract_version": version,
                 "job_id": job_id,
                 "status": "failed",
                 "error_code": "timeout",
@@ -162,7 +208,7 @@ class AutoCapcutAdapter:
                 f"auto_capcut exited with {proc.returncode} without result.json."
             )
         result = json.loads(result_path.read_text(encoding="utf-8"))
-        if result.get("contract_version") != CONTRACT_VERSION \
+        if result.get("contract_version") != version \
                 or result.get("job_id") != job_id:
             raise RuntimeError("auto_capcut returned an incompatible result.")
         if result.get("status") not in {"completed", "blocked", "failed"}:
@@ -177,6 +223,9 @@ def build_with_voicebench(
     video_labels: list[str] | None = None,
     allow_unclassified_sources: bool = False,
     narration_speed: float = 1.12,
+    thumbnail: dict | None = None,
+    watermark_masks: list[dict] | None = None,
+    editorial_plan: dict | None = None,
     voicebench=None, auto_capcut: AutoCapcutAdapter | None = None,
     progress: Callable[[str, int], None] | None = None,
 ) -> dict:
@@ -215,6 +264,9 @@ def build_with_voicebench(
         video_labels=video_labels,
         audio_profile="clean_tts",
         narration_speed=narration_speed,
+        thumbnail=thumbnail,
+        watermark_masks=watermark_masks,
+        editorial_plan=editorial_plan,
     )
     return {
         **result,

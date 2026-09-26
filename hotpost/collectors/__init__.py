@@ -5,6 +5,9 @@ __all__ = ["Collector", "CollectError", "get_collector"]
 
 def get_collector(name: str, settings):
     """이름으로 수집기 선택. 새 수집기를 추가하려면 여기에 등록하면 된다."""
+    if name == "browser":
+        from .browser import BrowserCollector
+        return BrowserCollector(settings)
     if name == "instaloader":
         from .instaloader_collector import InstaloaderCollector
         return InstaloaderCollector(settings)

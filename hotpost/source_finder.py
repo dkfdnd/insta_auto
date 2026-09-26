@@ -27,6 +27,8 @@ from PIL import Image, ImageOps
 
 from .config import Settings
 from .storage import Storage
+from .source_urls import video_url, canonical_video_key
+from .source_queries import product_query_plan, platform_queries, clean_terms
 from .source_quality import (platform_of, round_robin_candidates, sha256_file,
                              relevance_reasons, reuse_reasons, select_valid_candidates)
 
@@ -114,6 +116,8 @@ class Candidate:
     text_frame_ratio: float | None = None
     caption_frame_ratio: float | None = None
     watermark_frame_ratio: float | None = None
+    ocr_languages: list[str] | None = None
+    ocr_unreadable_frame_ratio: float | None = None
     source_score: float | None = None
     platform: str = "other"
     video_meta: dict | None = None
@@ -130,7 +134,8 @@ class Candidate:
 
 
 def _run(args: list[str], timeout: int = 180) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    return subprocess.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                          timeout=timeout, check=False)
 
 
 def _safe_name(text: str, limit: int = 70) -> str:
@@ -151,6 +156,12 @@ def _post(settings: Settings, shortcode: str):
 
 def _download_reference(settings: Settings, post, out: Path) -> Path:
     """저장된 Instagram 세션으로 공개 게시물의 기준 영상을 받는다."""
+    for cached in sorted(settings.source_dir.glob(f'{post.shortcode}-*/reference.mp4'), reverse=True):
+        if cached != out and 0 < cached.stat().st_size <= settings.source_max_file_mb * 1024 * 1024:
+            meta = probe_video(cached)
+            if (meta.get('duration') or 0) > 0 and meta.get('width'):
+                shutil.copy2(cached, out)
+                return out
     from .collectors.web_graphql import WebGraphQLCollector
 
     if not post.media_id:
@@ -236,6 +247,18 @@ def extract_frames(video: Path, frame_dir: Path, prefix: str = "frame", max_fram
     if result.returncode:
         raise RuntimeError(f"프레임 추출 실패: {result.stderr[-300:]}")
     files = sorted(frame_dir.glob(f"{prefix}_*.jpg"))
+    # 짧게 등장하는 장면도 검색 근거로 남긴다. 출력 수와 실행 시간을 제한한다.
+    scene_pattern = str(frame_dir / f'{prefix}_scene_%03d.jpg')
+    try:
+        scene_result = _run([ffmpeg, '-hide_banner', '-loglevel', 'error', '-i', str(video),
+                            '-vf', "select='gt(scene,0.3)',scale=480:-2", '-fps_mode', 'vfr',
+                            '-frames:v', '4', '-q:v', '3', scene_pattern], timeout=90)
+        scene_files = sorted(frame_dir.glob(f'{prefix}_scene_*.jpg')) if scene_result.returncode == 0 else []
+    except subprocess.TimeoutExpired:
+        scene_files = []
+    # 균등 샘플과 장면 변화 샘플이 각각 자리를 확보하도록 섞는다.
+    from itertools import zip_longest
+    files = [path for pair in zip_longest(files, scene_files) for path in pair if path is not None]
     unique: list[Path] = []
     hashes: list[int] = []
     for path in files:
@@ -297,6 +320,7 @@ class OpenClipVerifier:
         self.error = ""
         self.product_evidence: list[dict] = []
         self.last_embedding = None
+        self.subject_reference_indices: list[int] = []
         if not settings.source_use_openclip:
             return
         try:
@@ -304,7 +328,7 @@ class OpenClipVerifier:
             import open_clip
             self.open_clip = open_clip
             self.torch = torch
-            self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+            self.device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
             self.model, _, self.preprocess = open_clip.create_model_and_transforms(
                 settings.source_openclip_model, pretrained=settings.source_openclip_pretrained,
                 cache_dir=str(settings.source_model_dir), device=self.device,
@@ -339,8 +363,33 @@ class OpenClipVerifier:
         self.last_embedding /= self.last_embedding.norm()
         matrix = self.reference @ features.T
         best = matrix.max(dim=1).values
-        top = best.topk(min(3, best.numel())).values.mean().item()
+        top = (best.mean() if self.subject_reference_indices else
+               best.topk(min(3, best.numel())).values.mean()).item()
         return round(max(0.0, min(1.0, top)), 4)
+
+    def focus_subject(self, products: list[dict]) -> None:
+        """Compare against product frames, not a matching celebrity in the hook."""
+        if not self.available:
+            return
+        subjects = [p['en'] for p in products if p.get('en') and
+                    set(p.get('sources', [])) & {'caption', 'speech', 'screen_text'}]
+        if not subjects:
+            return
+        prompts = [f'a close up product demonstration of {s}' for s in subjects]
+        prompts += ['a celebrity man at an airport', 'a person sitting in an airplane',
+                    'a portrait of a person talking', 'a landscape or building']
+        tokenizer = self.open_clip.get_tokenizer(self.settings.source_openclip_model)
+        with self.torch.no_grad():
+            features = self.model.encode_text(tokenizer(prompts).to(self.device))
+            features /= features.norm(dim=-1, keepdim=True)
+            matrix = self.reference @ features.T
+            subject = matrix[:, :len(subjects)].max(dim=1).values.tolist()
+            background = matrix[:, len(subjects):].max(dim=1).values.tolist()
+        from .source_quality import subject_frame_indices
+        indices = subject_frame_indices(subject, background)
+        if indices:
+            self.reference = self.reference[indices]
+            self.subject_reference_indices = indices
 
     def discover_product_queries(self, count: int = 2) -> list[str]:
         """기준 장면과 가까운 상품 개념을 골라 영어·중국어 검색어 쌍을 만든다."""
@@ -398,7 +447,7 @@ def build_queries(caption: str) -> list[str]:
 
 def _clean_visual_terms(terms: list[str]) -> list[str]:
     generic = {"text in image", "person", "people", "human", "car", "vehicle", "video", "image", "photo"}
-    return [term.strip() for term in dict.fromkeys(terms)
+    return [term.strip() for term in clean_terms(terms)
             if term.strip() and term.strip().lower() not in generic and len(term.strip()) >= 3]
 
 
@@ -416,33 +465,8 @@ def _transcript_evidence(settings: Settings, shortcode: str) -> dict[str, str]:
 
 def build_grounded_queries(caption: str, visual_queries: list[str], vision_terms: list[str],
                            transcript: dict[str, str]) -> list[dict]:
-    """캡션·시각·화면 글자·실제 음성의 생성 근거를 검색어별로 남긴다."""
-    sources = {"caption": caption, "vision": " ".join(_clean_visual_terms(vision_terms)),
-               "screen_text": transcript.get("screen_text", ""), "speech": transcript.get("speech", "")}
-    grounded = []
-    roles = {"차문": "place", "주방": "place", "캠핑": "place", "소파": "place",
-             "컵홀더": "product", "홀더": "shape", "수납": "behavior", "청소": "behavior"}
-    for word, (english, chinese) in KO_EN_ZH.items():
-        if english in {"car", "drink", "coffee", "sofa", "shellfish"}:
-            continue
-        evidence = [name for name, body in sources.items() if word in body]
-        if len(evidence) >= 2:
-            for query in (english, chinese):
-                grounded.append({"query": query, "sources": evidence, "confidence": "high",
-                                 "role": roles.get(word, "product")})
-    for query in visual_queries:
-        evidence = ["openclip"]
-        if any(word in caption.lower() for word in query.lower().split() if len(word) >= 4):
-            evidence.append("caption")
-        grounded.append({"query": query, "sources": evidence,
-                         "confidence": "high" if len(evidence) >= 2 else "medium", "role": "product"})
-    if not grounded:
-        grounded = [{"query": query, "sources": ["caption"], "confidence": "low", "role": "fallback"}
-                    for query in build_queries(caption)]
-    deduped = {}
-    for item in grounded:
-        deduped.setdefault(item["query"], item)
-    return list(deduped.values())[:16]
+    """제품 근거를 유지하면서 영어·중국어·한국어 검색 의도를 배분한다."""
+    return product_query_plan(caption, visual_queries, vision_terms, transcript, build_queries(caption))['query_details']
 
 
 def _yt_cookie_args(cookie_file: Path | None) -> list[str]:
@@ -456,13 +480,14 @@ def search_youtube(queries: list[str], limit: int, cookie_file: Path | None = No
         return []
     out: list[Candidate] = []
     # 영어/중국어 검색이 글로벌 제품 소스에 가장 잘 맞는다.
-    english_queries = [query for query in queries if re.search(r"[A-Za-z]", query)
-                       and not re.search(r"[\u3400-\u9fff]", query)]
-    for query in (english_queries[:3] or queries[:1]):
+    for query in platform_queries(queries, 'youtube', 4):
         count = min(6, max(2, limit - len(out)))
         suffix = " shorts" if not re.search(r"[\u3400-\u9fff]", query) else ""
-        result = _run([ytdlp, *_yt_cookie_args(cookie_file), "--flat-playlist", "--dump-single-json",
-                       "--no-warnings", f"ytsearch{count}:{query}{suffix}"], timeout=90)
+        try:
+            result = _run([ytdlp, *_yt_cookie_args(cookie_file), "--flat-playlist", "--dump-single-json",
+                           "--no-warnings", f"ytsearch{count}:{query}{suffix}"], timeout=90)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
         try:
             entries = json.loads(result.stdout).get("entries") or []
         except (json.JSONDecodeError, AttributeError):
@@ -496,7 +521,7 @@ def search_web(queries: list[str], limit: int) -> list[Candidate]:
             continue
         for href, title in re.findall(r'class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', r.text, re.S):
             url = _unwrap_ddg(html.unescape(href))
-            if not any(host in urlparse(url).netloc.lower() for host in VIDEO_HOSTS):
+            if not video_url(url):
                 continue
             out.append(Candidate(url=url, provider=urlparse(url).netloc, title=re.sub("<.*?>", "", html.unescape(title)), query=query))
             if len(out) >= limit:
@@ -520,7 +545,7 @@ def search_bing(queries: list[str], limit: int) -> list[Candidate]:
             if not match:
                 continue
             url, title = html.unescape(match.group(1)), re.sub("<.*?>", "", html.unescape(match.group(2)))
-            if any(host in urlparse(url).netloc.lower() for host in VIDEO_HOSTS):
+            if video_url(url):
                 out.append(Candidate(url=url, provider=urlparse(url).netloc, title=title, query=query))
                 if len(out) >= limit:
                     return _dedupe(out)
@@ -551,7 +576,7 @@ def search_google_vision(settings: Settings, frames: list[Path], limit: int) -> 
                      if float(label.get("score") or 0) >= .70)
         for page in web.get("pagesWithMatchingImages", []):
             url = page.get("url", "")
-            if any(host in urlparse(url).netloc.lower() for host in VIDEO_HOSTS):
+            if video_url(url):
                 out.append(Candidate(url=url, provider="google-vision", title=page.get("pageTitle", ""),
                                      query=frame.name, match_kind="visual-match"))
                 if len(out) >= limit:
@@ -593,6 +618,10 @@ def search_local_cache(settings: Settings, shortcode: str, limit: int) -> list[C
         for item in data.get("candidates", []):
             if not item.get("downloaded_file") or not item.get("url"):
                 continue
+            # A downloaded file is not a verified source. Re-promoting rejected
+            # celebrity/background clips consumed the next run's probe budget.
+            if not item.get("selected_for_zip") or item.get("rejection_reasons") or not item.get("editing_eligible", True):
+                continue
             out.append(Candidate(url=item["url"], provider=item.get("provider", "cache"), title=item.get("title", ""),
                                  uploader=item.get("uploader", ""),
                                  query=item.get("query", ""), match_kind="cached-candidate", rights=item.get("rights", "unknown-check-before-reuse")))
@@ -604,20 +633,18 @@ def search_local_cache(settings: Settings, shortcode: str, limit: int) -> list[C
 def _dedupe(items: list[Candidate]) -> list[Candidate]:
     seen = set(); out = []
     for item in items:
-        parsed = urlparse(item.url)
-        if "youtube.com" in parsed.netloc and parsed.path == "/watch":
-            normalized = f"https://youtube.com/watch?v={parse_qs(parsed.query).get('v', [''])[0]}"
-        elif "youtu.be" in parsed.netloc:
-            normalized = f"https://youtu.be/{parsed.path.strip('/')}"
-        else:
-            normalized = item.url.split("?")[0].rstrip("/")
+        normalized = canonical_video_key(item.url)
         if normalized and normalized not in seen:
             seen.add(normalized); out.append(item)
     return out
 
 
 def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: int,
-                       cookie_file: Path | None = None) -> Path | None:
+                       cookie_file: Path | None = None, deadline: float | None = None) -> Path | None:
+    if not video_url(candidate.url):
+        candidate.error = '영상 상세 URL이 아닙니다.'
+        candidate.rejection_reasons = ['not_video_url']
+        return None
     if SOURCE_COOLDOWNS.get(candidate.platform, 0) > time.time():
         candidate.error = "429 쿨다운 중인 플랫폼"
         return None
@@ -635,7 +662,10 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
         target = out_dir / f"{stem}.mp4"
         for attempt in range(3):
             try:
-                with requests.get(candidate.url, stream=True, timeout=60) as r:
+                remaining = deadline - time.monotonic() if deadline is not None else 60
+                if remaining <= 0:
+                    raise RuntimeError('다운로드 시간 예산 소진')
+                with requests.get(candidate.url, stream=True, timeout=min(60, max(1, remaining))) as r:
                     if r.status_code == 429:
                         SOURCE_COOLDOWNS[candidate.platform] = time.time() + 60
                         candidate.error = "429 제한 · 60초 쿨다운"
@@ -643,6 +673,8 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
                     r.raise_for_status(); size = 0
                     with target.open("wb") as f:
                         for chunk in r.iter_content(1024 * 256):
+                            if deadline is not None and time.monotonic() >= deadline:
+                                raise RuntimeError('다운로드 시간 예산 소진')
                             size += len(chunk)
                             if size > max_mb * 1024 * 1024:
                                 raise RuntimeError("파일 크기 제한 초과")
@@ -671,12 +703,16 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
     is_bilibili = candidate.provider == "bilibili" or "bilibili.com" in candidate.url
     process_timeout = 35 if is_bilibili else 90
     for attempt in range(3):
+        remaining = deadline - time.monotonic() if deadline is not None else process_timeout
+        if remaining <= 0:
+            candidate.error = '다운로드 시간 예산 소진'
+            return None
         try:
-            result = _run(command, timeout=process_timeout)
+            result = _run(command, timeout=min(process_timeout, max(1, remaining)))
         except subprocess.TimeoutExpired:
             candidate.error = f"다운로드 제한 시간({process_timeout}초) 초과"
             return None
-        diagnostic = (result.stderr or result.stdout).lower()
+        diagnostic = (result.stderr or result.stdout or '').lower()
         if "429" in diagnostic or "too many requests" in diagnostic:
             SOURCE_COOLDOWNS[candidate.platform] = time.time() + 60
             candidate.error = "429 제한 · 60초 쿨다운"
@@ -697,7 +733,7 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
     files = sorted(out_dir.glob(f"{stem}_*"), key=lambda p: p.stat().st_mtime, reverse=True)
     video = next((p for p in files if p.suffix.lower() in {".mp4", ".webm", ".mkv", ".mov"}), None)
     if not video:
-        candidate.error = (result.stderr or result.stdout)[-350:].strip()
+        candidate.error = (result.stderr or result.stdout or '영상 파일을 받지 못했습니다.')[-350:].strip()
     return video
 
 
@@ -734,8 +770,16 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
     verification_notes = [verifier.error] if verifier.error else []
     visual_queries = verifier.discover_product_queries()
     vision_candidates, vision_terms = search_google_vision(settings, frames, settings.source_max_candidates)
-    query_details = build_grounded_queries(post.caption, visual_queries, vision_terms,
-                                           _transcript_evidence(settings, shortcode))
+    from .text_overlay import TextOverlayDetector
+    overlay_detector = TextOverlayDetector(settings)
+    if overlay_detector.note:
+        verification_notes.append(overlay_detector.note)
+    transcript = _transcript_evidence(settings, shortcode)
+    transcript['screen_text'] = ' '.join([transcript.get('screen_text', ''), overlay_detector.reference_text(frames)])
+    query_plan = product_query_plan(post.caption, visual_queries, vision_terms, transcript, build_queries(post.caption))
+    if settings.source_match_mode == 'product':
+        verifier.focus_subject(query_plan['products'])
+    query_details = query_plan['query_details']
     queries = [item["query"] for item in query_details]
     progress("영어·중국어로 TikTok·Douyin·Xiaohongshu 검색 중", 32)
     browser_result = {"candidates": [], "terms": [], "notes": []}
@@ -744,31 +788,52 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
         browser_result = browser_search(settings, frames, queries, settings.source_max_candidates, root / "browser_debug")
     # Yandex가 반환한 일반 장면·외국어 단어가 제품 키워드를 밀어내지 않도록 뒤에 둔다.
     browser_terms = _clean_visual_terms(browser_result["terms"])
-    queries = list(dict.fromkeys([*queries, *browser_terms]))
+    # Search-engine labels may describe a celebrity or background clothing.
+    # Once the subject is grounded, they must not become source search terms.
+    queries = list(dict.fromkeys(queries if query_plan['products'] else [*queries, *browser_terms]))
     candidates = [Candidate(**item) for item in browser_result["candidates"]] + vision_candidates
     progress("공개 웹 검색 결과를 합치는 중", 42)
     per_platform = max(4, settings.source_max_candidates // 5)
+    web_queries = platform_queries(queries, 'youtube', settings.source_queries_per_platform)
     candidates += search_local_cache(settings, shortcode, per_platform)
-    candidates += search_web(queries, per_platform)
-    candidates += search_bing(queries, per_platform)
-    candidates += search_youtube(queries, per_platform,
+    candidates += search_web(web_queries, per_platform)
+    candidates += search_bing(web_queries, per_platform)
+    candidates += search_youtube(web_queries, per_platform,
                                  settings.source_browser_cookie_file)
     candidates += search_pexels(settings, queries, per_platform)
-    candidates = round_robin_candidates(_dedupe(candidates), settings.source_max_candidates)
-    from .text_overlay import TextOverlayDetector
-    overlay_detector = TextOverlayDetector(settings)
-    if overlay_detector.note:
-        verification_notes.append(overlay_detector.note)
+    candidates = _dedupe(candidates)
+    invalid_candidates = [c for c in candidates if not video_url(c.url)]
+    for candidate in invalid_candidates:
+        candidate.rejection_reasons = ['not_video_url']
+    candidates = round_robin_candidates([c for c in candidates if video_url(c.url)], settings.source_max_candidates)
     progress(f"후보 {len(candidates)}개를 확인하는 중", 50)
     probed = 0
     attempted = 0
     embeddings = {}
+    deadline = time.monotonic() + max(1, settings.source_probe_time_budget)
+    budget_stop = ''
+    refinement_details = []
+    refined = False
     for i, candidate in enumerate(candidates, 1):
-        if attempted >= max(settings.source_max_downloads, settings.source_max_probe_downloads):
+        if attempted >= max(1, settings.source_max_attempts):
+            budget_stop = 'attempt_limit'
             break
+        if probed >= max(settings.source_max_downloads, settings.source_max_probe_downloads):
+            budget_stop = 'probe_limit'
+            break
+        if time.monotonic() >= deadline:
+            budget_stop = 'time_limit'
+            break
+        if SOURCE_COOLDOWNS.get(candidate.platform, 0) > time.time():
+            candidate.rejection_reasons = ['platform_cooldown']
+            continue
         attempted += 1
-        path = download_candidate(candidate, candidates_dir, i, settings.source_max_file_mb,
-                                  settings.source_browser_cookie_file)
+        try:
+            path = download_candidate(candidate, candidates_dir, i, settings.source_max_file_mb,
+                                      settings.source_browser_cookie_file, deadline=deadline)
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            candidate.error = f'{type(exc).__name__}: {str(exc)[:240]}'
+            path = None
         if path:
             probed += 1
             candidate.downloaded_file = str(path.relative_to(root))
@@ -785,8 +850,10 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
                     candidate.hash_similarity if candidate.semantic_similarity is None else
                     candidate.hash_similarity * .55 + candidate.semantic_similarity * .45, 4,
                 )
-                candidate.match_quality = ("same-scene-likely" if candidate.similarity >= .82 else
+                candidate.match_quality = ("same-scene-likely" if candidate.similarity >= .82 and candidate.hash_similarity >= .80 else
                                            "close-match" if candidate.similarity >= .72 else "topic-related")
+                if settings.source_match_mode == 'product' and (candidate.semantic_similarity or 0) >= .82 and candidate.hash_similarity < .72:
+                    candidate.match_quality = 'product-related'
                 overlay = overlay_detector.analyze(candidate_frames)
                 for key, value in overlay.items():
                     if hasattr(candidate, key):
@@ -802,7 +869,7 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
                 preview.parent.mkdir(exist_ok=True)
                 create_contact_sheet(sorted((compare_dir / f"{i:02d}").glob("candidate_*.jpg"))[:8], preview)
                 candidate.preview_file = str(preview.relative_to(root))
-                candidate.rejection_reasons = [*relevance_reasons(candidate, candidate.video_meta),
+                candidate.rejection_reasons = [*relevance_reasons(candidate, candidate.video_meta, settings.source_match_mode),
                                                *reuse_reasons(candidate)]
             except Exception as exc:  # noqa: BLE001
                 candidate.error = f"유사도 계산 실패: {exc}"
@@ -810,7 +877,27 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
         else:
             candidate.rejection_reasons = ["download_failed"]
         progress(f"후보 다운로드/검증 {i}/{len(candidates)}", min(88, 50 + int(i / max(1, len(candidates)) * 38)))
+        # 관련성이 검증된 후보의 제목에서 새 제품명·품번이 보일 때만 한 차례 확장한다.
+        if (i == len(candidates) and not refined and settings.source_refine_max_candidates > 0
+                and attempted < settings.source_max_attempts and time.monotonic() < deadline
+                and probed < max(settings.source_max_downloads, settings.source_max_probe_downloads)):
+            refined = True
+            titles = [c.title for c in candidates if c.title and (c.semantic_similarity or 0) >= .82][:3]
+            if titles:
+                refined_plan = product_query_plan(post.caption, visual_queries, vision_terms, transcript,
+                                                 build_queries(post.caption), candidate_titles=titles)
+                refinement_details = [d for d in refined_plan['query_details'] if d['query'] not in queries
+                                      and 'verified_candidate_title' in d['sources']][:6]
+                extra_queries = platform_queries([d['query'] for d in refinement_details], 'youtube', 2)
+                if extra_queries:
+                    progress('검증된 후보의 제품명·품번으로 추가 검색 중', 87)
+                    extra = search_youtube(extra_queries, settings.source_refine_max_candidates,
+                                           settings.source_browser_cookie_file)
+                    seen = {canonical_video_key(c.url) for c in candidates}
+                    candidates.extend(c for c in _dedupe(extra) if video_url(c.url)
+                                      and canonical_video_key(c.url) not in seen)
     candidates.sort(key=lambda c: (c.downloaded_file != "", c.source_score or 0, c.similarity or 0), reverse=True)
+    candidates.extend(invalid_candidates)
     selected = select_valid_candidates(candidates, settings.source_max_downloads, embeddings)
     downloaded = len(selected)
     quality_counts = {key: sum(c.selected_for_zip and c.source_quality == key for c in candidates)
@@ -818,13 +905,21 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
     manifest = {
         "job_id": job_id, "created_at": int(time.time()), "shortcode": shortcode, "reference_url": post.url,
         "caption": post.caption, "queries": queries, "query_details": query_details,
+        "product_evidence": {key: value for key, value in query_plan.items() if key != 'query_details'},
+        "match_mode": settings.source_match_mode, "budget_stop": budget_stop,
+        "refinement_query_details": refinement_details,
         "visual_product_queries": visual_queries, "openclip_product_evidence": verifier.product_evidence,
+        "subject_reference_indices": verifier.subject_reference_indices,
         "google_vision_terms": vision_terms,
         "reference_frames": [str(p.relative_to(root)) for p in frames],
         "browser_notes": browser_result["notes"], "verification_notes": verification_notes,
         "candidates": [asdict(c) for c in candidates], "downloaded": downloaded,
         "probe_attempts": attempted, "probed_downloads": probed,
         "quality_counts": quality_counts,
+        "funnel": {platform: {'discovered': sum(c.platform == platform for c in candidates),
+                             'received': sum(c.platform == platform and bool(c.downloaded_file) for c in candidates),
+                             'selected': sum(c.platform == platform and c.selected_for_zip for c in candidates)}
+                   for platform in sorted({c.platform for c in candidates})},
         "rights_notice": "각 파일의 저작권과 상업적 이용 허가를 원 출처에서 확인한 뒤 사용하세요. Pexels 항목만 Pexels 라이선스로 표시됩니다.",
     }
     (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

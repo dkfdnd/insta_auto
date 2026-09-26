@@ -142,7 +142,10 @@ class WebGraphQLCollector:
     # ------------------------------------------------------------ html / tokens
     def _profile_html(self, username: str) -> str:
         self._current_user = username
-        r = self.s.get(f"https://www.instagram.com/{username}/", timeout=30)
+        try:
+            r = self.s.get(f"https://www.instagram.com/{username}/", timeout=30)
+        except requests.TooManyRedirects as exc:
+            raise CollectError('Instagram 리디렉션 반복: 브라우저에서 로그인·계정 확인 상태를 점검하고 세션을 갱신하세요.') from exc
         if r.status_code == 404:
             raise CollectError(f"존재하지 않는 계정: {username}")
         if r.status_code == 429:
@@ -307,6 +310,7 @@ class WebGraphQLCollector:
 
     # ------------------------------------------------------------ fetch
     def fetch(self, username: str, limit: int, existing: dict[str, Post] | None = None) -> tuple[Profile, list[Post], list[MetricObservation]]:
+        self.collection_notes = []
         h = self._profile_html(username)
         profile = self._parse_profile(username, h)
         self._sleep(0.8, 1.6)
@@ -314,11 +318,18 @@ class WebGraphQLCollector:
         posts: dict[str, Post] = {}
         # 1) 타임라인 (좋아요/댓글/캡션/썸네일)
         after = None
-        while len(posts) < limit:
+        known = existing or {}
+        newest_known = max((p.taken_at for p in known.values()), default=None)
+        newest_codes = {p.shortcode for p in known.values() if p.taken_at == newest_known}
+        cap = max(limit, self.settings.collect_recovery_limit)
+        pages = 0
+        reached_boundary = newest_known is None
+        while len(posts) < cap:
             data = {"count": 12, "include_reel_media_seen_timestamp": True, "include_relationship_info": True,
                     "latest_besties_reel_media": True, "latest_reel_media": True}
             vars_ = {"data": data, "username": username, "first": 12, "after": after, "before": None, "last": None}
             j = self._gql(QUERIES["posts"], vars_)
+            pages += 1
             conn = (j.get("data") or {}).get("xdt_api__v1__feed__user_timeline_graphql_connection") or {}
             edges = conn.get("edges") or []
             if not edges:
@@ -328,6 +339,9 @@ class WebGraphQLCollector:
                 p = _node_to_post(node, username)
                 if p:
                     posts[p.shortcode] = p
+                    # 오래된 고정 게시물 때문에 중간의 새 게시물을 건너뛰지 않는다.
+                    if p.shortcode in newest_codes:
+                        reached_boundary = True
                 if not profile.user_id:
                     u = node.get("user") or {}
                     owner = node.get("owner_id")
@@ -336,9 +350,13 @@ class WebGraphQLCollector:
                     profile.user_id = str(owner or u.get("pk") or u.get("id") or "")
                     profile.full_name = u.get("full_name") or profile.full_name
             pi = conn.get("page_info") or {}
+            if len(posts) >= limit and reached_boundary:
+                break
             if not pi.get("has_next_page") or not pi.get("end_cursor"):
                 break
             after = pi["end_cursor"]
+            if pages >= max(1, (cap + 11) // 12):
+                break
             self._sleep()
 
         # 2) 팔로워/게시물 수 (실패해도 치명적이지 않음)
@@ -352,7 +370,15 @@ class WebGraphQLCollector:
         # 3) 릴스 조회수 (media info, 게시물당 1요청) — 오래된 게시물은 이전 값 재사용
         if not posts:
             raise CollectError(f"{username}: 게시물을 가져오지 못했습니다 (비공개 계정이거나 차단)")
-        out = sorted(posts.values(), key=lambda p: p.taken_at, reverse=True)[:limit]
+        if not reached_boundary:
+            self.collection_notes.append("수집 공백이 복구 상한을 초과했습니다. 중간 게시물이 누락될 수 있습니다.")
+        ordered = sorted(posts.values(), key=lambda p: p.taken_at, reverse=True)
+        new_count = sum(p.taken_at > newest_known for p in ordered) if newest_known is not None else 0
+        out = ordered[:min(cap, max(limit, new_count))]
+        fresh_codes = {p.shortcode for p in out}
+        # 초기 메타데이터 수집 후 남은 과거 조회수도 다음 실행에서 보강한다.
+        baseline = sorted(known.values(), key=lambda p: p.taken_at, reverse=True)[:min(31, self.settings.posts_per_account + 1)]
+        out.extend(p for p in baseline if p.is_video and p.views is None and p.shortcode not in fresh_codes)
         latest = {p.shortcode: p for p in out}
         observations = self._fill_video_views(latest, existing or {}) if any(p.is_video for p in out) else []
         return profile, out, observations
@@ -371,15 +397,13 @@ class WebGraphQLCollector:
         observations: list[MetricObservation] = []
         videos = sorted((p for p in posts.values() if p.is_video), key=lambda p: p.taken_at, reverse=True)
         fetched = 0
+        baseline_fetched = 0
         for p in videos:
             old = existing.get(p.shortcode)
             age_days = (now - p.taken_at) / 86400
-            if age_days > self.settings.views_refresh_days:
-                if old and old.views is not None:
-                    p.views = old.views
-                    p.video_duration = p.video_duration or old.video_duration
-                continue
-            if fetched >= self.settings.views_lookup_limit:
+            regular = age_days <= self.settings.views_refresh_days and fetched < self.settings.views_lookup_limit
+            missing_baseline = (old is None or old.views is None) and baseline_fetched < self.settings.baseline_views_lookup_limit
+            if not regular and not missing_baseline:
                 if old and old.views is not None:
                     p.views = old.views
                 continue
@@ -387,7 +411,10 @@ class WebGraphQLCollector:
                 continue
             try:
                 requested = int(time.time())
-                fetched += 1
+                if regular:
+                    fetched += 1
+                else:
+                    baseline_fetched += 1
                 r = self.s.get(f"https://www.instagram.com/api/v1/media/{p.media_id}/info/",
                                headers=self._api_headers(p.url), timeout=30)
                 if r.status_code == 429:
@@ -399,6 +426,10 @@ class WebGraphQLCollector:
                               if item.get(key) is not None), None)
                 if views is not None:
                     p.views = int(views)
+                if item.get('like_count') is not None:
+                    p.likes = int(item['like_count'])
+                if item.get('comment_count') is not None:
+                    p.comments = int(item['comment_count'])
                 observations.append(self._view_observation(p, requested, item if views is not None else None,
                                                            r.status_code, "" if views is not None else "missing_views", "latest"))
                 if item.get("video_duration"):
@@ -430,6 +461,10 @@ class WebGraphQLCollector:
                               if item.get(key) is not None), None)
                 if views is not None:
                     p.views = int(views)
+                if item.get("like_count") is not None:
+                    p.likes = int(item["like_count"])
+                if item.get("comment_count") is not None:
+                    p.comments = int(item["comment_count"])
                 observations.append(self._view_observation(p, requested, item if views is not None else None,
                                                            r.status_code, "" if views is not None else "missing_views", "tracking"))
                 if item.get("video_duration"):

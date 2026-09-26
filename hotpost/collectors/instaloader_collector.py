@@ -60,6 +60,9 @@ def login_with_password(settings: Settings, user: str) -> Path:
 
 def login_from_browser(settings: Settings, user: str, browser: str) -> Path:
     """브라우저(chrome/firefox/safari...)에 이미 로그인된 쿠키를 가져와 세션으로 저장한다."""
+    if browser == "dedicated":
+        from ..instagram_login import login_in_browser
+        return login_in_browser(settings, user)
     try:
         import browser_cookie3
     except ImportError as e:
@@ -67,7 +70,13 @@ def login_from_browser(settings: Settings, user: str, browser: str) -> Path:
     getter = getattr(browser_cookie3, browser, None)
     if getter is None:
         raise CollectError(f"지원하지 않는 브라우저: {browser}")
-    jar = getter(domain_name="instagram.com")
+    try:
+        jar = getter(domain_name="instagram.com")
+    except Exception as exc:
+        raise CollectError(
+            "브라우저 쿠키를 읽지 못했습니다. 저장된 로그인은 변경하지 않았습니다. "
+            "`python -m hotpost login --browser dedicated`로 전용 창에서 로그인하세요."
+        ) from exc
     L = make_loader()
     L.context._session.cookies.update(jar)
     try:
@@ -76,6 +85,8 @@ def login_from_browser(settings: Settings, user: str, browser: str) -> Path:
         raise CollectError(f"쿠키로 로그인 확인 실패: {e}") from e
     if not detected:
         raise CollectError(f"{browser} 에 instagram.com 로그인 쿠키가 없습니다. 브라우저에서 먼저 로그인하세요.")
+    if user and detected.lower() != user.lower():
+        raise CollectError("브라우저 계정이 설정된 수집용 로그인 계정과 다릅니다. 올바른 계정으로 로그인하세요.")
     L.context.username = detected
     name = user or detected
     f = session_file(settings, name)

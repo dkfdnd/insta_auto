@@ -109,7 +109,7 @@ class Storage:
         self.conn.execute("CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL)")
         self.conn.execute("INSERT OR IGNORE INTO schema_version VALUES (1,0)")
         self.conn.commit()
-        for version in range(1, 4):
+        for version in range(1, 5):
             self.conn.execute("BEGIN IMMEDIATE")
             current = self.conn.execute("SELECT version FROM schema_version WHERE id=1").fetchone()[0]
             if current >= version:
@@ -138,6 +138,9 @@ class Storage:
                 self.conn.execute("""CREATE TABLE IF NOT EXISTS notifications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT NOT NULL UNIQUE,
                     message TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER)""")
+            elif version == 4:
+                self.conn.execute("ALTER TABLE runs ADD COLUMN accounts_skipped INTEGER NOT NULL DEFAULT 0")
+                self.conn.execute("ALTER TABLE runs ADD COLUMN stop_reason TEXT NOT NULL DEFAULT ''")
             self.conn.execute("UPDATE schema_version SET version=? WHERE id=1", (version,))
             self.conn.commit()
 
@@ -202,10 +205,10 @@ class Storage:
         self.conn.commit()
         return cursor.lastrowid
 
-    def finish_run(self, run_id: int, ok: int, failed: int, posts: int, notes: str = "") -> None:
+    def finish_run(self, run_id: int, ok: int, failed: int, posts: int, notes: str = "", *, skipped: int = 0, stop_reason: str = "") -> None:
         self.conn.execute(
-            "UPDATE runs SET finished_at=?,accounts_ok=?,accounts_failed=?,posts=?,notes=? WHERE id=?",
-            (int(time.time()), ok, failed, posts, notes, run_id),
+            "UPDATE runs SET finished_at=?,accounts_ok=?,accounts_failed=?,posts=?,notes=?,accounts_skipped=?,stop_reason=? WHERE id=?",
+            (int(time.time()), ok, failed, posts, notes, skipped, stop_reason, run_id),
         )
         self.conn.commit()
 
@@ -417,6 +420,20 @@ class Storage:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def recent_view_candidates(self, username: str, days: int, excluded: set[str],
+                               limit: int, now: int | None = None) -> list[Post]:
+        """조회 시도가 가장 오래된 최근 릴스를 순환 관측한다. 실패도 순번을 소비한다."""
+        now = now or int(time.time())
+        rows = self.conn.execute(
+            """SELECT p.* FROM posts p LEFT JOIN metric_observations o ON o.shortcode=p.shortcode
+               WHERE p.username=? AND p.kind IN ('reel','video') AND p.media_id!=''
+                 AND p.taken_at>=? GROUP BY p.shortcode
+               HAVING COALESCE(MAX(o.requested_at),0)<=?
+               ORDER BY COALESCE(MAX(o.requested_at),0),p.taken_at DESC""",
+            (username, now - days * 86400, now - 3 * 3600),
+        ).fetchall()
+        return [self._row_to_post(row) for row in rows if row['shortcode'] not in excluded][:max(0, limit)]
+
     def account_observation_health(self, username: str, now: int | None = None) -> dict:
         now = now or int(time.time())
         rows = self.conn.execute(
@@ -446,14 +463,23 @@ class Storage:
     def collection_status(self) -> dict:
         last = self.last_run()
         last_success = self.conn.execute(
-            "SELECT * FROM runs WHERE accounts_ok>0 ORDER BY id DESC LIMIT 1").fetchone()
+            "SELECT * FROM runs WHERE accounts_ok>0 AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+        full_success = self.conn.execute(
+            "SELECT finished_at FROM runs WHERE accounts_ok>0 AND accounts_ok=(SELECT COUNT(*) FROM managed_accounts) AND accounts_failed=0 AND accounts_skipped=0 AND stop_reason='' AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+        coverage = self.conn.execute(
+            "SELECT COUNT(*) total, COALESCE(SUM(success),0) exact FROM metric_observations WHERE requested_at>=? AND requested_at<=?",
+            (last['started_at'], last['finished_at'] or int(time.time())),
+        ).fetchone() if last else None
         newest_update = self.conn.execute("SELECT MAX(updated_at) FROM posts").fetchone()[0]
         newest_post = self.conn.execute("SELECT MAX(taken_at) FROM posts").fetchone()[0]
         state = ("none" if not last else "running" if last["finished_at"] is None else
-                 "success" if last["accounts_failed"] == 0 else
+                 "blocked" if last.get("stop_reason") else
+                 "success" if last["accounts_failed"] == 0 and last.get("accounts_skipped", 0) == 0 else
                  "partial_failure" if last["accounts_ok"] else "failure")
         return {"last_run": last, "last_attempt_at": (last["finished_at"] or last["started_at"]) if last else None,
                 "last_success_at": last_success["finished_at"] if last_success else None,
+                "last_full_success_at": full_success[0] if full_success else None,
+                "view_observations": dict(coverage) if coverage else {"total": 0, "exact": 0},
                 "state": state, "newest_post_update": newest_update,
                 "newest_published_post": newest_post}
 

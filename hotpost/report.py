@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from . import __version__
-from .analyze import Scored, extract_topics, score_account, post_terms
+from .analyze import Scored, extract_topics, score_account, post_terms, assessment
 from .config import Settings
 from .storage import Storage
 from .criteria import defaults
@@ -25,6 +25,8 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
     all_scored: list[Scored] = []
     growth_by_code: dict[str, dict] = {}
     observations_by_code: dict[str, list[dict]] = {}
+    post_updated = {row['shortcode']: row['updated_at'] for row in
+                    store.conn.execute('SELECT shortcode,updated_at FROM posts')}
     accounts_out = []
     allowed = set(usernames) if usernames is not None else None
     for username, prof in sorted(profiles.items()):
@@ -91,6 +93,8 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
             "velocity": s.velocity,
             "growth": growth_by_code.get(s.post.shortcode),
             "tracking": store.tracking_for(s.post.shortcode, now) if s.post.is_video else None,
+            "assessment": assessment(s, observations_by_code.get(s.post.shortcode, []), now,
+                                     settings, active_criteria['values'], post_updated.get(s.post.shortcode)),
             "terms": terms_by_code.get(s.post.shortcode, []),
         })
         posts_out.append(d)
@@ -121,6 +125,7 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
         "notes": notes or [],
         "criteria": active_criteria,
         "criteria_defaults": defaults(settings),
+        "last_data_update_at": max(post_updated.values(), default=None),
         "settings": {
             "recent_days": settings.recent_days,
             "collect_posts_per_account": settings.collect_posts_per_account,
@@ -136,6 +141,8 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
             "accounts": len(accounts_out),
             "posts": len(posts_out),
             "hot": len(hot),
+            "confirmed_hot": sum(p['assessment']['status'] == 'confirmed' for p in hot),
+            "provisional_hot": sum(p['assessment']['status'] == 'provisional' for p in hot),
             "hot_24h": sum(1 for p in hot if p["age_hours"] <= 24),
             "hot_7d": sum(1 for p in hot if p["age_hours"] <= 24 * 7),
             "reels": sum(1 for p in posts_out if p["kind"] in ("reel", "video")),

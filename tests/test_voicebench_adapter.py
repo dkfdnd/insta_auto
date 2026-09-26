@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import io
+import wave
 
 import pytest
 
 from hotpost.config import Settings
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.voicebench_adapter import VoiceBenchAdapter, verify_wav
 
 
 class Response:
@@ -51,7 +53,7 @@ def _settings(tmp_path: Path) -> Settings:
 
 def test_voicebench_submits_once_and_downloads_wav(tmp_path):
     settings = _settings(tmp_path)
-    wav = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + b"\0" * 32
+    wav = valid_wav()
     session = Session(wav)
     target = settings.data_dir / "editing_jobs" / "job-1" / "voice.wav"
     result = VoiceBenchAdapter(settings, session=session, sleep=lambda _: None).synthesize(
@@ -60,6 +62,43 @@ def test_voicebench_submits_once_and_downloads_wav(tmp_path):
     assert session.posts == 1
     assert target.read_bytes() == wav
     assert result["voicebench_request_id"] == 17
+    assert result['audio']['duration'] == 1
+
+
+def valid_wav():
+    buffer = io.BytesIO()
+    with wave.open(buffer, 'wb') as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(24000)
+        audio.writeframes(b'\x01\x00' * 24000)
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize('payload', [
+    b'RIFF' + (36).to_bytes(4, 'little') + b'WAVE' + b'\0' * 32,
+    valid_wav()[:-100],
+    b'not audio',
+], ids=['header-only', 'truncated', 'non-audio'])
+def test_invalid_audio_never_replaces_existing_voice(tmp_path, payload):
+    settings = _settings(tmp_path)
+    target = settings.data_dir / 'voice.wav'
+    target.parent.mkdir(parents=True)
+    target.write_bytes(valid_wav())
+    with pytest.raises(RuntimeError, match='invalid WAV'):
+        VoiceBenchAdapter(settings, session=Session(payload), sleep=lambda _:None).synthesize('실제 대본', target)
+    assert target.read_bytes() == valid_wav()
+    assert not target.with_suffix('.json').exists()
+
+
+def test_replacement_preserves_previous_voice(tmp_path):
+    settings = _settings(tmp_path)
+    target = settings.data_dir / 'voice.wav'
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b'previous voice')
+    VoiceBenchAdapter(settings, session=Session(valid_wav()), sleep=lambda _:None).synthesize('실제 대본', target)
+    backup, = list(target.parent.glob('voice.backup-*.wav'))
+    assert backup.read_bytes() == b'previous voice'
 
 
 def test_voicebench_rejects_output_outside_data(tmp_path):
@@ -72,7 +111,7 @@ def test_voicebench_rejects_output_outside_data(tmp_path):
 
 def test_voicebench_resume_persists_id_without_resubmitting(tmp_path):
     settings = _settings(tmp_path)
-    session = Session(b'RIFF' + b'\0' * 4 + b'WAVE' + b'\0' * 32)
+    session = Session(valid_wav())
     seen = []
     VoiceBenchAdapter(settings, session=session).synthesize(
         '실제 대본', settings.data_dir / 'voice.wav', request_id=17,

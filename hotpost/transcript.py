@@ -168,7 +168,7 @@ def _easyocr_text(frame: Path, reader) -> str:
     with Image.open(frame) as image:
         height = image.height
     rows = []
-    for box, raw, confidence in reader.readtext(str(frame), detail=1):
+    for box, raw, confidence in reader.readtext(frame.read_bytes(), detail=1):
         text = re.sub(r"\s+", " ", raw).strip()
         top = min(point[1] for point in box)
         center = sum(point[1] for point in box) / len(box)

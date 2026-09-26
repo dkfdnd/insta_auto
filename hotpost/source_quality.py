@@ -8,6 +8,18 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 
+def subject_frame_indices(subject_scores: list[float], background_scores: list[float]) -> list[int]:
+    """Require several positively identified subject frames before refocusing.
+
+    Passport test: product frames scored .26–.34; airport introduction .17–.18.
+    A single incidental product-like frame is insufficient evidence.
+    """
+    ranked = sorted((i for i, (s, b) in enumerate(zip(subject_scores, background_scores))
+                     if s >= .24 and s - b >= .015),
+                    key=lambda i: subject_scores[i] - background_scores[i], reverse=True)[:6]
+    return ranked if len(ranked) >= 3 else []
+
+
 def platform_of(provider: str, url: str) -> str:
     text = (provider + " " + urlparse(url).netloc).lower()
     for key, markers in {
@@ -23,7 +35,7 @@ def platform_of(provider: str, url: str) -> str:
 
 def round_robin_candidates(items: list, limit: int) -> list:
     pools = defaultdict(deque)
-    priority = {"visual-match": 0, "local-cache": 1,
+    priority = {"visual-match": 0, "local-cache": 1, "cached-candidate": 1,
                 "platform-search": 2, "keyword": 3}
     for item in sorted(items, key=lambda row: priority.get(row.match_kind, 4)):
         pools[platform_of(item.provider, item.url)].append(item)
@@ -57,7 +69,7 @@ def title_query_agreement(title: str, query: str) -> float:
     return len(tokens(title) & wanted) / len(wanted) if wanted else 0.0
 
 
-def relevance_reasons(candidate, meta: dict) -> list[str]:
+def relevance_reasons(candidate, meta: dict, mode: str = 'scene') -> list[str]:
     reasons = []
     if meta.get("duration") is None or not 4 <= meta["duration"] <= 180:
         reasons.append("invalid_duration")
@@ -66,6 +78,9 @@ def relevance_reasons(candidate, meta: dict) -> list[str]:
     if (meta.get("width") or 0) > 2 * (meta.get("height") or 0):
         reasons.append("not_crop_friendly")
     semantic, scene, combined = candidate.semantic_similarity, candidate.hash_similarity, candidate.similarity
+    # 같은 제품을 다른 구도로 촬영한 대체영상은 장면 지문이 달라도 의미 근거로 보존한다.
+    if mode == 'product' and semantic is not None and semantic >= .82:
+        return reasons
     if semantic is not None:
         if semantic < .70 or (scene or 0) < .56 or (combined or 0) < .67:
             reasons.append("low_product_or_scene_similarity")
@@ -100,9 +115,7 @@ def select_valid_candidates(candidates: list, limit: int, embeddings: dict | Non
             same_file = bool(candidate.file_sha256 and candidate.file_sha256 == prior.file_sha256)
             same_frames = frame_duplicate([int(value, 16) for value in candidate.frame_hashes or []],
                                           [int(value, 16) for value in prior.frame_hashes or []])
-            left, right = embeddings.get(id(candidate)), embeddings.get(id(prior))
-            same_clip = left is not None and right is not None and float((left @ right).item()) >= .98
-            if same_file or same_frames or same_clip:
+            if same_file or same_frames:
                 duplicate = prior
                 break
         if duplicate:

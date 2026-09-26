@@ -13,6 +13,8 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urljoin, urlparse
 
 from .config import Settings
 from .browser_profile import BROWSER_LOCK, export_cookies, probe_platform_auth
+from .source_urls import video_url
+from .source_queries import platform_queries, clean_terms
 
 VIDEO_HOSTS = ("tiktok.com", "douyin.com", "xiaohongshu.com", "youtube.com", "youtu.be", "bilibili.com",
                "vimeo.com", "lazada.", "manuals.plus", "made-in-china.com")
@@ -21,21 +23,7 @@ BROWSER_COOLDOWNS: dict[str, float] = {}
 
 
 def _is_candidate(url: str) -> bool:
-    parsed = urlparse(url)
-    host, path = parsed.netloc.lower(), parsed.path.lower()
-    if not url.startswith("http") or not any(x in host for x in VIDEO_HOSTS):
-        return False
-    if "tiktok.com" in host:
-        return "/video/" in path
-    if "douyin.com" in host:
-        return "/video/" in path
-    if "xiaohongshu.com" in host:
-        return "/explore/" in path or "/discovery/item/" in path
-    if "youtube.com" in host:
-        return path in ("/watch",) or "/shorts/" in path
-    if "bilibili.com" in host:
-        return "/video/" in path
-    return True
+    return video_url(url)
 
 
 def _unwrap(url: str) -> str:
@@ -126,8 +114,6 @@ class BrowserSearcher:
                     str(self.settings.source_browser_profile_dir), channel="chrome",
                     headless=self.settings.source_browser_headless, locale="en-US",
                     viewport={"width": 1280, "height": 900},
-                    args=["--disable-blink-features=AutomationControlled"],
-                    ignore_default_args=["--enable-automation"],
                 )
             except Exception as exc:  # noqa: BLE001
                 return {"candidates": [], "terms": [], "notes": [f"Chrome 시작 실패: {exc}"]}
@@ -137,12 +123,12 @@ class BrowserSearcher:
                 self._yandex(context, selected, limit)
                 visual_candidates = list(self.candidates)
                 self.candidates = []
-                expanded = list(dict.fromkeys([*queries, *self.terms]))
-                self._platforms(context, expanded[:4], limit)
-                # 제품 키워드로 찾은 플랫폼 후보를 우선하고 남는 자리에 역이미지 후보를 보탠다.
+                expanded = list(dict.fromkeys([*queries, *clean_terms(self.terms)]))
+                self._platforms(context, expanded, limit)
+                # 역이미지 근거를 보존한다. 최종 플랫폼 분배는 source_finder에서 수행한다.
                 seen = set()
                 combined = []
-                for item in [*self.candidates, *visual_candidates]:
+                for item in [*visual_candidates, *self.candidates]:
                     normalized = item["url"].rstrip("/")
                     if normalized and normalized not in seen:
                         seen.add(normalized); combined.append(item)
@@ -153,7 +139,7 @@ class BrowserSearcher:
                 except Exception as exc:  # noqa: BLE001
                     self.notes.append(f"브라우저 쿠키 저장 실패: {type(exc).__name__}")
                 context.close()
-        return {"candidates": self.candidates[:limit], "terms": list(dict.fromkeys(self.terms))[:20], "notes": self.notes}
+        return {"candidates": self.candidates, "terms": clean_terms(self.terms)[:20], "notes": self.notes}
 
     def _google(self, context, frames: list[Path], limit: int) -> None:
         page = context.new_page()
@@ -225,7 +211,7 @@ class BrowserSearcher:
             ("xiaohongshu", "https://www.xiaohongshu.com/search_result?keyword={}"),
             ("bilibili", "https://search.bilibili.com/all?keyword={}"),
         ]
-        per_provider_limit = min(8, max(5, limit // len(platforms)))
+        per_provider_limit = min(limit, max(1, self.settings.source_candidates_per_platform))
         for provider, template in platforms:
             if BROWSER_COOLDOWNS.get(provider, 0) > time.time():
                 self.notes.append(f"{provider} 429 쿨다운 중 · 검색 건너뜀")
@@ -238,10 +224,9 @@ class BrowserSearcher:
                        else route.continue_())
             provider_urls: set[str] = set()
             try:
-                cjk = [q for q in queries if re.search(r"[\u3400-\u9fff]", q)]
-                latin = [q for q in queries if re.search(r"[A-Za-z]", q)]
-                selected = (cjk if provider in {"douyin", "xiaohongshu", "bilibili"} else latin) or queries
-                for query in selected[:4]:
+                selected = platform_queries(queries, provider, self.settings.source_queries_per_platform)
+                per_query_limit = max(2, (per_provider_limit + len(selected) - 1) // max(1, len(selected)))
+                for query in selected:
                     encoded = quote(query, safe="") if provider == "douyin" else quote_plus(query)
                     search_url = template.format(encoded)
                     for attempt in range(2):
@@ -262,10 +247,12 @@ class BrowserSearcher:
                     page.wait_for_timeout(500)
                     found = [*_anchors(page, f"playwright-{provider}", query, "platform-search"),
                              *_embedded_candidates(page, provider, query)]
+                    added = 0
                     for item in found:
-                        if item["url"] not in provider_urls and len(provider_urls) < per_provider_limit:
+                        if item["url"] not in provider_urls and len(provider_urls) < per_provider_limit and added < per_query_limit:
                             provider_urls.add(item["url"])
                             self.candidates.append(item)
+                            added += 1
                     if len(provider_urls) >= per_provider_limit:
                         break
             except Exception as exc:  # noqa: BLE001

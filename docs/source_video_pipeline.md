@@ -9,28 +9,47 @@
 
 ## 현재 처리 순서
 
-1. `data/hotpost.db`의 릴스 메타데이터와 저장된 Instagram 세션으로 기준 영상을 받는다.
-2. ffmpeg로 장면 프레임을 뽑고 OpenCLIP 제품 데모 카탈로그, 선택적 Google Cloud
-   Vision, 캡션을 조합해 영어·중국어 검색어를 만든다.
+1. `data/hotpost.db`의 릴스 메타데이터를 읽고, 같은 shortcode의 정상적인 저장 영상이 있으면
+   재사용한다. 없으면 저장된 Instagram 세션으로 기준 영상을 받는다.
+2. ffmpeg로 균등 프레임과 장면 전환 프레임을 합친다. 캡션, 저장된 음성 전사, 기준 프레임 OCR,
+   선택적 Vision 라벨에서 제품·브랜드·특징·명시된 품번을 추출한다. 제품을 식별하지 못하면
+   OpenCLIP 카탈로그로 보완한다. 제품/브랜드 제외/외형/상세 리뷰/시연/개봉 의도를
+   영어·중국어·한국어로 확장하고 검색어마다 근거·언어·신뢰도를 남긴다.
 3. 전용 Playwright Chrome 프로필로 Google Lens·Yandex 역이미지와 TikTok·Douyin·
    Xiaohongshu·Bilibili 제품 검색을 수행한다. 웹/Bing/YouTube 검색, 로컬 후보 캐시,
    선택적 Pexels 후보도 합친다. 전용 브라우저 쿠키가 있으면 `yt-dlp`와 공유한다.
-4. 중복 URL을 제거하고 기본 최대 40개 후보를 조사한다. `yt-dlp`로 최대 30개를
-   임시 다운로드·검사한 뒤 실제 받을 수 있는 후보의 장면 dHash와 OpenCLIP 임베딩을
-   기준 릴스와 비교한다. 장면 유사도는 dHash 55% + OpenCLIP 45%다.
-5. 후보 프레임의 자막·워터마크를 OCR로 검사해 `clean-source`, `light-overlay`,
+4. 영상 상세 URL을 검증하고 중복 URL을 제거한다. 초기 최대 40개 후보를 플랫폼별로 배분한다.
+   다운로드 실패는 성공 검사 한도를 소모하지 않는다. 기본 성공 다운로드 30개, 총 시도 60회,
+   다운로드/검증 단계 900초의 예산을 적용한다. 진행 중인 한 건의 검증은 예산을 넘겨 완료할 수 있다.
+   검증된 후보 제목에서 새 제품명·품번을 얻으면 한 번 추가 검색으로 최대 12개를 보완한다.
+   장면 점수는 dHash 55% + OpenCLIP 45%다. 기본 product 모드는 의미 유사도 0.82 이상인
+   대체영상도 보존한다. scene 모드는 기존 장면·제품 복합 게이트를 사용한다.
+5. 후보 프레임의 자막·워터마크를 Tesseract 또는 저장된 EasyOCR ko+en 모델로 검사해 `clean-source`, `light-overlay`,
    `edited-with-text`, `unknown`으로 구분한다. 재가공 적합도(`source_score`)는
    깨끗한 화면 55% + 제품 의미 유사도 30% + 장면 dHash 15%다.
-6. 이 점수로 정렬해 기본 상위 20개를 ZIP에 넣는다. `clean_sources/`,
-   `review_needed/`, `edited_references/`, `unclassified/` 폴더로 유형을 구분한다.
+6. 관련성·길이·해상도·자막 게이트와 파일/장면 중복 검사를 통과한 후보 중 기본 상위 20개를 ZIP에 넣는다.
+   `clean_sources/`, `review_needed/`, `unclassified/` 폴더로 유형을 구분한다.
+   자막이 많은 `edited-with-text`는 자동 선정에서 제외한다. 같은 제품의 다른 촬영을 보존하기 위해
+   의미 임베딩 유사도만으로 재업로드 중복이라고 판정하지 않는다.
    ZIP에는 미리보기·`manifest.json`이 있지만 분석용 기준 Instagram 릴스는 없다.
 
 ## 결과 해석
 
-`similarity`가 0.82 이상이면 `same-scene-likely`, 0.72 이상이면 `close-match`,
-그 아래는 `topic-related`다. 모두 자동 추정이며 원본 일치나 사용 권리를 보장하지
+`similarity` 0.82 이상이며 dHash 0.80 이상일 때 `same-scene-likely`, 0.72 이상은 `close-match`다.
+제품 모드에서 의미 유사도 0.82 이상이지만 dHash가 0.72 미만이면 `product-related`로 표시한다.
+그 밖은 `topic-related`다. 점수는 확률이 아니며 임계값은 대표 데이터셋으로 보정할 필요가 있다.
+모두 자동 추정이며 원본 일치나 사용 권리를 보장하지
 않는다. `source_quality`도 OCR 보조 판정이라 제품 포장·현장 간판을 자막으로
-오인할 수 있다. 최종 선택 전 영상과 원 출처·권리 상태를 직접 확인한다.
+오인할 수 있다. 저신뢰 텍스트가 반복되는 영상은 OCR 결과가 비어도 클린으로 단정하지 않는다.
+EasyOCR ko+en은 중국어 등 다른 언어를 완전히 읽지 못한다. 최종 선택 전 영상과 원 출처·권리 상태를 확인한다.
+
+직접 플랫폼 검색은 앞쪽 4개 문자열을 잘라 쓰지 않고 언어별 검색 계획을 사용한다. 기본 플랫폼당
+검색어 6개, 후보 12개이며 첫 검색어가 모든 자리를 차지하지 않게 분배한다.
+`manifest.json`에는 제품 근거, 검색어 계획, 추가 검색 근거, 예산 중단 사유, 플랫폼별
+발견/다운로드/선정 개수를 기록한다. 추가 검색은 YouTube 경로 한 차례로 제한한다.
+
+현재 제품 식별과 번역은 규칙·다국어 사전 및 기존 OpenCLIP 카탈로그를 사용한다.
+임의의 제품 모델을 추론하는 범용 비전 언어 모델이나 전체 라이브러리의 벡터 검색은 구현하지 않았다.
 
 설정 기본값은 `hotpost/config.py`, 실제 점수·ZIP 구현은 `hotpost/source_finder.py`,
 브라우저 검색은 `hotpost/browser_search.py`, 텍스트 오버레이는
