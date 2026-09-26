@@ -1,4 +1,4 @@
-"""Windows 작업 스케줄러 / macOS launchd로 등록 계정 전체를 매일 수집한다."""
+"""Windows 작업 스케줄러 / macOS launchd로 매일 통계와 제작 자료를 수집한다."""
 from __future__ import annotations
 
 import os
@@ -6,6 +6,8 @@ import json
 import plistlib
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import ROOT, Settings
@@ -72,7 +74,7 @@ def launch_agent_config(settings: Settings, hour: int = DEFAULT_HOUR, minute: in
     log = settings.data_dir / "daily_collect.log"
     return {
         "Label": LABEL,
-        "ProgramArguments": [str(python), "-m", "hotpost", "run"],
+        "ProgramArguments": [str(python), "-m", "hotpost", "run", "--acquire"],
         "WorkingDirectory": str(ROOT),
         "StartCalendarInterval": {"Hour": hour, "Minute": minute},
         "StandardOutPath": str(log),
@@ -143,3 +145,40 @@ def schedule_status() -> dict:
             pass
     return {"installed": target.is_file(), "loaded": loaded, "hour": hour, "minute": minute,
             "label": LABEL, "path": str(target)}
+
+
+def windows_task_xml(hour=DEFAULT_HOUR, minute=DEFAULT_MINUTE):
+    """Interactive account keeps the owner's Instagram/browser sessions available."""
+    namespace = 'http://schemas.microsoft.com/windows/2004/02/mit/task'
+    ET.register_namespace('', namespace)
+    def child(parent, name, text=None, **attributes):
+        node = ET.SubElement(parent, '{' + namespace + '}' + name, attributes)
+        if text is not None:
+            node.text = text
+        return node
+    root = ET.Element('{' + namespace + '}Task', {'version': '1.2'})
+    triggers = child(root, 'Triggers')
+    trigger = child(triggers, 'CalendarTrigger')
+    now = datetime.now(timezone(timedelta(hours=9))).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    child(trigger, 'StartBoundary', now.isoformat())
+    child(trigger, 'Enabled', 'true')
+    child(child(trigger, 'ScheduleByDay'), 'DaysInterval', '1')
+    principals = child(root, 'Principals')
+    principal = child(principals, 'Principal', id='Author')
+    user = os.environ.get('USERNAME', '')
+    domain = os.environ.get('USERDOMAIN', '')
+    child(principal, 'UserId', domain + '\\' + user if domain else user)
+    child(principal, 'LogonType', 'InteractiveToken')
+    child(principal, 'RunLevel', 'LeastPrivilege')
+    options = child(root, 'Settings')
+    child(options, 'MultipleInstancesPolicy', 'IgnoreNew')
+    child(options, 'DisallowStartIfOnBatteries', 'false')
+    child(options, 'StopIfGoingOnBatteries', 'false')
+    child(options, 'StartWhenAvailable', 'true')
+    child(options, 'Enabled', 'true')
+    child(options, 'ExecutionTimeLimit', 'PT12H')
+    action = child(child(root, 'Actions', Context='Author'), 'Exec')
+    child(action, 'Command', str(ROOT / '.venv' / 'Scripts' / 'python.exe'))
+    child(action, 'Arguments', '-X utf8 -m hotpost run --acquire')
+    child(action, 'WorkingDirectory', str(ROOT))
+    return '<?xml version="1.0" encoding="UTF-16"?>\n' + ET.tostring(root, encoding='unicode')

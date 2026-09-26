@@ -534,6 +534,11 @@
 
   syncPanel();
   renderAll();
+  const acquisitionPanel = $('#acquisition-candidates');
+  if (acquisitionPanel) {
+    acquisitionPanel.innerHTML = (R.acquisition_candidates || []).slice(0, 30).map(p =>
+      `<a class="chip" href="https://www.instagram.com/reel/${encodeURIComponent(p.shortcode)}/" target="_blank" rel="noopener">@${esc(p.username)} · ${Number(p.views_per_follower).toFixed(2)}배 · 조회 ${fmt(p.views)}</a>`).join('') || '<span class="hint">현재 제작 후보가 없습니다. 새 기준은 다음 수집·리포트 생성에 반영됩니다.</span>';
+  }
   fetch('/api/criteria').then((response) => response.json()).then((active) => {
     if (!active.values) return;
     if (active.version !== R.criteria.version) {

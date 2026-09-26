@@ -144,6 +144,13 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
         "accounts": accounts_out,
         "posts": posts_out,
     }
+    from .acquisition import candidates
+    report['acquisition_candidates'] = candidates(report, settings)
+    report['acquisition_policy'] = {
+        'min_views_per_follower': settings.acquisition_min_views_per_follower,
+        'min_views': settings.acquisition_min_views,
+        'daily_limit': settings.acquisition_daily_limit,
+    }
     return report
 
 

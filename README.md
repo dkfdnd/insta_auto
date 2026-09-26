@@ -18,7 +18,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./run.sh            # = python -m hotpost run --serve
 ```
 
-브라우저에 http://localhost:8765 가 열린다. 서버 없이 `web/index.html` 을 더블클릭해서 열어도 된다.
+브라우저에 http://localhost:8775 가 열린다. 서버 없이 `web/index.html` 을 더블클릭해서 열어도 된다.
 
 ## 명령
 
@@ -33,7 +33,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `python -m hotpost sources SHORTCODE` | 릴스 장면 분석 → 공개 소스 후보 탐색·검증·ZIP 생성 |
 | `python -m hotpost import dump.json` | 브라우저 덤프(`tools/browser_dump.js`) 가져오기 |
 | `python -m hotpost list` | 인플루언서 목록 파싱 확인 |
-| `python -m hotpost schedule install` | macOS에서 매일 오전 7시 자동 수집 등록 |
+| `python -m hotpost schedule install` | Windows/macOS에서 매일 오전 7시 통계·제작 자료 수집 등록 |
 | `python -m hotpost schedule status` | 자동 수집 등록 상태 확인 |
 | `python -m hotpost schedule uninstall` | 자동 수집 일정 제거 |
 
@@ -95,7 +95,7 @@ hotpost/
   source_finder.py       # 소스 후보 탐색·검증·ZIP
   transcript.py          # 음성 전사·화면 OCR·TXT/JSON
   server.py              # 정적 웹 + 계정/소스/대본 API
-  scheduler.py           # macOS LaunchAgent
+  scheduler.py           # Windows 작업 스케줄러 / macOS LaunchAgent
   cli.py
 web/                     # 순수 HTML/CSS/JS (빌드 없음)
 tools/browser_dump.js    # 백업 수집 경로
@@ -111,8 +111,11 @@ data/                    # DB, 세션, 모델, 다운로드, 대본 (git 제외)
 .venv/bin/python -m hotpost schedule install
 ```
 
-macOS LaunchAgent가 모니터링 계정 전체를 매일 오전 7시에 수집하고 리포트를 다시 만든다. 로그는
-`data/daily_collect.log`에 쌓인다. 같은 시간에 수동 수집이 실행 중이면 파일 잠금으로 중복 실행을 막는다.
+Windows 작업 스케줄러 또는 macOS LaunchAgent가 매일 오전 7시에 통계를 수집하고 리포트를 다시 만든 뒤
+팔로워 대비 조회수가 높은 릴스의 대본·소스 자료를 확보한다. Windows 명령은
+`.venv\Scripts\python.exe -m hotpost schedule install`이며 로그인한 세션에서 실행한다.
+macOS 예약 로그는 `data/daily_collect.log`에 쌓인다. 같은 시간에 수동 통계 수집이 실행 중이면
+파일 잠금으로 중복 수집을 막는다. 자세한 조건은 [공통 사용 안내](docs/PIPELINE_GUIDE.md)를 참고한다.
 수집이 반복될수록 스냅샷이 쌓여 게시물별 **시간당 증가 속도**(📈 상승 중)가 표시된다.
 
 한 번 수집할 때 계정별 최신 5개 게시물만 다시 읽어 새 게시물을 추가하고 좋아요·댓글·캡션 등 기존 게시물의
@@ -195,3 +198,8 @@ CAPTCHA를 요구할 수 있다. Yandex와 플랫폼 직접 검색은 독립적�
 - `data/operational.log`에는 계정별 성공·실패, 처리 시간과 다음 계정 전 대기 시간이 기록된다.
   `data/instagram_diagnostics.log`에는 GraphQL 쿼리명, 문서 ID, HTTP 상태, 오류 코드, 응답 시간과
   요청 ID가 JSON 한 줄 형식으로 기록된다. 쿠키·CSRF/LSD 토큰·전체 요청 변수는 기록하지 않는다.
+
+
+## 네 프로젝트 통합 제작
+
+대시보드의 **릴스 제작 작업실**에서 자료 선택 → PersonalProject1 재가공 → 대본·변환 계획 확정 → VoiceBench 음성 → CapCut 초안까지 진행합니다. 원본 전사문으로 재가공 대본을 자동 대체하지 않습니다. Windows/macOS 예약과 새 제작 후보 기준은 [공통 사용 안내](docs/PIPELINE_GUIDE.md)를 참고하세요.

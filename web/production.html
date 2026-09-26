@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>릴스 제작 작업실</title><link rel="stylesheet" href="style.css">
+<style>
+body{font-family:system-ui,sans-serif;background:#f5f5f3;color:#202b2b;margin:0}main{max-width:1080px;margin:auto;padding:28px}a{color:#235e54}h1{margin:15px 0}section{background:white;border:1px solid #dfe5e1;border-radius:14px;padding:22px;margin:18px 0}label{display:block;margin:12px 0}input:not([type=checkbox]):not([type=radio]),textarea,select{box-sizing:border-box;padding:10px;border:1px solid #b6c4bd;border-radius:6px;max-width:100%;width:100%;font:inherit}textarea{min-height:80px}button{padding:11px 16px;background:#245c50;color:white;border:0;border-radius:7px;cursor:pointer;margin:5px 5px 5px 0}button:disabled{opacity:.5;cursor:wait}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}.choice{border:1px solid #cad9d1;border-radius:10px;padding:14px;white-space:pre-wrap}.muted{color:#52685e;font-size:14px}pre{white-space:pre-wrap;word-break:break-word}#notice{position:sticky;top:0;background:#fff3cf;padding:12px;z-index:2}video{max-width:220px;max-height:240px}audio{max-width:100%}.range{display:flex;gap:10px}.range input{width:110px!important}[hidden]{display:none!important}
+input:not([type=checkbox]):not([type=radio]),textarea,select{background:#fff;color:#202b2b}
+</style><script defer src="production.js"></script></head>
+<body><main><a href="index.html">← 수집 대시보드</a><h1>릴스 제작 작업실</h1>
+<p>원본 자료 → 대본 재가공 → 대본·변환 계획 선택 → 음성 → CapCut 초안</p>
+<div id="notice" role="status">작업 기록을 불러오는 중입니다.</div>
+<button id="health">연결·편집 환경 점검</button><pre id="health-result"></pre>
+<section><h2>자료로 새 제작 시작</h2><div class="grid">
+<label>확보한 소스<select id="source"></select></label><label>추출한 대본<select id="transcript"></select></label></div>
+<label>정확한 상품명<input id="product" maxlength="300"></label><label>상품 자료 링크 (선택)<input id="product-url" type="url"></label>
+<label>재가공 요청 (선택)<textarea id="notes" maxlength="2000"></textarea></label><button id="create">제작 등록</button>
+<p class="muted">같은 릴스의 소스 확보와 음성 대본 추출이 완료되어야 합니다. 대본을 확인할 수 없는 OCR 전용 자료는 진행하지 않습니다.</p></section>
+<section><h2>제작 기록</h2><select id="jobs"></select><button id="reload">기록 새로고침</button></section>
+<section id="work" hidden><h2 id="title"></h2><p id="status"></p><pre id="error"></pre>
+<details><summary>원본 대본 보기</summary><pre id="original"></pre></details>
+<button id="rewrite">재가공 요청 / 이어 확인</button><a href="http://127.0.0.1:18765" target="_blank" rel="noopener">대본 작업실에서 수정</a>
+<div id="scripts" class="grid"></div>
+<div id="selection" hidden><h3>어떻게 다르게 만들까요?</h3>
+<label>새 관점<textarea id="angle" placeholder="원본이 제품 특징을 나열했다면, 새 대본은 어떤 사용 상황과 이득을 중심으로 구성했나요?"></textarea></label>
+<label>전개 변경<textarea id="structure" placeholder="후킹과 설명 순서를 원본에서 어떻게 바꿨나요?"></textarea></label>
+<label>화면 변경<textarea id="visual" placeholder="어떤 장면을 새로 선택하거나 순서를 바꿀지 적으세요."></textarea></label>
+<label>편집 스타일<select id="edit-style"><option value="brisk">빠른 컷 · 청록 강조</option><option value="calm">여유 있는 컷 · 연두 강조</option><option value="house">기본 편집 스타일</option></select></label>
+<h3>사용할 소스와 장면</h3><p class="muted">설명에는 해당 장면과 연결할 대본의 핵심 단어를 넣으세요. 구간을 비우면 영상 전체에서 하이라이트를 고릅니다.</p><div id="scenes"></div>
+<label><input id="reviewed" type="checkbox"> 원본과 재가공 대본·변환 계획을 비교했고, 선택한 소스 장면을 확인했습니다.</label>
+<p class="muted">문구 겹침 검사는 차별성을 보장하지 않습니다. 실제 컷 구성과 완성도는 CapCut 초안에서도 확인하세요.</p>
+<button id="select">이 대본과 계획 확정</button></div>
+<button id="build">음성·CapCut 초안 제작 / 재개</button><div id="output"></div></section>
+</main></body></html>

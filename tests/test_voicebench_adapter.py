@@ -68,3 +68,14 @@ def test_voicebench_rejects_output_outside_data(tmp_path):
         VoiceBenchAdapter(settings, session=Session(b"")).synthesize(
             "대본", tmp_path / "outside.wav"
         )
+
+
+def test_voicebench_resume_persists_id_without_resubmitting(tmp_path):
+    settings = _settings(tmp_path)
+    session = Session(b'RIFF' + b'\0' * 4 + b'WAVE' + b'\0' * 32)
+    seen = []
+    VoiceBenchAdapter(settings, session=session).synthesize(
+        '실제 대본', settings.data_dir / 'voice.wav', request_id=17,
+        on_submitted=seen.append)
+    assert session.posts == 0
+    assert seen == [17]

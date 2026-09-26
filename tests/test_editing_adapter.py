@@ -118,13 +118,24 @@ def test_workflow_synthesizes_spoken_script_before_capcut(tmp_path):
             return {"contract_version": "1.0", "job_id": kwargs["job_id"],
                     "status": "completed", "draft_path": "draft"}
 
+    approved = settings.data_dir / 'rewritten.txt'
+    approved.write_text('들리는 대사\n', encoding='utf-8')
     result = build_with_voicebench(
         settings, job_id="edit-001", manifest_path=manifest,
         transcript_path=transcript, draft_name="edit-001-v1",
+        approved_script_path=approved,
         voicebench=Voice(), auto_capcut=CapCut(),
     )
     assert result["status"] == "completed"
     assert result["voicebench"]["voicebench_request_id"] == 9
+
+
+def test_workflow_never_falls_back_to_original_transcript(tmp_path):
+    settings = _settings(tmp_path)
+    with pytest.raises(ValueError, match='rewritten_script_required'):
+        build_with_voicebench(settings, job_id='edit-no-rewrite',
+            manifest_path=tmp_path / 'manifest.json',
+            transcript_path=tmp_path / 'transcript.json', draft_name='draft')
 
 
 def test_workflow_preserves_approved_script(tmp_path):

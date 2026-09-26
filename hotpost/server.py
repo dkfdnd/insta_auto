@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,7 @@ from .report import build_report, write_report
 from .criteria import defaults
 from .job_queue import JobQueue
 from .retention import cleanup_dry_run, cleanup_execute, disk_usage
+from .production import ProductionManager
 
 
 KST = timezone(timedelta(hours=9))
@@ -48,6 +50,7 @@ def make_handler(settings: Settings):
     job_queue.resume_queued()
     sessions = PlatformSessionManager(settings)
     accounts = AccountRegistry(settings)
+    productions = ProductionManager(settings)
     criteria_lock = threading.Lock()
 
     class Handler(SimpleHTTPRequestHandler):
@@ -91,6 +94,30 @@ def make_handler(settings: Settings):
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path == '/api/productions' or path.startswith('/api/productions/'):
+                try:
+                    origin = self.headers.get('Origin')
+                    if origin and urlparse(origin).netloc != self.headers.get('Host'):
+                        raise ValueError('다른 사이트에서 제작 요청을 보낼 수 없습니다.')
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < length <= 65536:
+                        raise ValueError('잘못된 요청 크기')
+                    payload = json.loads(self.rfile.read(length))
+                    if not isinstance(payload, dict):
+                        raise ValueError('JSON 객체가 필요합니다.')
+                    parts = path.strip('/').split('/')
+                    if len(parts) == 2:
+                        result = productions.create(payload)
+                    elif len(parts) == 4 and parts[3] == 'select':
+                        result = productions.select(parts[2], payload)
+                    elif len(parts) == 4 and parts[3] in ('rewrite', 'build'):
+                        result = productions.dispatch(parts[2], parts[3])
+                    else:
+                        raise ValueError('알 수 없는 제작 명령')
+                    self._json(result, HTTPStatus.ACCEPTED)
+                except (ValueError, OSError, RuntimeError) as exc:
+                    self._json({'error': str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             if path == "/api/storage/cleanup":
                 try:
                     self._json(cleanup_execute(settings))
@@ -166,6 +193,56 @@ def make_handler(settings: Settings):
 
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path == '/api/production-health':
+                from .production_health import check
+                self._json(check(settings)); return
+            if path == '/api/productions' or path.startswith('/api/productions/'):
+                try:
+                    parts = path.strip('/').split('/')
+                    if len(parts) >= 4:
+                        job = productions.get(parts[2])
+                        if len(parts) == 4 and parts[3] == 'audio' and job.get('voice'):
+                            target = productions.asset_path(job['voice']['output_path'])
+                        elif len(parts) == 5 and parts[3] == 'assets':
+                            asset = next((item for item in job['assets'] if item['id'] == parts[4]), None)
+                            if asset is None:
+                                raise ValueError('소스 영상을 찾지 못했습니다.')
+                            target = productions.asset_path(asset['path'])
+                        else:
+                            raise ValueError('제작 결과를 찾지 못했습니다.')
+                        size = target.stat().st_size
+                        start, end = 0, size - 1
+                        requested = self.headers.get('Range')
+                        if requested:
+                            match = re.fullmatch(r'bytes=(\d+)-(\d*)', requested)
+                            if not match or int(match[1]) >= size:
+                                self.send_error(416); return
+                            start = int(match[1])
+                            end = min(size - 1, int(match[2])) if match[2] else size - 1
+                            if end < start:
+                                self.send_error(416); return
+                        self.send_response(206 if requested else 200)
+                        self.send_header('Content-Type', mimetypes.guess_type(target.name)[0] or 'application/octet-stream')
+                        self.send_header('Accept-Ranges', 'bytes')
+                        self.send_header('Content-Length', str(end - start + 1))
+                        if requested:
+                            self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
+                        self.end_headers()
+                        with target.open('rb') as stream:
+                            stream.seek(start)
+                            remaining = end - start + 1
+                            while remaining:
+                                chunk = stream.read(min(1024 * 1024, remaining))
+                                if not chunk:
+                                    break
+                                self.wfile.write(chunk)
+                                remaining -= len(chunk)
+                        return
+                    result = {'items': productions.listing()} if len(parts) == 2 else productions.public(productions.get(parts[2]))
+                    self._json(result)
+                except (ValueError, OSError) as exc:
+                    self._json({'error': str(exc)}, HTTPStatus.NOT_FOUND)
+                return
             if path == "/api/accounts":
                 items = accounts.list()
                 self._json({"accounts": items, "count": len(items)}); return
@@ -291,12 +368,12 @@ def make_handler(settings: Settings):
     return partial(Handler, directory=str(settings.web_dir))
 
 
-def serve(settings: Settings, port: int = 8765, host: str = "127.0.0.1",
+def serve(settings: Settings, port: int = 8775, host: str = "127.0.0.1",
           handler=None) -> ThreadingHTTPServer:
     return ThreadingHTTPServer((host, port), handler or make_handler(settings))
 
 
-def serve_many(settings: Settings, hosts: list[str], port: int = 8765) -> list[ThreadingHTTPServer]:
+def serve_many(settings: Settings, hosts: list[str], port: int = 8775) -> list[ThreadingHTTPServer]:
     """Create servers on explicit interfaces while sharing one set of API managers."""
     hosts = list(dict.fromkeys(hosts))
     if not hosts:
