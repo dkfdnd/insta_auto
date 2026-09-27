@@ -13,5 +13,5 @@
   "production_enabled": true,
   "studio_auto_top_enabled": true,
   "studio_url": "http://127.0.0.1:18767",
-  "source_ytdlp_js_runtime": "node:C:\\Users\\s98se\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.EXE"
+  "source_ytdlp_js_runtime": ""
 }

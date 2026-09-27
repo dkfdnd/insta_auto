@@ -13,12 +13,12 @@ from pathlib import Path
 
 from .editing_adapter import _atomic_json, selected_source_videos
 from .studio_store import Conflict, StudioStore, uid
+from .source_quality import sha256_file
 from .studio_workflow import WorkflowMixin, enabled, init_run, snapshot, current_run, capcut_running, transient
 
 
 def digest(path):
-    with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+    return sha256_file(Path(path))
 
 
 def selected(state, collection, key):

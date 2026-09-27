@@ -6,18 +6,17 @@ and submit an image through accept_image(). Pending is never called success.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 from pathlib import Path
 from urllib.parse import urlparse
 
 from .thumbnail_planner import flow_prompt, validate_caption
+from .source_quality import sha256_file
 
 
 def _hash(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+    return sha256_file(path)
 
 
 def _image(path: Path) -> tuple[int, int]:

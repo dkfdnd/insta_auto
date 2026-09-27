@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 
 from .studio_store import Conflict, uid
+from .source_quality import sha256_file
 
 STEPS = [('sources', '소스 확보'), ('transcript', '원본 대본 추출'),
          ('script', 'Top Pick 대본'), ('voice', 'TTS'), ('project', 'CapCut 프로젝트'), ('export', 'MP4 내보내기')]
@@ -86,7 +87,7 @@ class WorkflowMixin:
                     remaining -= len(chunk)
             info = probe_video(path)
             if not info or float(info.get('duration') or 0) <= 0 or not info.get('width'): raise ValueError('재생 가능한 영상이 아닙니다.')
-            with path.open('rb') as raw: sha = hashlib.file_digest(raw,'sha256').hexdigest()
+            sha = sha256_file(path)
             def add(s, db):
                 if not any(v['sha256']==sha for v in s['sources']):
                     s['sources'].append(dict(id=path.stem,path=str(path),sha256=sha,origin_url='',rights='user_supplied',original_name=Path(name).name))

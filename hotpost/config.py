@@ -13,6 +13,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def sibling_project(primary: str, alternate: str, marker: str) -> Path:
+    """Accept both repository names and established local checkout names."""
+    for name in (primary, alternate):
+        candidate = ROOT.parent / name
+        if (candidate / marker).is_file():
+            return candidate
+    return ROOT.parent / primary
+
+
 @dataclass
 class Settings:
     # 입력
@@ -28,14 +37,14 @@ class Settings:
     production_enabled: bool = False
     studio_auto_top_enabled: bool = False
     script_model: str = "gemini-3.6-flash"
-    voicebench_root: Path = ROOT.parent / "VoiceBench"
-    voicebench_url: str = "http://127.0.0.1:8877"
-    voicebench_api_key_file: Path = ROOT.parent / "VoiceBench" / ".runtime" / "external-api-key.txt"
+    voicebench_root: Path = field(default_factory=lambda: sibling_project('VoiceBench', 'Voice', 'voicebench/api.py'))
+    voicebench_url: str = "http://127.0.0.1:8765"
+    voicebench_api_key_file: Path = field(default_factory=lambda: sibling_project('VoiceBench', 'Voice', 'voicebench/api.py') / '.runtime' / 'external-api-key.txt')
     voicebench_timeout: int = 14400
     voicebench_poll_interval: float = 5.0
     studio_url: str = "http://127.0.0.1:18765"
-    studio_root: Path = ROOT.parent / "script_auto"
-    studio_api_key_file: Path = ROOT.parent / "script_auto" / "data" / "access-token.txt"
+    studio_root: Path = field(default_factory=lambda: sibling_project('script_auto', 'PersonalProject1', 'studio/app.py'))
+    studio_api_key_file: Path = field(default_factory=lambda: sibling_project('script_auto', 'PersonalProject1', 'studio/app.py') / 'data' / 'access-token.txt')
     studio_timeout: int = 7200
     acquisition_min_views_per_follower: float = 1.8
     acquisition_min_views: int = 1000
