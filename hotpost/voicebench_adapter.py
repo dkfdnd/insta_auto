@@ -71,7 +71,8 @@ class VoiceBenchAdapter:
     def synthesize(self, text: str, output_path: Path,
                    progress: Callable[[str, int], None] | None = None,
                    request_id: int | None = None,
-                   on_submitted: Callable[[int], None] | None = None) -> dict:
+                   on_submitted: Callable[[int], None] | None = None,
+                   retry_failed: bool = False) -> dict:
         script = text.strip()
         if not script:
             raise ValueError("VoiceBench cannot synthesize an empty script.")
@@ -96,6 +97,11 @@ class VoiceBenchAdapter:
                 submitted = self._response_json(self.session.get(
                     self._url(f"/v1/tts/{request_id}"), headers=headers, timeout=timeout))
                 submitted.setdefault('id', request_id)
+                # Explicit retry may replace a confirmed terminal failure.
+                # Unknown/running outcomes always retain the existing ID.
+                if retry_failed and submitted.get('status') in {'failed', 'cancelled'}:
+                    submitted = self._response_json(self.session.post(
+                        self._url('/v1/tts'), json={'text':script}, headers=headers, timeout=timeout))
         except requests.RequestException as exc:
             raise RuntimeError(
                 f"VoiceBench is not reachable at {self.settings.voicebench_url}."

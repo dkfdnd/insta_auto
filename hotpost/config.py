@@ -26,6 +26,7 @@ class Settings:
         "Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     auto_capcut_timeout: int = 7200
     production_enabled: bool = False
+    studio_auto_top_enabled: bool = False
     script_model: str = "gemini-3.6-flash"
     voicebench_root: Path = ROOT.parent / "VoiceBench"
     voicebench_url: str = "http://127.0.0.1:8877"
@@ -33,6 +34,7 @@ class Settings:
     voicebench_timeout: int = 14400
     voicebench_poll_interval: float = 5.0
     studio_url: str = "http://127.0.0.1:18765"
+    studio_root: Path = ROOT.parent / "script_auto"
     studio_api_key_file: Path = ROOT.parent / "script_auto" / "data" / "access-token.txt"
     studio_timeout: int = 7200
     acquisition_min_views_per_follower: float = 1.8
@@ -77,9 +79,16 @@ class Settings:
     source_max_probe_downloads: int = 30  # 먼저 받아 검사한 뒤 상위 source_max_downloads만 ZIP에 포함
     source_max_attempts: int = 60      # 다운로드 실패 시 다음 후보로 보충하는 요청 상한
     source_probe_time_budget: int = 900  # 다운로드/검증 단계 시간 예산(초)
+    source_platform_probe_budget: int = 300  # 한 플랫폼의 반복 실패가 전체 예산을 독점하지 않음
     source_queries_per_platform: int = 6
     source_candidates_per_platform: int = 12
     source_refine_max_candidates: int = 12  # 검증된 후보 제목으로 한 차례 추가 탐색
+    source_min_usable: int = 8         # 부족하면 남은 예산으로 한 차례 추가 탐색
+    source_query_model_enabled: bool = True
+    source_transcribe_reference: bool = True
+    source_ytdlp_js_runtime: str = ""  # e.g. node:C:/Program Files/nodejs/node.exe
+    source_long_video_max_seconds: int = 1800
+    source_segment_seconds: int = 30
     source_match_mode: str = "product"  # product: 같은 제품의 대체영상 / scene: 같은 장면
     source_max_file_mb: int = 200
     source_google_vision_api_key: str = ""
@@ -88,6 +97,7 @@ class Settings:
     source_browser_headless: bool = False
     source_browser_frames: int = 4
     source_browser_captcha_wait: int = 60
+    source_browser_timeout: int = 360  # 전체 브라우저 검색 제한; 추가 검색은 최대 180초
     source_use_openclip: bool = True
     source_openclip_model: str = "ViT-B-32-quickgelu"
     source_openclip_pretrained: str = "openai"

@@ -109,7 +109,7 @@ class Storage:
         self.conn.execute("CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL)")
         self.conn.execute("INSERT OR IGNORE INTO schema_version VALUES (1,0)")
         self.conn.commit()
-        for version in range(1, 5):
+        for version in range(1, 6):
             self.conn.execute("BEGIN IMMEDIATE")
             current = self.conn.execute("SELECT version FROM schema_version WHERE id=1").fetchone()[0]
             if current >= version:
@@ -141,6 +141,17 @@ class Storage:
             elif version == 4:
                 self.conn.execute("ALTER TABLE runs ADD COLUMN accounts_skipped INTEGER NOT NULL DEFAULT 0")
                 self.conn.execute("ALTER TABLE runs ADD COLUMN stop_reason TEXT NOT NULL DEFAULT ''")
+            elif version == 5:
+                self.conn.execute("""CREATE TABLE IF NOT EXISTS hot_detections (
+                    shortcode TEXT PRIMARY KEY, detected_at INTEGER NOT NULL)""")
+                # Preserve historical detections, including photos and expired tracking.
+                self.conn.execute("""INSERT OR IGNORE INTO hot_detections
+                    SELECT shortcode, MIN(detected_at) FROM (
+                        SELECT shortcode, detected_at FROM hot_view_tracking
+                        UNION ALL
+                        SELECT substr(key,9), created_at FROM notifications
+                        WHERE kind IN ('new_hot_reel','new_hot_post') AND key LIKE 'new-hot-%'
+                    ) GROUP BY shortcode""")
             self.conn.execute("UPDATE schema_version SET version=? WHERE id=1", (version,))
             self.conn.commit()
 
@@ -482,6 +493,23 @@ class Storage:
                 "view_observations": dict(coverage) if coverage else {"total": 0, "exact": 0},
                 "state": state, "newest_post_update": newest_update,
                 "newest_published_post": newest_post}
+
+    def record_hot_detections(self, posts: list[Post], detected_at: int, legacy_hot_codes=()) -> dict[str, int]:
+        """Keep the first recorded hot classification across rescans and re-scoring."""
+        # Missing historical evidence is unknown, not a new detection today.
+        # Recover any tracking added by a collector still running older code first.
+        self.conn.execute('INSERT OR IGNORE INTO hot_detections SELECT shortcode,detected_at FROM hot_view_tracking')
+        self.conn.executemany(
+            'INSERT OR IGNORE INTO hot_detections VALUES (?, -1)',
+            [(code,) for code in legacy_hot_codes],
+        )
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO hot_detections(shortcode,detected_at) VALUES (?,?)",
+            [(p.shortcode, detected_at) for p in posts],
+        )
+        self.conn.commit()
+        return {row['shortcode']: row['detected_at'] for row in
+                self.conn.execute('SELECT shortcode,detected_at FROM hot_detections WHERE detected_at>=0')}
 
     def register_hot_view_tracking(self, posts: list[Post], days: int, detected_at: int | None = None) -> int:
         """한 번 터진 릴스는 게시일부터 정해진 기간까지 추적 대상으로 고정한다."""

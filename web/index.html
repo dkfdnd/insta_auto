@@ -32,7 +32,7 @@
 
   <section class="stats" id="stats"></section>
   <section class="section"><div class="section-head"><h2>팔로워 대비 조회수 · 제작 후보</h2></div>
-    <p class="hint">자동 자료 확보는 조회수 ÷ 팔로워 수로 선정합니다. 아래의 평소 대비 급상승 분석과 별도 기준입니다.</p>
+    <p class="hint">팔로워 대비 조회수로 보는 참고 후보입니다. 자동 제작은 수집 완료 시 최근 14일 영상의 기본 급상승순 1·2위를 선정하며, 제작실에서 진행과 결과를 확인할 수 있습니다.</p>
     <div id="acquisition-candidates" class="chips"></div>
   </section>
 
@@ -65,6 +65,9 @@
       <div class="criteria-body" id="crit-body" hidden></div>
     </div>
     <div class="toolbar">
+      <div class="seg" id="detection" data-key="detection" aria-label="핫 감지일 필터">
+        <button data-v="all" class="on">전체 감지일</button><button data-v="today">오늘 터진 게시물</button>
+      </div>
       <div class="seg" id="period" data-key="period">
         <button data-v="24">24시간</button><button data-v="72">3일</button><button data-v="168">7일</button><button data-v="336" class="on">14일</button><button data-v="720">30일</button>
       </div>
@@ -93,6 +96,7 @@
       <input id="q" type="search" placeholder="캡션·해시태그 검색">
       <button class="btn ghost" id="reset">초기화</button>
     </div>
+    <p class="hint">핫 최초 감지일은 시스템이 처음 핫 기준을 통과한 것으로 기록한 날짜입니다. ‘오늘’은 한국시간 기준이며 잠정 후보를 포함합니다. 오늘 필터에서는 게시일 기간 제한을 적용하지 않습니다.</p>
     <div class="grid" id="cards"></div>
     <div class="empty" id="empty" hidden></div>
   </section>
@@ -145,7 +149,10 @@
   </div>
 </div>
 
-<script src="data.js"></script>
-<script src="app.js?v=8"></script>
+<script src="data.js?v=studio-top-two"></script>
+<script src="hot-detection.js?v=1"></script>
+<link rel="stylesheet" href="production-flow.css?v=2">
+<script src="production-flow.js?v=2"></script>
+<script src="app.js?v=11-production-flow"></script>
 </body>
 </html>

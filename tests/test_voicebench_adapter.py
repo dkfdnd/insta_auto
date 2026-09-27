@@ -118,3 +118,18 @@ def test_voicebench_resume_persists_id_without_resubmitting(tmp_path):
         on_submitted=seen.append)
     assert session.posts == 0
     assert seen == [17]
+
+
+@pytest.mark.parametrize('status,posts', [('failed',1),('cancelled',1),('succeeded',0),('running',0)])
+def test_explicit_retry_only_replaces_terminal_request(tmp_path,status,posts):
+    class RetrySession(Session):
+        def get(self,url,**kwargs):
+            if self.gets==0:
+                self.gets+=1
+                return Response({'id':17,'status':status})
+            return super().get(url,**kwargs)
+    session=RetrySession(valid_wav())
+    settings=_settings(tmp_path)
+    VoiceBenchAdapter(settings,session=session,sleep=lambda _:None).synthesize(
+        '실제 대본', settings.data_dir/'voice.wav',request_id=17,retry_failed=True)
+    assert session.posts==posts

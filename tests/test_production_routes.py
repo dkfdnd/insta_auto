@@ -32,6 +32,11 @@ def test_integrated_and_legacy_production_routes_are_separate(tmp_path, monkeypa
     thread.start()
     conn = HTTPConnection(*httpd.server_address, timeout=3)
     try:
+        Settings(data_dir=tmp_path).report_path.write_text('{"posts": [{"shortcode": "latest"}]}', encoding='utf-8')
+        conn.request('GET','/data.js')
+        response=conn.getresponse()
+        assert response.status==200 and response.getheader('Cache-Control')=='no-store'
+        assert b'latest' in response.read()
         for route, expected in (
             ("/api/productions", {"items": [{"id": "new-job"}]}),
             ("/api/legacy-productions", {"enabled": False, "productions": [{"shortcode": "old-reel"}]}),

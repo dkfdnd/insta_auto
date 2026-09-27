@@ -25,7 +25,7 @@ def platform_of(provider: str, url: str) -> str:
     for key, markers in {
         "tiktok": ("tiktok",), "douyin": ("douyin",),
         "xiaohongshu": ("xiaohongshu", "xhs"),
-        "youtube_bilibili": ("youtube", "youtu.be", "bilibili"),
+        "youtube": ("youtube", "youtu.be"), "bilibili": ("bilibili",),
         "stock": ("pexels", "vimeo"),
     }.items():
         if any(marker in text for marker in markers):
@@ -39,7 +39,7 @@ def round_robin_candidates(items: list, limit: int) -> list:
                 "platform-search": 2, "keyword": 3}
     for item in sorted(items, key=lambda row: priority.get(row.match_kind, 4)):
         pools[platform_of(item.provider, item.url)].append(item)
-    order = ("tiktok", "douyin", "xiaohongshu", "youtube_bilibili", "stock", "other")
+    order = ("tiktok", "douyin", "xiaohongshu", "youtube", "bilibili", "stock", "other")
     result = []
     while len(result) < limit and any(pools.values()):
         for platform in order:
@@ -69,14 +69,19 @@ def title_query_agreement(title: str, query: str) -> float:
     return len(tokens(title) & wanted) / len(wanted) if wanted else 0.0
 
 
-def relevance_reasons(candidate, meta: dict, mode: str = 'scene') -> list[str]:
+def media_format_reasons(meta: dict, max_duration: float = 180) -> list[str]:
     reasons = []
-    if meta.get("duration") is None or not 4 <= meta["duration"] <= 180:
+    if meta.get("duration") is None or not 4 <= meta["duration"] <= max_duration:
         reasons.append("invalid_duration")
     if (meta.get("width") or 0) < 360 or (meta.get("height") or 0) < 640:
         reasons.append("low_resolution")
     if (meta.get("width") or 0) > 2 * (meta.get("height") or 0):
         reasons.append("not_crop_friendly")
+    return reasons
+
+
+def relevance_reasons(candidate, meta: dict, mode: str = 'scene') -> list[str]:
+    reasons = media_format_reasons(meta)
     semantic, scene, combined = candidate.semantic_similarity, candidate.hash_similarity, candidate.similarity
     # 같은 제품을 다른 구도로 촬영한 대체영상은 장면 지문이 달라도 의미 근거로 보존한다.
     if mode == 'product' and semantic is not None and semantic >= .82:

@@ -217,6 +217,17 @@ def make_handler(settings: Settings):
         def do_GET(self) -> None:  # noqa: N802
             if self.studio_get(studio): return
             path = urlparse(self.path).path
+            if path == '/data.js' and settings.report_path.is_file():
+                # Avoid a stale generated file or browser cache. Serve the
+                # authoritative snapshot that automatic selection consumes.
+                report = json.loads(settings.report_path.read_text(encoding='utf-8'))
+                body = ('window.HOTPOST_REPORT = ' + json.dumps(report, ensure_ascii=False) + ';\n').encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers(); self.wfile.write(body)
+                return
             if path == '/api/production-health':
                 from .production_health import check
                 self._json(check(settings)); return

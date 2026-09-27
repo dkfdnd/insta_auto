@@ -82,7 +82,7 @@ def test_virtualenv_tool_is_found_beside_python(tmp_path, monkeypatch):
     assert source_finder._executable("yt-dlp") == str(tool)
 
 
-def test_bilibili_download_uses_short_timeout(tmp_path, monkeypatch):
+def test_bilibili_download_resumes_after_timeout_once(tmp_path, monkeypatch):
     candidate = source_finder.Candidate(
         url="https://www.bilibili.com/video/BV1example",
         provider="browser-search",
@@ -90,10 +90,12 @@ def test_bilibili_download_uses_short_timeout(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(source_finder, "_executable", lambda _name: "yt-dlp.exe")
 
+    timeouts = []
     def timeout_stub(_command, *, timeout):
-        assert timeout == 35
+        timeouts.append(timeout)
         raise subprocess.TimeoutExpired("yt-dlp", timeout)
 
     monkeypatch.setattr(source_finder, "_run", timeout_stub)
     assert source_finder.download_candidate(candidate, tmp_path, 1, 100, None) is None
-    assert "35" in candidate.error
+    assert timeouts == [90, 150]
+    assert "150" in candidate.error

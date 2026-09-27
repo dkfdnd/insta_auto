@@ -37,7 +37,21 @@ class StudioStore:
                 CREATE TABLE IF NOT EXISTS events (
                   id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
                   detail TEXT NOT NULL, created REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS automatic_runs (
+                  run_key TEXT PRIMARY KEY, selection TEXT NOT NULL, created REAL NOT NULL);
             """)
+        # Existing daily automatic tasks adopt the shared workflow without
+        # launching new work or changing manually selected studio tasks.
+        with self.transaction() as db:
+            for row in db.execute('SELECT state FROM tasks').fetchall():
+                state = json.loads(row[0])
+                auto = state.get('automation', {})
+                if auto.get('selection_mode') == 'automatic' and auto.get('protocol') != 2:
+                    from .studio_workflow import snapshot
+                    auto['protocol'] = 2
+                    auto['needs_top_pick'] = bool(state.get('script_candidates'))
+                    snapshot(state)
+                    self.save(db, state)
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=30)
@@ -58,7 +72,7 @@ class StudioStore:
         finally:
             db.close()
 
-    def create(self, code, title):
+    def create(self, code, title, automation=None):
         with self.transaction() as db:
             row = db.execute("SELECT state FROM tasks WHERE shortcode=?", (code,)).fetchone()
             if row:
@@ -69,11 +83,28 @@ class StudioStore:
                          script_id=None, approved_script_id=None, voice_id=None,
                          approved_voice_id=None, edit_id=None, original_text="",
                          created=time.time(), updated=time.time())
+            if automation:
+                state['automation'] = automation
+                if automation.get('protocol') == 2:
+                    from .studio_workflow import init_run
+                    init_run(state)
             db.execute("INSERT INTO tasks VALUES (?,?,?,?,?)", (
                 state["id"], code, 0, json.dumps(state, ensure_ascii=False), state["updated"]))
             self.enqueue(db, state["id"], "prepare", {}, "prepare:" + state["id"])
             self.event(db, state["id"], "created", {})
             return state, True
+
+    def freeze_selection(self, run_key, selection):
+        with self.transaction() as db:
+            db.execute('INSERT OR IGNORE INTO automatic_runs VALUES(?,?,?)',
+                       (str(run_key), json.dumps(selection, ensure_ascii=False), time.time()))
+            return json.loads(db.execute('SELECT selection FROM automatic_runs WHERE run_key=?',
+                                         (str(run_key),)).fetchone()[0])
+
+    def events(self, task_id):
+        with self.connect() as db:
+            return [{**dict(r), 'detail':json.loads(r['detail'])} for r in db.execute(
+                'SELECT kind,detail,created FROM events WHERE task_id=? ORDER BY id DESC LIMIT 60', (task_id,))]
 
     def get(self, task_id, db=None):
         if db is None:
@@ -108,10 +139,14 @@ class StudioStore:
             task_id, kind, json.dumps(detail, ensure_ascii=False), time.time()))
 
     def enqueue(self, db, task_id, kind, payload, key):
-        row = db.execute("SELECT id,status FROM jobs WHERE key=?", (key,)).fetchone()
+        row = db.execute("SELECT id,status,checkpoint FROM jobs WHERE key=?", (key,)).fetchone()
         if row:
             if row["status"] == "failed":
                 db.execute("UPDATE jobs SET status='queued',error='',updated=? WHERE id=?", (time.time(), row["id"]))
+                if kind in {'rewrite', 'voice'}:
+                    checkpoint = json.loads(row['checkpoint'])
+                    checkpoint['retry_requested'] = True
+                    db.execute('UPDATE jobs SET checkpoint=? WHERE id=?', (json.dumps(checkpoint), row['id']))
             return row["id"]
         job_id = uid("job-")
         db.execute("INSERT INTO jobs(id,task_id,kind,key,payload,status,created,updated) VALUES(?,?,?,?,?,'queued',?,?)",
@@ -120,7 +155,14 @@ class StudioStore:
 
     def claim(self):
         with self.transaction() as db:
-            row = db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
+            # Finish an already-prepared video's downstream stages before the
+            # next slow source search, so the first review becomes ready sooner.
+            row = db.execute("""SELECT * FROM jobs WHERE status='queued'
+                AND COALESCE(json_extract(checkpoint,'$.not_before'),0)<=?
+                ORDER BY CASE WHEN kind<>'prepare' AND EXISTS (
+                  SELECT 1 FROM tasks WHERE tasks.id=jobs.task_id
+                  AND json_extract(tasks.state,'$.automation.active')=1
+                ) THEN 0 ELSE 1 END,created LIMIT 1""", (time.time(),)).fetchone()
             if row is None:
                 return None
             db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (time.time(), row["id"]))
@@ -133,6 +175,24 @@ class StudioStore:
         with self.transaction() as db:
             db.execute("UPDATE jobs SET checkpoint=?,updated=? WHERE id=?", (
                 json.dumps(value, ensure_ascii=False), time.time(), job_id))
+
+    def defer(self, job, message, seconds, waiting=False):
+        with self.transaction() as db:
+            state = self.get(job['task_id'], db)
+            checkpoint = job['checkpoint']
+            checkpoint['not_before'] = time.time()+seconds
+            if not waiting:
+                checkpoint['auto_retries'] = checkpoint.get('auto_retries',0)+1
+                checkpoint['retry_requested'] = True
+            state.update(status='waiting_capcut' if waiting else 'retry_wait', error='',
+                         message=message if waiting else f"일시적 오류 · 자동 재시도 {checkpoint['auto_retries']}/2 대기: {message}")
+            if state.get('pending_reproduction'):
+                # The deferred job is no longer running; let the worker consume it
+                # once and transition at its boundary without losing the request.
+                checkpoint['not_before'] = 0
+            db.execute("UPDATE jobs SET status='queued',checkpoint=?,updated=? WHERE id=?",
+                       (json.dumps(checkpoint),time.time(),job['id']))
+            self.save(db,state)
 
     def recover(self):
         # Called only after the process-exclusive studio worker lock is held.
@@ -156,14 +216,20 @@ class StudioStore:
         with self.transaction() as db:
             state = self.get(job["task_id"], db)
             payload = job.get("payload", {})
+            if job['kind'] == 'refresh_sources':
+                state['source_search'] = {'status': 'failed', 'message': str(error)[:500], 'progress': 0}
             current = payload.get("script_id", state["script_id"]) == state["script_id"]
+            current &= job['kind'] != 'refresh_sources'
+            if job['kind'] in {'proposal','suggest_edit'} and state.get('automation', {}).get('protocol')==2:
+                current = False
+                state['feedback_message'] = '수정안 생성 실패: '+str(error)[:500]
             if job["kind"] == "voice":
                 current &= payload.get("voice_id") == state.get("pending_voice_id")
             if job["kind"] in {"edit", "revision", "edit_request"}:
                 current &= payload.get("voice_id") == state.get("approved_voice_id")
             if current:
                 state.update(error=str(error)[:700], message="확인이 필요합니다")
-                if job["kind"] not in {"proposal", "register"}:
+                if job["kind"] not in {"proposal", "register"} or (job['kind'] == 'register' and state.get('automation')):
                     state["status"] = "attention"
             self.save(db, state)
             db.execute("UPDATE jobs SET status='failed',error=?,updated=? WHERE id=?", (

@@ -67,12 +67,21 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
         })
 
     all_scored.sort(key=lambda s: (s.rank_score, s.post.taken_at), reverse=True)
+    legacy_hot_codes = []
+    if settings.report_path.is_file():
+        previous = json.loads(settings.report_path.read_text(encoding='utf-8'))
+        if not previous.get('is_sample') and source != 'demo':
+            legacy_hot_codes = [p['shortcode'] for p in previous.get('posts', []) if p.get('tier', 0) >= 1]
+    detections = store.record_hot_detections([s.post for s in all_scored if s.tier >= 1], now, legacy_hot_codes)
     terms_by_code = post_terms([s.post for s in all_scored])
     posts_out = []
     for s in all_scored:
         thumb = ensure_thumbnail(settings, s.post)
         d = s.post.to_dict()
         d.update({
+            "hot_detected_at": detections.get(s.post.shortcode),
+            "hot_detected_date_kst": (datetime.fromtimestamp(detections[s.post.shortcode], KST).strftime('%Y-%m-%d')
+                                      if s.post.shortcode in detections else None),
             "metric_status": {"likes": "missing" if s.post.likes is None else "observed",
                               "comments": "missing" if s.post.comments is None else "observed",
                               "views": ("not_applicable" if not s.post.is_video else

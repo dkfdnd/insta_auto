@@ -10,5 +10,8 @@
   "sleep_after_error_min": 20.0,
   "sleep_after_error_max": 45.0,
   "voicebench_url": "http://127.0.0.1:8765",
-  "production_enabled": true
+  "production_enabled": true,
+  "studio_auto_top_enabled": true,
+  "studio_url": "http://127.0.0.1:18767",
+  "source_ytdlp_js_runtime": "node:C:\\Users\\s98se\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.EXE"
 }

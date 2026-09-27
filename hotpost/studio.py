@@ -1,4 +1,4 @@
-"""Human approval gates and recoverable production stages for the local studio."""
+"""Manual review and automatic top-two production in one recoverable studio."""
 from __future__ import annotations
 
 import copy
@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .editing_adapter import _atomic_json, selected_source_videos
 from .studio_store import Conflict, StudioStore, uid
+from .studio_workflow import WorkflowMixin, enabled, init_run, snapshot, current_run, capcut_running, transient
 
 
 def digest(path):
@@ -24,7 +25,7 @@ def selected(state, collection, key):
     return next((r for r in state[collection] if r["id"] == state.get(key)), None)
 
 
-class Studio:
+class Studio(WorkflowMixin):
     def __init__(self, settings, *, workers=True):
         self.settings = settings
         self.store = StudioStore(settings.data_dir / "studio")
@@ -45,10 +46,22 @@ class Studio:
                 self._lease.close(); self._lease = None
             if self._lease:
                 self.store.recover()
-                for i in range(3):
+                # Script models, voice models and rendering share this PC.
+                for i in range(1):
                     threading.Thread(target=self._worker, name=f"studio-{i}", daemon=True).start()
+                if settings.studio_auto_top_enabled:
+                    threading.Thread(target=self._watch_top, name='studio-top-two', daemon=True).start()
 
-    def create(self, code):
+    def _watch_top(self):
+        from .studio_automation import enqueue_latest
+        while not self.stop.is_set():
+            try:
+                enqueue_latest(self.settings)
+            except (OSError, ValueError, KeyError):
+                pass  # A report may not exist yet; the collection hook also enqueues.
+            self.stop.wait(30)
+
+    def create(self, code, automation=None):
         from .storage import Storage
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", code):
             raise ValueError("올바르지 않은 게시물 ID")
@@ -60,7 +73,7 @@ class Studio:
             title = re.sub(r"#\S+", "", row["caption"] or "").strip().split("\n")[0][:70] or code
         finally:
             db.close()
-        state, _ = self.store.create(code, title)
+        state, _ = self.store.create(code, title, automation)
         return self.public(state)
 
     def folder(self, task_id):
@@ -87,8 +100,42 @@ class Studio:
         return revision
 
     def action(self, task_id, action, data):
+        handled = self.workflow_action(task_id, action, data)
+        if handled is not None:
+            return handled
         def change(state, db):
-            if action == "save-script":
+            if action in {'save-script', 'restore-script', 'apply-proposal', 'pause-auto'} and state.get('automation'):
+                state['automation']['active'] = False
+                state['automation']['paused_at'] = time.time()
+                if action != 'pause-auto':
+                    state['automation']['stage'] = 'manual_review'
+                    state['automation'].pop('completed_at', None)
+            if action == 'pause-auto':
+                if not state.get('automation'): raise ValueError('자동 제작 대상이 아닙니다.')
+                state['automation']['paused_by_user'] = True
+                if enabled(state):
+                    db.execute("UPDATE jobs SET status='paused' WHERE task_id=? AND status='queued' AND kind NOT IN ('proposal','refresh_sources','suggest_edit')", (task_id,))
+                state.update(message='자동 진행 중지 · 진행 중인 단계의 결과를 보존합니다')
+                self.store.event(db, task_id, action, {})
+                return
+            if action == 'resume-auto':
+                if not state.get('automation'): raise ValueError('자동 제작 대상이 아닙니다.')
+                state['automation']['active'] = True
+                state['automation'].pop('paused_by_user', None)
+                if enabled(state):
+                    db.execute("UPDATE jobs SET status='queued' WHERE task_id=? AND status='paused'", (task_id,))
+                if not state.get('sources'):
+                    self.store.enqueue(db, task_id, 'prepare', {}, 'prepare:'+task_id)
+                    state.update(status='preparing', message='자료 준비 재개', error='')
+                self._advance_auto(state, db)
+                self.store.event(db, task_id, action, {})
+                return
+            if action == 'refresh-sources':
+                if db.execute("SELECT 1 FROM jobs WHERE task_id=? AND kind IN ('prepare','refresh_sources') AND status IN ('queued','running')", (task_id,)).fetchone():
+                    raise Conflict('자료 수집이 이미 대기 중이거나 실행 중입니다.')
+                self.store.enqueue(db, task_id, 'refresh_sources', {'request':str(data.get('request',''))[:1000]}, uid('sources:'))
+                state['source_search'] = {'status': 'queued', 'message': '다국어 추가 수집 대기', 'progress': 0}
+            elif action == "save-script":
                 self._script(state, data.get("text", ""), "manual")
             elif action == "restore-script":
                 old = next(s for s in state["scripts"] if s["id"] == data["script_id"])
@@ -100,7 +147,8 @@ class Studio:
                     raise Conflict("AI 수정안을 준비하고 있습니다. 완료 후 다시 요청하세요.")
                 request = str(data.get("request", "")).strip()[:2000]
                 if not request: raise ValueError("수정 요청을 입력하세요.")
-                self.store.enqueue(db, task_id, "proposal", {"script_id": script["id"], "request": request}, uid("proposal:"))
+                self.store.enqueue(db, task_id, "proposal", {"script_id": script["id"], "request": request,
+                    'base_text':state.get('feedback', {}).get('script_text',script['text'])}, uid("proposal:"))
             elif action == "apply-proposal":
                 proposal = next(p for p in state["proposals"] if p["id"] == data["proposal_id"])
                 if proposal["script_id"] != state["script_id"]:
@@ -133,6 +181,11 @@ class Studio:
             elif action == "retry":
                 row = db.execute("SELECT * FROM jobs WHERE task_id=? AND status='failed' ORDER BY updated DESC LIMIT 1", (task_id,)).fetchone()
                 if not row: return
+                if enabled(state):
+                    checkpoint = json.loads(row['checkpoint'])
+                    checkpoint.pop('not_before',None)
+                    checkpoint['auto_retries'] = 0
+                    db.execute('UPDATE jobs SET checkpoint=? WHERE id=?',(json.dumps(checkpoint),row['id']))
                 payload = json.loads(row["payload"])
                 if payload.get("script_id", state["script_id"]) != state["script_id"]:
                     raise Conflict("이전 대본의 작업입니다. 현재 대본을 승인해 주세요.")
@@ -140,9 +193,13 @@ class Studio:
                     raise Conflict("이전 음성의 작업입니다. 현재 음성을 확인하세요.")
                 if row["kind"] in {"edit", "revision", "edit_request"} and payload.get("voice_id") != state.get("approved_voice_id"):
                     raise Conflict("이전 음성의 편집입니다. 현재 음성을 먼저 승인하세요.")
+                if row['kind'] in {'rewrite', 'voice'}:
+                    checkpoint = json.loads(row['checkpoint'])
+                    checkpoint['retry_requested'] = True
+                    db.execute('UPDATE jobs SET checkpoint=? WHERE id=?', (json.dumps(checkpoint), row['id']))
                 db.execute("UPDATE jobs SET status='queued',error='' WHERE id=?", (row["id"],))
                 state.update(error="", message="중단 단계부터 재시도 중")
-                state["status"] = {"prepare":"preparing", "voice":"voice_generating", "edit":"editing", "revision":"editing"}.get(row["kind"], state["status"])
+                state["status"] = {"prepare":"preparing", "rewrite":"rewriting", "voice":"voice_generating", "edit":"editing", "revision":"editing", "register":"registering"}.get(row["kind"], state["status"])
             elif action in {"revise-edit", "request-edit"}:
                 edit = selected(state, "edits", "edit_id")
                 if not edit or data.get("edit_id") != edit["id"]: raise Conflict("현재 편집 버전을 확인하세요.")
@@ -158,7 +215,8 @@ class Studio:
                 edit = next((e for e in state["edits"] if e["id"] == data.get("edit_id")), None)
                 if not edit: raise ValueError("초안 생성 후 이용할 수 있습니다.")
                 self.store.enqueue(db, task_id, "register", {"edit_id": edit["id"]}, "register:" + edit["id"])
-                db.execute("UPDATE jobs SET status='queued' WHERE key=? AND status='done'", ("register:" + edit["id"],))
+                db.execute("UPDATE jobs SET status='queued',payload=? WHERE key=? AND status IN ('done','queued','failed')",
+                           (json.dumps({'edit_id':edit['id'], 'launch':True}), "register:" + edit["id"]))
                 state.update(message="CapCut 초안 준비 중", error="")
             else:
                 raise ValueError("지원하지 않는 작업입니다.")
@@ -169,6 +227,8 @@ class Studio:
         state = copy.deepcopy(state)
         if state.get("manifest_path"):
             state["sources"] = self._source_records([s["path"] for s in state["sources"]], state["manifest_path"], state["sources"])
+            from .source_audit import summarize
+            state['source_audit'] = summarize(state.get('source_search_manifest_path') or state['manifest_path'])
         for collection in ("scripts", "voices", "edits"):
             for item in state[collection]:
                 for field in ("path", "preview_path", "cover_path"):
@@ -183,6 +243,8 @@ class Studio:
         for source in state["sources"]:
             source["url"] = self.media_url(state["id"], source["path"])
         state["jobs"] = self.store.jobs(state["id"])
+        state['events'] = self.store.events(state['id'])
+        state['pipeline'] = self.pipeline(state)
         return state
 
     @staticmethod
@@ -197,7 +259,14 @@ class Studio:
         for i, raw in enumerate(videos):
             path = Path(raw)
             record = dict(existing[i]) if existing else {"id": f"source-{i}", "path": str(path), "sha256": digest(path)}
-            candidate = next((c for c in data.get("candidates", []) if c.get("file_sha256") == record["sha256"] or Path(c.get("downloaded_file") or "_").name == path.name), {})
+            candidates = data.get('candidates', [])
+            candidate = next((c for c in candidates if c.get('file_sha256') == record['sha256']), None)
+            if candidate is None:
+                candidate = next((c for c in candidates if c.get('downloaded_file')
+                                  and (Path(manifest).parent / c['downloaded_file']).resolve() == path.resolve()), {})
+            if not candidate and existing:
+                records.append(record)
+                continue
             url = candidate.get("original_url") or candidate.get("url", "")
             record.update(origin_url=url if urlparse(url).scheme in {"http", "https"} else "",
                           rights=candidate.get("rights", "unknown"), manifest_path=str(manifest))
@@ -229,19 +298,52 @@ class Studio:
                 self.stop.wait(.6); continue
             try:
                 state = self.store.get(job["task_id"])
+                if enabled(state) and not current_run(state):
+                    state = self.store.change(state['id'], lambda s, db: init_run(s))
+                if enabled(state) and state.get('pending_reproduction') and job['kind'] not in {'refresh_sources','proposal','suggest_edit'}:
+                    self.store.finish(job, {}, lambda s, db, r: self.activate_reproduction(s, db))
+                    continue
+                if job['kind'] in {'register', 'export'} and not job['payload'].get('launch') and capcut_running():
+                    self.store.defer(job, 'CapCut 종료 대기 · 저장하고 앱을 닫으면 자동으로 이어집니다', 15, waiting=True)
+                    continue
                 payload = job["payload"]
                 if "script_id" in payload and payload["script_id"] != state["script_id"]:
                     self.store.finish(job, {}, lambda *_: None); continue
                 result = getattr(self, "_" + job["kind"])(state, job)
-                self.store.finish(job, result, lambda s, db, r: self._accept(s, job, r))
+                self.store.finish(job, result, lambda s, db, r: self._accept(s, job, r, db))
             except Exception as exc:
-                self.store.fail(job, exc)
+                if enabled(self.store.get(job['task_id'])) and transient(exc) and job['checkpoint'].get('auto_retries', 0) < 2:
+                    self.store.defer(job, str(exc), 15 * (job['checkpoint'].get('auto_retries', 0)+1))
+                else:
+                    self.store.fail(job, exc)
+                    state = self.store.get(job['task_id'])
+                    if enabled(state) and state.get('pending_reproduction'):
+                        self.store.change(state['id'], lambda s, db: self.activate_reproduction(s, db))
 
     def _prepare(self, state, job):
         from .source_finder import find_sources
         from .transcript import extract_transcript
         from .script_rewriter import rewrite
+        def progress(message, pct):
+            self.store.change(state['id'], lambda s, db: s.update(message=str(message)[:300], progress=pct))
         code = state["shortcode"]
+        # Search must see actual speech/OCR from this reference on the first run.
+        transcripts = sorted(self.settings.transcript_dir.glob(f"{code}-*/transcript.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        transcript = None
+        for path in transcripts:
+            try:
+                if json.loads(path.read_text(encoding='utf-8')).get('speech'):
+                    transcript = path; break
+            except (OSError, ValueError):
+                continue
+        if transcript is None:
+            transcript = Path(extract_transcript(self.settings, code, progress)["json_path"])
+        if enabled(state):
+            original = '\n'.join(v.get('text', '') for v in json.loads(transcript.read_text(encoding='utf-8')).get('speech', []))
+            def record_transcript(s, db):
+                s.update(original_text=original, transcript_path=str(transcript))
+                snapshot(s)
+            self.store.change(state['id'], record_transcript)
         manifests = sorted(self.settings.source_dir.glob(f"{code}-*/manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         videos, manifest = [], None
         for candidate in manifests:
@@ -255,14 +357,28 @@ class Studio:
                 break
             except (ValueError, OSError): continue
         if not videos:
-            result = find_sources(self.settings, code, lambda *_: None)
+            result = find_sources(self.settings, code, progress)
             manifest = Path(result["zip_path"]).parent / "manifest.json"
-            videos = selected_source_videos(manifest)
-        transcripts = sorted(self.settings.transcript_dir.glob(f"{code}-*/transcript.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        transcript = next((p for p in transcripts if json.loads(p.read_text(encoding="utf-8")).get("speech")), None)
-        if transcript is None:
-            transcript = Path(extract_transcript(self.settings, code, lambda *_: None)["json_path"])
+            data = json.loads(manifest.read_text(encoding='utf-8'))
+            data['candidates'] = [c for c in data.get('candidates', []) if c.get('editing_eligible', True)
+                                  and c.get('source_quality') in {'clean-source', 'light-overlay'}]
+            filtered = manifest.parent / 'studio-selected.json'
+            _atomic_json(filtered, data)
+            videos = selected_source_videos(filtered)
+        if not videos:
+            raise ValueError('제작에 사용할 소스 영상이 없습니다. 자료를 확인하고 재시도하세요.')
         original = "\n".join(s.get("text", "") for s in json.loads(transcript.read_text(encoding="utf-8")).get("speech", []))
+        if not original.strip():
+            raise ValueError('실제 발화 대본을 확보하지 못했습니다. OCR을 음성 대본으로 대체하지 않습니다.')
+        if state.get('automation'):
+            reference = transcript.parent / 'reference.mp4'
+            if not reference.is_file():
+                raise ValueError('대본 재가공에 필요한 기준 영상이 없습니다.')
+            products = json.loads(manifest.read_text(encoding='utf-8')).get('product_evidence', {}).get('products', [])
+            product = next((p.get('ko') or p.get('en') for p in products if isinstance(p, dict)), '')
+            return {'original_text':original, 'reference_video':str(reference), 'transcript_path':str(transcript),
+                    'product':product or state['title'], 'sources':self._source_records(videos, manifest),
+                    'manifest_path':str(manifest)}
         existing = sorted((self.settings.data_dir / "productions" / code).glob("scripts-v*/scripts.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         script = json.loads(existing[0].read_text(encoding="utf-8")) if existing else rewrite(
             self.settings, transcript, manifest, self.folder(state["id"]) / "research", lambda *_: None)
@@ -270,10 +386,39 @@ class Studio:
                 "sources": self._source_records(videos, manifest),
                 "manifest_path": str(manifest)}
 
+    def _refresh_sources(self, state, job):
+        from .source_finder import find_sources
+        def progress(message, pct):
+            self.store.change(state['id'], lambda s, db: s.update(source_search={
+                'status': 'running', 'message': str(message)[:300], 'progress': pct}))
+        result = find_sources(self.settings, state['shortcode'], progress, search_request=job['payload'].get('request', ''))
+        manifest = Path(result['zip_path']).parent / 'manifest.json'
+        videos = [manifest.parent / c['downloaded_file'] for c in result['candidates']
+                  if c.get('selected_for_zip') and c.get('editing_eligible', True)
+                  and c.get('source_quality') in {'clean-source', 'light-overlay'}]
+        records = self._source_records(videos, manifest)
+        for record in records:
+            record['id'] = uid('source-')
+        return {'source_search_manifest_path': str(manifest), 'sources': records}
+
+    def _rewrite(self, state, job):
+        from .studio_services import ensure_local
+        from .studio_automation import rewrite
+        if state.get('automation', {}).get('needs_top_pick') and state.get('script_candidates'):
+            from .studio_top_pick import choose
+            candidates = state['script_candidates']
+            index, result = choose(self.settings, state, list(enumerate(candidates)))
+            return {'text':candidates[index]['text'], 'top_pick':result, 'selected_candidate':index,
+                    'selection_reason':result['reason']}
+        ensure_local(self.settings, 'script')
+        return rewrite(self, state, job)
+
     def _proposal(self, state, job):
         from .studio_ai import propose_script
         script = next(s for s in state["scripts"] if s["id"] == job["payload"]["script_id"])
-        return {**propose_script(self.settings, state, script["text"], job["payload"]["request"]),
+        text = job['payload'].get('base_text', script['text'])
+        return {**propose_script(self.settings, state, text, job["payload"]["request"]),
+                'base_hash':hashlib.sha256(text.encode()).hexdigest(),
                 "id": job["id"], "script_id": script["id"], "created": time.time()}
 
     def _voice(self, state, job):
@@ -285,11 +430,17 @@ class Studio:
         voice = folder / "original.wav"
         metadata = folder / "tts.json"
         if not (voice.is_file() and metadata.is_file()):
+            if state.get('automation'):
+                from .studio_services import ensure_local
+                ensure_local(self.settings, 'voice')
             def checkpoint(request_id):
                 job["checkpoint"]["request_id"] = request_id
+                job['checkpoint'].pop('retry_requested', None)
                 self.store.checkpoint(job["id"], job["checkpoint"])
-            result = VoiceBenchAdapter(self.settings).synthesize(script["text"], voice,
-                request_id=job["checkpoint"].get("request_id"), on_submitted=checkpoint)
+            result = VoiceBenchAdapter(self.settings).synthesize(p.get('spoken_text', script["text"]), voice,
+                progress=lambda message, pct: self.store.change(state['id'], lambda s, db: s.update(message=message, progress=pct)),
+                request_id=job["checkpoint"].get("request_id"), on_submitted=checkpoint,
+                retry_failed=bool(job['checkpoint'].get('retry_requested')))
             _atomic_json(metadata, result)
         result = json.loads(metadata.read_text(encoding="utf-8"))
         if p["speed"] != 1:
@@ -309,7 +460,8 @@ class Studio:
             with (folder / f"{action}.log").open("a", encoding="utf-8") as log:
                 proc = subprocess.Popen([str(self.settings.auto_capcut_python), "-X", "utf8", "-m", "auto_capcut.studio_runner",
                                    "--request", str(request), "--result", str(result)],
-                                  cwd=self.settings.auto_capcut_root, stdout=log, stderr=log)
+                                  cwd=self.settings.auto_capcut_root, stdout=log, stderr=log,
+                                  creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 # The runner owns an OS lock and a result receipt. A server restart can
                 # reconnect without executing the same render concurrently or twice.
                 job["checkpoint"][action + "_pid"] = proc.pid
@@ -329,13 +481,15 @@ class Studio:
         voice = next(v for v in state["voices"] if v["id"] == p["voice_id"])
         script = next(s for s in state["scripts"] if s["id"] == p["script_id"])
         if digest(voice["path"]) != voice["sha256"]: raise Conflict("승인한 음성이 변경되었습니다.")
-        sources = self._source_records([s["path"] for s in state["sources"]], state["manifest_path"], state["sources"])
+        records = [s for s in state['sources'] if p.get('source_ids') is None or s['id'] in p['source_ids']]
+        if not records: raise ValueError('사용 가능한 소스가 없습니다.')
+        sources = self._source_records([s["path"] for s in records], state.get("manifest_path", ''), records)
         base = self._process(state, job, "analyze", {"sources": sources, "voice": voice, "script": script})
         plan = base["plan"]
         semantic = self.folder(state["id"]) / job["id"] / "semantic-plan.json"
         if semantic.is_file():
             plan = json.loads(semantic.read_text(encoding="utf-8"))
-            result = self._process(state, job, "render", {"plan": plan})
+            result = self.render_feedback(state, job, plan)
             return {"id": job["id"], "script_id": script["id"], "voice_id": voice["id"], "created": time.time(), **result}
         try:
             observations, choices = describe_shots(self.settings, plan["shots"], plan["beats"])
@@ -354,7 +508,7 @@ class Studio:
         except Exception as exc:
             plan["warnings"].append("장면 의미 분석을 완료하지 못해 대체 후보를 사용했습니다: " + str(exc)[:200])
         _atomic_json(semantic, plan)
-        result = self._process(state, job, "render", {"plan": plan})
+        result = self.render_feedback(state, job, plan)
         return {"id": job["id"], "script_id": script["id"], "voice_id": voice["id"], "created": time.time(), **result}
 
     def _revision(self, state, job):
@@ -386,13 +540,39 @@ class Studio:
 
     def _register(self, state, job):
         edit = next(e for e in state["edits"] if e["id"] == job["payload"]["edit_id"])
-        return self._process(state, job, "register", {"plan_path": edit["plan_path"], "edit_id": edit["id"], "launch": True})
+        return self._process(state, job, "register", {"plan_path": edit["plan_path"], "edit_id": edit["id"], "launch": job['payload'].get('launch', True)})
 
-    def _accept(self, state, job, result):
+    def _accept(self, state, job, result, db=None):
         kind, p = job["kind"], job["payload"]
+        if kind == 'suggest_edit':
+            if self.feedback_hash(state.get('feedback', {})) != result['feedback_hash']:
+                raise Conflict('요청 후 피드백이 변경되었습니다. 수정 요청을 다시 보내세요.')
+            feedback = state.setdefault('feedback', {})
+            feedback['base_edit_id'] = result['base_edit_id']
+            changes = [{k:v for k,v in c.items() if k in {'beat_id','emphasis'}} for c in result['changes'] if 'emphasis' in c]
+            by_id = {c['beat_id']:c for c in feedback.get('changes', [])}
+            for c in changes: by_id.setdefault(c['beat_id'], {}).update(c)
+            if by_id: feedback['changes'] = list(by_id.values())
+            state['candidate_requests'] = [c['beat_id'] for c in result['changes'] if c.get('choose_candidates')]
+            state['feedback_message'] = result['summary']
+            state['feedback_revision'] = state.get('feedback_revision',0)+1
+            return
+        if kind == 'refresh_sources':
+            # Append assets; existing renders and source references stay playable.
+            hashes = {s['sha256'] for s in state['sources']}
+            urls = {s.get('origin_url') for s in state['sources'] if s.get('origin_url')}
+            added = [s for s in result['sources'] if s['sha256'] not in hashes and s.get('origin_url') not in urls]
+            state['sources'].extend(added)
+            state['source_search_manifest_path'] = result['source_search_manifest_path']
+            state['source_search'] = {'status': 'done', 'message': f'추가 수집 완료 · 신규 {len(added)}개 / 보유 {len(state["sources"])}개', 'progress': 100}
+            return
         if kind == "prepare":
             state.update({k: v for k, v in result.items() if k != "text"})
-            if not state["scripts"]: self._script(state, result["text"], "recommended")
+            if not state["scripts"] and result.get('text'): self._script(state, result["text"], "recommended")
+        elif kind == 'rewrite':
+            state.update({k:v for k,v in result.items() if k != 'text'})
+            if not state['scripts'] or enabled(state): self._script(state, result['text'], 'automatic_script_auto')
+            if enabled(state): state['automation']['needs_top_pick'] = False
         elif kind == "proposal":
             if not any(r["id"] == result["id"] for r in state["proposals"]): state["proposals"].append(result)
         elif kind == "voice":
@@ -409,3 +589,51 @@ class Studio:
             edit = next(e for e in state["edits"] if e["id"] == p["edit_id"])
             edit.update(draft_path=result["draft_path"], draft_name=result["draft_name"])
             state.update(message="CapCut에서 초안을 열어 편집할 수 있습니다", error="")
+        elif kind == 'export':
+            edit = next(e for e in state['edits'] if e['id'] == p['edit_id'])
+            edit.update(result)
+        if enabled(state) and db is not None:
+            snapshot(state)
+            if state.get('pending_reproduction'):
+                self.activate_reproduction(state, db)
+                return
+        if state.get('automation', {}).get('active') and db is not None:
+            self._advance_auto(state, db)
+        elif state.get('automation', {}).get('paused_by_user'):
+            state.update(status='paused', message='단계 결과 저장 완료 · 자동 진행 중지')
+
+    def _advance_auto(self, state, db):
+        if enabled(state):
+            return self.advance_workflow(state, db)
+        auto = state['automation']
+        if not auto.get('active') or not state.get('sources'): return
+        script = selected(state, 'scripts', 'script_id')
+        voice = selected(state, 'voices', 'voice_id')
+        edit = selected(state, 'edits', 'edit_id')
+        if not script:
+            stage, status, message = 'rewrite', 'rewriting', 'script_auto 대본 재가공 · 자동 선택 대기'
+            self.store.enqueue(db, state['id'], stage, {}, 'rewrite:'+state['id'])
+        elif not voice or voice['script_id'] != script['id']:
+            stage, status, message = 'voice', 'voice_generating', '자동 선택 대본으로 VoiceBench 음성 생성'
+            voice_id = 'voice-auto-' + script['id']
+            state.update(approved_script_id=script['id'], pending_voice_id=voice_id)
+            auto['script_selection'] = {'mode':'automatic', 'script_id':script['id']}
+            self.store.enqueue(db, state['id'], stage,
+                               {'voice_id':voice_id, 'script_id':script['id'], 'speed':1.0}, voice_id)
+        elif not edit or edit['voice_id'] != voice['id']:
+            if digest(voice['path']) != voice['sha256']: raise Conflict('자동 선택 음성의 파일이 변경됐습니다.')
+            stage, status, message = 'edit', 'editing', '장면·자막 편집 및 리뷰 영상 생성'
+            state.update(approved_voice_id=voice['id'])
+            auto['voice_selection'] = {'mode':'automatic', 'voice_id':voice['id']}
+            self.store.enqueue(db, state['id'], stage,
+                               {'voice_id':voice['id'], 'script_id':script['id']}, 'edit:'+voice['id'])
+        elif not edit.get('draft_path'):
+            stage, status, message = 'register', 'registering', '리뷰 영상 완료 · CapCut 프로젝트 등록 중'
+            self.store.enqueue(db, state['id'], stage, {'edit_id':edit['id'], 'launch':False}, 'register:'+edit['id'])
+        else:
+            stage, status, message = 'completed', 'draft_review', '자동 제작 완료 · 영상과 CapCut 프로젝트를 검토해 주세요'
+            auto['completed_at'] = time.time()
+        if auto.get('stage') != stage:
+            self.store.event(db, state['id'], 'automatic_stage', {'stage':stage, 'message':message})
+        auto['stage'] = stage
+        state.update(status=status, message=message, error='', progress=0)

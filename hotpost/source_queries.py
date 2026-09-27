@@ -8,6 +8,8 @@ import re
 from itertools import zip_longest
 
 PRODUCTS = [
+    ('생선구이', 'pan fried fish cooking', '煎鱼技巧', ('생선구이', '생선 구이', '생선 굽', '생선을 구', '생선 부서', 'pan fried fish', 'frying fish', '煎鱼')),
+    ('타일 보수', 'tile repair', '瓷砖修补', ('타일 보수', '타일보수', 'tile repair', '瓷砖修补')),
     ('여권 복대', 'hidden passport money belt', '隐形护照腰包', ('여권지갑', '여권 지갑', '여권 복대', '여행 복대', 'money belt', 'passport pouch', '护照腰包')),
     ('뮬 운동화', 'backless mule sneakers', '半拖运动鞋', ('뮬', 'mule sneakers', 'backless sneakers', '半拖运动鞋')),
     ('마늘간장 치킨', 'honey garlic soy chicken', '蜂蜜蒜香酱油鸡', ('마늘간장', '마늘 간장', 'honey garlic chicken', '蒜香鸡')),
@@ -122,9 +124,12 @@ def product_query_plan(caption: str, visual_queries: list[str], vision_terms: li
                 add(f'{brand} {attrs} {base}', lang, 'appearance', evidence + [s for f in features for s in f['sources']])
             intents = {'en': ('detail review', 'demonstration', 'unboxing'),
                        'zh': ('细节展示', '使用演示', '开箱 实拍'), 'ko': ('실물 리뷰', '사용 영상', '언박싱')}
-            if product['en'] == 'honey garlic soy chicken':
+            if product['en'] in {'honey garlic soy chicken', 'pan fried fish cooking'}:
                 intents = {'en': ('recipe', 'cooking tutorial', 'close up cooking'),
                            'zh': ('做法', '制作教程', '烹饪 特写'), 'ko': ('레시피', '요리 과정', '만들기')}
+            elif product['en'] == 'tile repair':
+                intents = {'en': ('crack repair tutorial', 'repair process', 'before after repair'),
+                           'zh': ('裂缝修复教程', '修补过程', '修复前后'), 'ko': ('균열 보수 방법', '보수 과정', '보수 전후')}
             for intent in intents[lang]:
                 add(f'{brand} {base} {intent}', lang, intent, evidence)
     if not products:
@@ -151,7 +156,7 @@ def platform_queries(queries: list[str], provider: str, limit: int) -> list[str]
     out = []
     # 영어 우선 두 개마다 한국어 등 보조 언어 하나를 배분한다.
     preferred = pools[languages[0]]
-    secondary = pools[languages[1]] + pools[languages[2]]
+    secondary = [q for batch in zip_longest(pools[languages[1]], pools[languages[2]]) for q in batch if q]
     while preferred or secondary:
         out.extend(preferred[:2]); del preferred[:2]
         if secondary:

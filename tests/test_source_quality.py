@@ -18,7 +18,7 @@ def test_platform_round_robin_prevents_one_pool_from_filling_forty():
     items += [_candidate(f"https://youtube.com/watch?v={i}", "youtube") for i in range(3)]
     items += [_candidate(f"https://douyin.com/video/{i}", "douyin") for i in range(2)]
     mixed = round_robin_candidates(items, 10)
-    assert [platform_of(x.provider, x.url) for x in mixed[:3]] == ["tiktok", "douyin", "youtube_bilibili"]
+    assert [platform_of(x.provider, x.url) for x in mixed[:3]] == ["tiktok", "douyin", "youtube"]
     assert len(mixed) == 10
 
 

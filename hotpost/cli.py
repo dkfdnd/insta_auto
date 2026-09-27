@@ -270,7 +270,12 @@ def _cmd_run_locked(settings: Settings, args) -> int:
     report = build_report(settings, store, source=args.source, notes=notes, usernames=usernames)
     write_report(settings, report)
     _log(f"리포트 생성: {settings.report_path}  (핫 게시물 {report['summary']['hot']}개 / 전체 {report['summary']['posts']}개)")
-    if getattr(args, 'acquire', False) and args.source != 'demo':
+    if settings.studio_auto_top_enabled and args.source != 'demo' and not args.only:
+        from .studio_automation import enqueue_top, ensure_worker
+        selected = enqueue_top(settings, report, store.last_run()['id'])
+        _log(f"제작실 상위 2개 자동 제작 등록: {sum('task_id' in row for row in selected)}개")
+        ensure_worker(settings)
+    elif getattr(args, 'acquire', False) and args.source != 'demo':
         from .acquisition import acquire
         results = acquire(settings, report, _log)
         if any(row['status'] == 'error' for row in results):

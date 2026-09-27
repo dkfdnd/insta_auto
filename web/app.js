@@ -12,12 +12,20 @@
       const response = await fetch('/api/collection-status', {cache: 'no-store'});
       if (!response.ok) throw new Error('status unavailable');
       const data = await response.json(), c = data.collection, run = c.last_run;
-      const labels = {none:'실행 전', running:'실행 중', success:'성공', partial_failure:'부분 실패', failure:'실패', blocked:'중단'};
+      const labels = {none:'실행 전', running:'실행 중', success:'갱신 완료', partial_failure:'갱신 완료 · 일부 계정 실패', failure:'실패', blocked:'중단'};
       const result = run ? ` · 성공 ${run.accounts_ok} / 실패 ${run.accounts_failed} / 건너뜀 ${run.accounts_skipped || 0}` : '';
       const views = c.view_observations || {};
       el.textContent = `수집 ${labels[c.state] || c.state}${result} · 마지막 실행 ${stamp(run?.started_at)} · 마지막 데이터 갱신 ${stamp(c.newest_post_update)} · 전체 성공 ${stamp(c.last_full_success_at)} · 정확한 조회수 ${views.exact || 0}/${views.total || 0}`;
-      if (run?.stop_reason) el.textContent += ` · ${run.notes || run.stop_reason}`;
+      if (run?.notes || run?.stop_reason) el.textContent += ` · ${run.notes || run.stop_reason}`;
       if (c.state !== 'running' && (!c.newest_post_update || Date.now()/1000 - c.newest_post_update > 26*3600)) el.textContent += ' · 최신 수집 데이터가 아닙니다';
+      if (c.last_success_at > (R?.generated_at || 0)) {
+        el.append(document.createTextNode(' · 현재 목록보다 새로운 수집 데이터가 있습니다. '));
+        const refresh = document.createElement('button');
+        refresh.type = 'button';
+        refresh.textContent = '최신 게시물 보기';
+        refresh.addEventListener('click', () => window.location.reload());
+        el.append(refresh);
+      }
     } catch (_) {
       el.textContent = '현재 수집 상태를 확인할 수 없습니다. 표시된 게시물의 데이터 기준 시각을 확인하세요.';
     }
@@ -209,13 +217,15 @@
   }
 
   // ---------- 상태 ----------
-  const state = { period: 336, kind: 'all', tier: 1, sort: 'rank', assessment: 'all', account: '', q: '', topic: null };
+  const state = { detection: 'all', period: 336, kind: 'all', tier: 1, sort: 'rank', assessment: 'all', account: '', q: '', topic: null };
 
   // ---------- 툴바 ----------
   $$('.seg').forEach((seg) => seg.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     $$('button', seg).forEach((x) => x.classList.toggle('on', x === b));
-    state[seg.dataset.key] = seg.dataset.key === 'period' ? +b.dataset.v : b.dataset.v; renderAll();
+    state[seg.dataset.key] = seg.dataset.key === 'period' ? +b.dataset.v : b.dataset.v;
+    $$('#period button').forEach(x => { x.disabled = state.detection === 'today'; });
+    renderAll();
   }));
   $('#tier').addEventListener('change', (e) => { state.tier = +e.target.value; render(); });
   $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; render(); });
@@ -225,7 +235,9 @@
   accSel.addEventListener('change', (e) => { state.account = e.target.value; renderAll(); });
   let qt; $('#q').addEventListener('input', (e) => { clearTimeout(qt); qt = setTimeout(() => { state.q = e.target.value.trim().toLowerCase(); renderAll(); }, 150); });
   $('#reset').addEventListener('click', () => {
-    Object.assign(state, { period: 336, kind: 'all', tier: 1, sort: 'rank', assessment: 'all', account: '', q: '', topic: null });
+    Object.assign(state, { detection: 'all', period: 336, kind: 'all', tier: 1, sort: 'rank', assessment: 'all', account: '', q: '', topic: null });
+    $$('#detection button').forEach(b => b.classList.toggle('on', b.dataset.v === 'all'));
+    $$('#period button').forEach(b => { b.disabled = false; });
     $('#assessment').value = 'all';
     $$('#period button').forEach((b) => b.classList.toggle('on', b.dataset.v === '336'));
     $$('#kind button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'all'));
@@ -236,7 +248,9 @@
   function baseFiltered() {   // 기간·유형·계정·검색 (등급/주제 제외) → 주제 계산용
     const q = state.q;
     return POSTS.filter((p) => {
-      if (p.age_hours > state.period) return false;
+      if (state.detection === 'today') {
+        if (!window.HotpostDetection.isToday(p)) return false;
+      } else if (p.age_hours > state.period) return false;
       if (state.kind === 'video' && !isVideo(p)) return false;
       if (state.kind === 'image' && isVideo(p)) return false;
       if (state.account && p.username !== state.account) return false;
@@ -312,6 +326,7 @@
 
   // ---------- 카드 ----------
   const productionByCode = new Map();
+  const studioByCode = new Map();
   const studioSelected = new Set();
   document.addEventListener('click', async e => {
     const choice = e.target.closest('.studio-choice');
@@ -335,8 +350,10 @@
     } catch (error) { e.target.textContent = error.message; e.target.disabled = false; }
   }, true);
   function productionMarkup(code) {
+    const work = studioByCode.get(code);
+    if (work) return `<a class="production-link" href="studio.html?work=${encodeURIComponent(work.id)}" onclick="event.stopPropagation()">${work.automation?'자동 제작 '+work.automation.rank+'위':'제작실 작업'} · 진행/영상 리뷰 →</a><br><small class="${work.error?'production-error':''}">${esc(work.error||work.message)}</small>`;
     const job = productionByCode.get(code);
-    if (!job) return '<span class="hint">소스·대본·쇼츠 자동 제작 대기</span>';
+    if (!job) return '<span class="hint">제작 선택으로 추가 · 수집 후 상위 2개는 자동 제작</span>';
     const source = job.source || {}, transcript = job.transcript || {};
     const link = (url, label) => url ? `<a class="production-link" href="${esc(url)}" onclick="event.stopPropagation()">${label}</a>` : `<span>${label}</span>`;
     const states = {queued:'대기',voice:'음성 생성 중',building:'프로젝트 생성 중',draft_ready:'프로젝트 완료',exporting:'내보내기 중',done:'완료',error:'실패 · 재시도 필요',missing:'결과 파일 없음'};
@@ -349,11 +366,17 @@
       ${job.status === 'error' ? `<button class="btn ghost production-retry" data-code="${esc(code)}">중단 단계부터 다시 시도</button>` : ''}`;
   }
   async function refreshProductions() {
+    const responses = await Promise.allSettled([
+      fetch('/api/studio', {cache:'no-store'}).then(r=>r.ok?r.json():null),
+      fetch('/api/legacy-productions', {cache:'no-store'}).then(r=>r.ok?r.json():null)
+    ]);
+    if (responses[0].status==='fulfilled' && responses[0].value?.tasks) {
+      studioByCode.clear();
+      for (const item of responses[0].value.tasks) studioByCode.set(item.shortcode,item);
+    }
     try {
-      const response = await fetch('/api/legacy-productions', {cache:'no-store'});
-      if (!response.ok) return;
-      const data = await response.json();
-      for (const item of data.productions) productionByCode.set(item.shortcode, item);
+      const data = responses[1].status==='fulfilled'?responses[1].value:null;
+      for (const item of data?.productions||[]) productionByCode.set(item.shortcode, item);
       $$('.production-status').forEach(el => { el.innerHTML = productionMarkup(el.dataset.code); });
     } catch (_) { /* Keep verified last state while the server reconnects. */ }
   }
@@ -386,6 +409,7 @@
       <div class="body">
         ${p.tier ? `<div class="flags"><span class="flag neutral" title="${esc((p.assessment?.reasons || []).join(' · '))}">${esc(p.assessment?.label || '잠정 후보')}</span></div>` : ''}
         <div class="who"><span class="avatar">${initials(p.username)}</span><span class="name">@${esc(p.username)}</span><span class="time" title="${dateStr(p.taken_at)}">${ago(p.age_hours)}</span></div>
+        <div class="hint">핫 최초 감지일 · ${window.HotpostDetection.dateKey(p.hot_detected_at) || (p.tier ? '기록 없음' : '미감지')} (한국시간)</div>
         <div class="metrics">
           ${metric('조회수', p.views, p.ratios.views, !isVideo(p) || p.views == null)}
           ${metric('좋아요', p.likes, p.ratios.likes, false)}
@@ -404,8 +428,8 @@
     current = filtered(base);
     $('#cards').innerHTML = current.map(card).join('');
     const emp = $('#empty'); emp.hidden = current.length > 0;
-    if (!current.length) emp.textContent = state.tier > 0 ? '조건에 맞는 터진 게시물이 없습니다. 기간을 늘리거나 판정 기준을 낮춰 보세요.' : '조건에 맞는 게시물이 없습니다.';
-    const desc = [state.period <= 24 ? '24시간' : state.period / 24 + '일', state.kind === 'all' ? '' : state.kind === 'video' ? '릴스' : '사진', state.tier ? tierTxt(state.tier) + ' 이상' : '전체', state.account ? '@' + state.account : '', state.topic ? '주제 "' + state.topic + '"' : ''].filter(Boolean).join(' · ');
+    if (!current.length) emp.textContent = state.detection === 'today' ? '현재 필터에 맞는 오늘 최초 감지 핫 게시물이 없습니다. 데이터 기준 시각과 다른 필터도 확인하세요.' : state.tier > 0 ? '조건에 맞는 터진 게시물이 없습니다. 기간을 늘리거나 판정 기준을 낮춰 보세요.' : '조건에 맞는 게시물이 없습니다.';
+    const desc = [state.detection === 'today' ? '오늘 최초 감지 (한국시간)' : state.period <= 24 ? '24시간' : state.period / 24 + '일', state.kind === 'all' ? '' : state.kind === 'video' ? '릴스' : '사진', state.tier ? tierTxt(state.tier) + ' 이상' : '전체', state.account ? '@' + state.account : '', state.topic ? '주제 "' + state.topic + '"' : ''].filter(Boolean).join(' · ');
     $('#result-count').textContent = `${current.length}개 · ${desc}`;
     const hotBase = base.filter((p) => p.tier >= 1).length;
     $('#crit-count').innerHTML = `현재 기준으로 선택 기간에 <b>🔥 ${hotBase}개</b> / ${base.length}개 · 전체 기간 🔥 ${POSTS.filter((p) => p.tier >= 1).length}개 / ${POSTS.length}개`;
@@ -458,7 +482,24 @@
   $('#cards').addEventListener('click', (e) => { const c = e.target.closest('.card'); if (c) openDetail(POSTS.find((p) => p.shortcode === c.dataset.code)); });
   modal.addEventListener('click', (e) => { if (e.target.dataset.close !== undefined) closeDetail(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });
-  function closeDetail() { modal.hidden = true; document.body.style.overflow = ''; }
+  let flowTimer, flowCode;
+  function closeDetail() { clearTimeout(flowTimer); flowCode=null; modal.hidden = true; document.body.style.overflow = ''; }
+  async function refreshProduction(code) {
+    clearTimeout(flowTimer);
+    if(flowCode!==code||modal.hidden)return;
+    const root=$('#production-flow',modal);if(!root)return;
+    try {
+      const data=await window.ProductionFlow.api('');
+      if(flowCode!==code)return;
+      const task=data.tasks.find(t=>t.shortcode===code);
+      if(task)window.ProductionFlow.mount(root,task);
+      else {
+        root.innerHTML='<section class="production-flow"><h3>자동 제작</h3><p>소스 확보 → 대본 → TTS → CapCut 프로젝트 → 최종 MP4</p><button id="begin-auto">자동 제작 시작</button></section>';
+        $('#begin-auto',root).onclick=async e=>{e.target.disabled=true;try{await window.ProductionFlow.api('',{shortcodes:[code],automatic:true});refreshProduction(code);}catch(err){e.target.disabled=false;root.append(document.createTextNode(err.message));}};
+      }
+    }catch(e){root.textContent='제작 상태를 불러오지 못했습니다: '+e.message;}
+    if(flowCode===code)flowTimer=setTimeout(()=>refreshProduction(code),3000);
+  }
   function bar(label, val, base, ratio) {
     if (val == null) return '';
     const max = Math.max(val, base || 0, 1);
@@ -466,18 +507,21 @@
   }
   function openDetail(p) {
     if (!p) return;
+    clearTimeout(flowTimer); flowCode=p.shortcode;
     const a = acctMap[p.username] || {}, v = p.velocity;
     $('#modal-body').innerHTML = `<div class="detail">
       <div class="thumb">${p.thumb ? `<img src="${esc(p.thumb)}" alt="">` : `<div class="ph">${isVideo(p) ? '🎬' : '🖼'}</div>`}</div>
       <div class="detail-body">
         <div class="who"><span class="avatar">${initials(p.username)}</span><span class="name">@${esc(p.username)}</span>${a.full_name ? `<span class="fn">${esc(a.full_name)}</span>` : ''}<span class="time">${dateStr(p.taken_at)} (${ago(p.age_hours)})</span></div>
         <h3>${tierTxt(p.tier) || '—'} 평소 대비 ×${p.multiplier.toFixed(1)} <small class="hint">${kindTxt(p.kind)}</small></h3>
+        ${isVideo(p) ? '<div id="production-flow"></div>' : ''}
         <div class="cmp">
           ${isVideo(p) ? bar('조회수', p.views, p.baseline.views, p.ratios.views) : ''}
           ${bar('좋아요', p.likes, p.baseline.likes, p.ratios.likes)}
           ${bar('댓글', p.comments, p.baseline.comments, p.ratios.comments)}
         </div>
         <div class="kv">
+          <div>핫 최초 감지일 (한국시간)<b>${window.HotpostDetection.dateKey(p.hot_detected_at) || (p.tier ? '기록 없음' : '미감지')}</b></div>
           <div>팔로워<b>${fmt(a.followers)}</b></div>
           <div>비교 게시물<b>${p.baseline.peers}개</b></div>
           <div>반응 성숙도<b>${Math.round((C.maturity ? p.maturity : 1) * 100)}%</b></div>
@@ -507,6 +551,7 @@
     const transcriptBtn = $('#transcript-extract', modal);
     if (transcriptBtn) transcriptBtn.addEventListener('click', () => startTranscriptJob(p.shortcode, transcriptBtn));
     modal.hidden = false; document.body.style.overflow = 'hidden';
+    if(isVideo(p))refreshProduction(p.shortcode);
   }
 
   async function startSourceJob(shortcode, button) {
@@ -634,6 +679,13 @@
 
   syncPanel();
   renderAll();
+  const linkedPost = new URLSearchParams(location.search).get('post');
+  if (linkedPost) openDetail(POSTS.find(p=>p.shortcode===linkedPost));
+  let detectionDay = window.HotpostDetection.dateKey(Date.now() / 1000);
+  setInterval(() => {
+    const day = window.HotpostDetection.dateKey(Date.now() / 1000);
+    if (day !== detectionDay) { detectionDay = day; renderAll(); }
+  }, 60000);
   const acquisitionPanel = $('#acquisition-candidates');
   if (acquisitionPanel) {
     acquisitionPanel.innerHTML = (R.acquisition_candidates || []).slice(0, 30).map(p =>

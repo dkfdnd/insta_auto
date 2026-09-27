@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urljoin, urlparse
 from .config import Settings
 from .browser_profile import BROWSER_LOCK, export_cookies, probe_platform_auth
 from .source_urls import video_url
-from .source_queries import platform_queries, clean_terms
+from .source_queries import platform_queries, clean_terms, language
 
 VIDEO_HOSTS = ("tiktok.com", "douyin.com", "xiaohongshu.com", "youtube.com", "youtu.be", "bilibili.com",
                "vimeo.com", "lazada.", "manuals.plus", "made-in-china.com")
@@ -97,8 +97,12 @@ class BrowserSearcher:
         self.debug_dir = debug_dir
         self.debug_dir.mkdir(parents=True, exist_ok=True)
         self.candidates: list[dict] = []
+        self.visual_candidates: list[dict] = []
         self.terms: list[str] = []
         self.notes: list[str] = []
+        self.searches: list[dict] = []
+        self.previous_searches: list[dict] = []
+        self.progress = lambda _message: None
 
     def run(self, frames: list[Path], queries: list[str], limit: int) -> dict:
         if not self.settings.source_browser_search or limit <= 0:
@@ -119,9 +123,11 @@ class BrowserSearcher:
                 return {"candidates": [], "terms": [], "notes": [f"Chrome 시작 실패: {exc}"]}
             context.set_default_timeout(15000)
             try:
-                self._google(context, selected, limit)
-                self._yandex(context, selected, limit)
+                if selected:
+                    self._google(context, selected, limit)
+                    self._yandex(context, selected, limit)
                 visual_candidates = list(self.candidates)
+                self.visual_candidates = visual_candidates
                 self.candidates = []
                 expanded = list(dict.fromkeys([*queries, *clean_terms(self.terms)]))
                 self._platforms(context, expanded, limit)
@@ -134,17 +140,22 @@ class BrowserSearcher:
                         seen.add(normalized); combined.append(item)
                 self.candidates = combined
             finally:
+                self.progress('브라우저 검색 중간 결과 저장')
                 try:
                     export_cookies(context.cookies(), self.settings.source_browser_cookie_file)
                 except Exception as exc:  # noqa: BLE001
                     self.notes.append(f"브라우저 쿠키 저장 실패: {type(exc).__name__}")
                 context.close()
-        return {"candidates": self.candidates, "terms": clean_terms(self.terms)[:20], "notes": self.notes}
+        return {"candidates": self.candidates, "terms": clean_terms(self.terms)[:20], "notes": self.notes,
+                "searches": self.searches}
 
     def _google(self, context, frames: list[Path], limit: int) -> None:
         page = context.new_page()
         try:
             for i, frame in enumerate(frames, 1):
+                self.progress(f'Google Lens · 장면 {i}/{len(frames)} 이미지 검색')
+                audit = {'provider': 'google-lens', 'query': frame.name, 'language': 'image', 'status': 'started', 'candidates': 0}
+                self.searches.append(audit)
                 page.goto("https://www.google.com/imghp?hl=en", wait_until="domcontentloaded", timeout=60000)
                 page.get_by_role("button", name="Search by image").click()
                 upload = page.locator("input[type=file]")
@@ -159,12 +170,16 @@ class BrowserSearcher:
                             page.wait_for_timeout(1000)
                     if "/sorry/" in page.url:
                         self.notes.append("Google Lens CAPTCHA: 전용 브라우저에서 사람 확인 후 다음 실행부터 재사용")
+                        audit['status'] = 'captcha'
                         break
-                self.candidates.extend(_anchors(page, "google-lens", frame.name, "visual-match"))
+                found = _anchors(page, "google-lens", frame.name, "visual-match")
+                self.candidates.extend(found)
+                audit.update(status='results' if found else 'no_results', candidates=len(found))
                 if len(self.candidates) >= limit:
                     break
                 page.wait_for_timeout(1200)
         except Exception as exc:  # noqa: BLE001
+            if frames: audit.update(status='error', error=type(exc).__name__)
             self.notes.append(f"Google Lens 실패: {type(exc).__name__}: {str(exc)[:180]}")
             try: page.screenshot(path=str(self.debug_dir / "google_error.png"), full_page=True)
             except Exception: pass  # noqa: E701
@@ -175,17 +190,23 @@ class BrowserSearcher:
         page = context.new_page()
         try:
             for frame in frames:
+                self.progress(f'Yandex · {frame.name} 이미지 검색')
+                audit = {'provider': 'yandex-images', 'query': frame.name, 'language': 'image', 'status': 'started', 'candidates': 0}
+                self.searches.append(audit)
                 page.goto("https://yandex.com/images/", wait_until="domcontentloaded", timeout=60000)
                 page.locator("input[type=file]").set_input_files(str(frame))
                 page.wait_for_url("**/images/search**", timeout=60000)
                 page.wait_for_timeout(2500)
                 body = page.locator("body").inner_text()
                 self._yandex_terms(body)
-                self.candidates.extend(_anchors(page, "yandex-images", frame.name, "visual-match"))
+                found = _anchors(page, "yandex-images", frame.name, "visual-match")
+                self.candidates.extend(found)
+                audit.update(status='results' if found else 'no_results', candidates=len(found))
                 if len(self.candidates) >= limit:
                     break
                 page.wait_for_timeout(1000)
         except Exception as exc:  # noqa: BLE001
+            if frames: audit.update(status='error', error=type(exc).__name__)
             self.notes.append(f"Yandex Images 실패: {type(exc).__name__}: {str(exc)[:180]}")
             try: page.screenshot(path=str(self.debug_dir / "yandex_error.png"), full_page=True)
             except Exception: pass  # noqa: E701
@@ -215,6 +236,7 @@ class BrowserSearcher:
         for provider, template in platforms:
             if BROWSER_COOLDOWNS.get(provider, 0) > time.time():
                 self.notes.append(f"{provider} 429 쿨다운 중 · 검색 건너뜀")
+                self.searches.append({'provider': provider, 'query': '', 'language': '', 'status': 'cooldown', 'candidates': 0})
                 continue
             auth = probe_platform_auth(context, provider)
             if auth != "authenticated":
@@ -224,24 +246,39 @@ class BrowserSearcher:
                        else route.continue_())
             provider_urls: set[str] = set()
             try:
-                selected = platform_queries(queries, provider, self.settings.source_queries_per_platform)
+                used = {r.get('query') for r in self.previous_searches if r.get('provider') == provider}
+                selected = platform_queries([q for q in queries if q not in used], provider, self.settings.source_queries_per_platform)
                 per_query_limit = max(2, (per_provider_limit + len(selected) - 1) // max(1, len(selected)))
                 for query in selected:
+                    self.progress(f'{provider} · {language(query)} · {query}')
+                    audit = {'provider': provider, 'query': query, 'language': language(query),
+                             'auth': auth, 'status': 'started', 'candidates': 0}
+                    self.searches.append(audit)
+                    loaded = False
                     encoded = quote(query, safe="") if provider == "douyin" else quote_plus(query)
                     search_url = template.format(encoded)
                     for attempt in range(2):
                         try:
                             response = page.goto(search_url, wait_until="commit", timeout=12000)
+                            audit['http_status'] = response.status if response else None
+                            loaded = True
                             if response and response.status == 429:
                                 BROWSER_COOLDOWNS[provider] = time.time() + 60
                                 self.notes.append(f"{provider} 429 제한 · 60초 쿨다운")
+                                audit['status'] = 'rate_limited'
                             break
                         except Exception as exc:  # SPA 로딩 지연은 1회 재시도한다.
+                            audit.update(status='error', error=type(exc).__name__)
                             self.notes.append(f"{provider} 페이지 로딩 지연: {type(exc).__name__}")
                             if attempt == 0:
                                 time.sleep(1)
                     if BROWSER_COOLDOWNS.get(provider, 0) > time.time():
                         break
+                    if not loaded:
+                        continue  # Never attribute stale results from the previous page to this query.
+                    if (audit.get('http_status') or 200) >= 400:
+                        audit['status'] = 'http_error'
+                        continue
                     page.wait_for_timeout(2000)
                     page.mouse.wheel(0, 900)
                     page.wait_for_timeout(500)
@@ -253,13 +290,23 @@ class BrowserSearcher:
                             provider_urls.add(item["url"])
                             self.candidates.append(item)
                             added += 1
+                    audit.update(status='results' if added else ('login_required' if auth == 'login_required' else 'no_results'),
+                                 candidates=added)
+                    self.progress(f'{provider} · {language(query)} · {query} → 후보 {added}개')
                     if len(provider_urls) >= per_provider_limit:
                         break
             except Exception as exc:  # noqa: BLE001
+                if 'audit' in locals() and audit.get('provider') == provider and audit['status'] == 'started':
+                    audit.update(status='error', error=type(exc).__name__)
                 self.notes.append(f"{provider} 검색 실패: {type(exc).__name__}: {str(exc)[:140]}")
             finally:
                 page.close()
 
 
-def browser_search(settings: Settings, frames: list[Path], queries: list[str], limit: int, debug_dir: Path) -> dict:
-    return BrowserSearcher(settings, debug_dir).run(frames, queries, limit)
+def browser_search(settings: Settings, frames: list[Path], queries: list[str], limit: int, debug_dir: Path,
+                   previous_searches: list[dict] | None = None, progress=None) -> dict:
+    if not settings.source_browser_search or limit <= 0:
+        return {'candidates': [], 'terms': [], 'notes': [], 'searches': []}
+    from .source_browser_worker import isolated_search
+    with BROWSER_LOCK:
+        return isolated_search(settings, frames, queries, limit, debug_dir, previous_searches, progress)

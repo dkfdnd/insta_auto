@@ -235,7 +235,8 @@ def test_download_failures_do_not_consume_successful_probe_budget(tmp_path, monk
     from hotpost import source_finder as sf, text_overlay
     from PIL import Image
     settings = Settings(data_dir=tmp_path, source_browser_search=False, source_use_openclip=False,
-                        source_max_downloads=1, source_max_probe_downloads=2, source_max_attempts=4)
+                        source_max_downloads=1, source_max_probe_downloads=2, source_max_attempts=4,
+                        source_transcribe_reference=False, source_query_model_enabled=False)
     post = Post('ref', 'u', int(time.time()), 'reel', caption='백팩')
     frame = tmp_path / 'frame.jpg'; Image.new('RGB', (20, 30), 'white').save(frame)
     monkeypatch.setattr(sf, '_post', lambda *_: post)
