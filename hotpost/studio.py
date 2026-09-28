@@ -100,6 +100,18 @@ class Studio(WorkflowMixin):
         return revision
 
     def action(self, task_id, action, data):
+        if action == 'check-script':
+            # A read-only request; never hold the task DB lock across HTTP or
+            # save/approve text merely because the user asked to inspect it.
+            from .studio_adapter import StudioAdapter
+            text = str(data.get('text', ''))
+            if not text.strip() or len(text) > 3000:
+                raise ValueError('대본은 1~3000자로 입력하세요.')
+            state = self.store.get(task_id)
+            try:
+                return StudioAdapter(self.settings).review(text, state['original_text'])
+            except (RuntimeError, OSError) as exc:
+                raise ValueError('대본 검사 서비스에 연결하지 못했습니다. script_auto 실행 상태를 확인하세요. 입력 내용은 그대로 유지됩니다.') from exc
         handled = self.workflow_action(task_id, action, data)
         if handled is not None:
             return handled

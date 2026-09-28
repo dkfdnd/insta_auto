@@ -26,10 +26,14 @@ class StudioAdapter:
         headers = {**self.headers(), **kwargs.pop('headers', {})}
         response = self.session.request(
             method, self.settings.studio_url.rstrip('/') + path,
-            headers=headers, timeout=180, allow_redirects=False, **kwargs)
+            headers=headers, timeout=kwargs.pop('timeout', 180), allow_redirects=False, **kwargs)
         if response.status_code >= 300:
             raise RuntimeError(f'PersonalProject1 요청 실패: HTTP {response.status_code}')
         return response.json()
+
+    def review(self, text, reference):
+        return self.request('POST', '/api/scripts/review',
+                            json={'text':text, 'reference_script':reference[:10000]}, timeout=10)
 
     def submit(self, production_id: str, video: Path, reference: str, payload: dict):
         with video.open('rb') as stream:

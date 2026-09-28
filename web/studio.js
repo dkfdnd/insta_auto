@@ -63,6 +63,7 @@
     const proposals=t.proposals.filter(p=>p.script_id===s.id);
     return `<div class="detail-grid"><div class="panel"><h3>원본과 참고 자료</h3><p class="muted">원본의 매력을 참고하되 새로운 문장으로 구성합니다.</p><div class="reference-box">${esc(t.original_text)}</div><div class="source-strip">${t.sources.map((src,i)=>`<video src="${esc(src.url)}#t=1" controls preload="metadata" title="소스 ${i+1}"></video>`).join('')}</div><a class="muted" href="https://www.instagram.com/p/${encodeURIComponent(t.shortcode)}/" target="_blank" rel="noopener">원본 게시물 보기 ↗</a><div class="subsection"><h3>대본 버전</h3><div class="version-list">${t.scripts.slice().reverse().map((v,i)=>`<div class="version-item"><div>버전 ${t.scripts.length-i} ${v.id===s.id?'<span class="pill draft_review">현재</span>':''}<br><small>${date(v.created)} · ${{manual:'직접 수정',recommended:'AI 추천',automatic_script_auto:'자동 선택 대본',ai_proposal:'AI 수정',restored:'이전 버전 복원'}[v.origin]||v.origin}</small></div><button data-restore="${v.id}" ${v.id===s.id?'disabled':''}>복원</button></div>`).join('')}</div></div></div>
     <div class="panel"><div class="row"><h3>추천 대본</h3><span class="pill ${t.approved_script_id===s.id?'draft_review':'script_review'}">${t.approved_script_id===s.id?(t.automation?.script_selection?.script_id===s.id?'자동 선택':'승인 완료'):'검토 대기'}</span></div><p class="muted">이 대본을 들으면, 제품이 더 궁금해질까요?</p><textarea id="script-editor" aria-label="대본 편집">${esc(s.text)}</textarea><div class="editor-footer"><small id="save-status">저장됨 · ${s.text.length}자</small><button class="quiet" data-action="save-script">저장</button><button class="primary" data-action="approve-script" ${t.approved_script_id===s.id?'disabled':''}>대본 승인 · 음성 생성 →</button></div>
+    <button class="quiet" data-action="check-script">현재 문장 검사</button><div id="script-review" aria-live="polite"></div>
     <div class="subsection"><h3>AI와 함께 다듬기</h3><p class="muted">수정안을 비교한 뒤 적용합니다. 직접 고친 대본은 보존됩니다.</p><textarea class="request" id="script-request" placeholder="예: 첫 문장을 더 궁금하게, 설명은 자연스러운 말투로 바꿔줘" aria-label="대본 AI 수정 요청"></textarea><div class="editor-footer"><small>${t.jobs.some(j=>j.kind==='proposal'&&['queued','running'].includes(j.status))?'AI가 수정안을 준비 중입니다…':''}</small><button class="secondary" data-action="propose-script">수정안 만들기</button></div></div>
     ${proposals.slice().reverse().map(p=>`<div class="proposal"><h3>${esc(p.summary)}</h3><div class="editor-footer"><small>직접 비교한 뒤 적용합니다</small><button class="secondary" data-compare="${p.id}">변경안 비교</button></div></div>`).join('')}</div></div>`;
   }
@@ -100,7 +101,13 @@
     if(el.dataset.chooseShot){$('#candidate-dialog').close();await action('revise-edit',{edit_id:current().edit_id,changes:[{beat_id:el.dataset.forBeat,shot_id:el.dataset.chooseShot}]},{message:'선택한 장면으로 새 초안을 만듭니다.'});}
     if(el.dataset.cueSave){const id=el.dataset.cueSave;await action('revise-edit',{edit_id:current().edit_id,changes:[{beat_id:id,text:$(`[data-cue-text="${id}"]`).value,start:Number($(`[data-cue-start="${id}"]`).value),end:Number($(`[data-cue-end="${id}"]`).value)}]});}
     const kind=el.dataset.action;if(!kind)return;el.disabled=true;
-    if(kind==='save-script'){await saveScript();renderDetail();}
+    if(kind==='check-script'){
+      const taskId=current().id,text=$('#script-editor').value;
+      const result=await api('/'+taskId+'/check-script',{text});
+      if(current()?.id===taskId&&$('#script-editor')?.value===text)$('#script-review').innerHTML=window.ProductionFlow.scriptReview(result);
+      else toast('검사 중 대본이 바뀌었어요. 다시 검사해 주세요.');
+    }
+    else if(kind==='save-script'){await saveScript();renderDetail();}
     else if(kind==='approve-script'){await saveScript();await action(kind,{script_id:current().script_id});tab='voice';renderDetail();}
     else if(kind==='propose-script'){const request=$('#script-request').value;await saveScript();await action(kind,{request},{message:'AI 수정안을 준비합니다.'});}
     else if(kind==='approve-voice'){await action(kind,{voice_id:current().voice_id});tab='edit';renderDetail();}
@@ -113,7 +120,7 @@
     else if(kind==='request-edit')await action(kind,{edit_id:current().edit_id,request:$('#edit-request').value,start:Number($('#selection-start').value),end:Number($('#selection-end').value)},{message:'선택한 구간의 수정 요청을 처리합니다.'});
     el.disabled=false;
   }catch(_){el.disabled=false;}});
-  document.addEventListener('input',event=>{if(event.target.id==='script-editor'){dirty=true;const t=current();localStorage.setItem('studio-draft-'+t.id,JSON.stringify({base:t.script_id,text:event.target.value}));$('#save-status').textContent='수정 중 · 자동 저장 대기';$('[data-action="approve-script"]').disabled=false;clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveScript().catch(()=>{}),1200);}if(event.target.id==='search')renderList();});
+  document.addEventListener('input',event=>{if(event.target.id==='script-editor'){if($('#script-review'))$('#script-review').textContent='대본이 바뀌었어요. 다시 검사해 주세요.';dirty=true;const t=current();localStorage.setItem('studio-draft-'+t.id,JSON.stringify({base:t.script_id,text:event.target.value}));$('#save-status').textContent='수정 중 · 자동 저장 대기';$('[data-action="approve-script"]').disabled=false;clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveScript().catch(()=>{}),1200);}if(event.target.id==='search')renderList();});
   document.addEventListener('change',async event=>{try{if(event.target.dataset.emphasis)await action('revise-edit',{edit_id:current().edit_id,changes:[{beat_id:event.target.dataset.emphasis,emphasis:Number(event.target.value)}]});if(event.target.id==='edit-version'){activeEditId=event.target.value;renderDetail();}}catch(_){}});
   $('#close-candidates').onclick=()=>$('#candidate-dialog').close();$('#close-script-dialog').onclick=()=>$('#script-dialog').close();
   window.addEventListener('beforeunload',event=>{if(dirty){event.preventDefault();event.returnValue='';}});

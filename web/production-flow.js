@@ -5,6 +5,12 @@
   const link=(url,label)=>url?`<a href="${esc(url)}" download>${esc(label)} ↓</a>`:'';
   const item=(t,c,id)=>t[c].find(v=>v.id===id);
   const storageKey=t=>'production-feedback-'+t.id;
+  function scriptReview(result){
+    const n=result?.naturalness_review,r=result?.rewrite_review;
+    if(!n&&!r)return '';
+    const messages=[...(r?.reasons||[]),...(n?.issues||[]).map(i=>`${i.excerpt}: ${i.message}`)];
+    return `<p>표현 참고 사항 ${n?.issues?.length??0}개</p><p>${messages.length?messages.map(esc).join('<br>'):'현재 표현 검사에서 지적된 항목이 없어요.'}</p><small>사실 근거와 관점·전개는 직접 확인하세요. 대본을 자동 수정하지 않습니다.</small>`;
+  }
   async function api(path,body){const r=await fetch('/api/studio'+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||'요청 실패');return d;}
   function summary(t,selected){
     const runs=t.pipeline||[], active=runs.find(r=>r.id===t.run_id)||runs.at(-1);
@@ -32,7 +38,7 @@
       <details open><summary>2. 원본 대본과 Top Pick</summary><details><summary>원본 발화</summary><p class="pf-text">${esc(t.original_text||'추출 대기')}</p></details>
       <p>${esc(t.selection_reason||'후보 평가 대기')}</p>${t.top_pick?`<small>${esc(t.top_pick.rubric)} · 흥행 예측 점수가 아닌 제작 적합성 평가</small>`:''}
       ${(t.script_candidates||[]).map((c,i)=>{const score=t.top_pick?.evaluations?.find(v=>v.index===i);return `<details><summary>후보 ${i+1}${i===t.selected_candidate?' · Top Pick':''}${score?' · '+score.total.toFixed(2)+'/5':''}</summary><p>${esc(c.text)}</p><p>${esc(score?.reason||'')}</p><button data-pf="candidate" data-index="${i}">이 대본을 피드백으로 선택</button></details>`;}).join('')}
-      <label>제작 대본<textarea data-field="script">${esc(currentText)}</textarea></label><button data-pf="save-script">대본 피드백 저장</button>
+      <label>제작 대본<textarea data-field="script">${esc(currentText)}</textarea></label><button data-pf="save-script">대본 피드백 저장</button><button data-pf="check-script">현재 문장 검사</button><div data-script-review aria-live="polite">${scriptReview((t.script_candidates||[]).find(c=>c.text===currentText))}</div>
       <label>AI 수정 요청<textarea data-field="script-request" placeholder="예: 첫 문장을 질문으로 바꾸고 설명을 짧게 해줘"></textarea></label><button data-pf="propose-script" ${s?'':'disabled'}>수정안 만들기</button>
       ${t.proposals.slice().reverse().map(p=>`<details><summary>AI 수정안 · ${esc(p.summary)}</summary><p>${esc(p.text)}</p><button data-pf="proposal" data-id="${p.id}">피드백으로 적용</button></details>`).join('')}</details>
       <details open><summary>3. TTS 발음·속도</summary>${voice?`<audio controls src="${esc(voice.path_url)}"></audio>`:''}<label>속도 <input data-field="speed" type="number" min="0.8" max="1.25" step="0.05" value="${f.speed??inputs.speed??1}"></label><label>발음 교정 (한 줄에 원문=읽을 발음)<textarea data-field="pronunciation" placeholder="USB=유에스비">${esc((f.pronunciations??inputs.pronunciations??[]).map(p=>p.from+'='+p.to).join('\n'))}</textarea></label><p>자막 원문은 유지하고 TTS에 적용합니다. 기존 VoiceBench 목소리·엔진 설정을 사용합니다.</p><button data-pf="save-voice">음성 피드백 저장</button><button data-pf="regenerate-voice">같은 설정으로 음성 재생성 예약</button></details>
@@ -56,7 +62,8 @@
     if(opens.length)root.querySelectorAll('details').forEach(d=>d.open=opens.includes(d.querySelector('summary')?.textContent));
     const local=JSON.parse(localStorage.getItem(storageKey(t))||'null');
     if(options.editor&&local){for(const field of root.querySelectorAll('[data-field]'))if(field.dataset.field in local){if(field.type==='checkbox')field.checked=local[field.dataset.field];else field.value=local[field.dataset.field];}root._dirty=true;root._feedbackBaseRevision=Number(localStorage.getItem(storageKey(t)+'-revision')??t.feedback_revision??0);}
-    root.oninput=event=>{const e=event.target;if(!e.dataset.field)return;if(!root._dirty){root._feedbackBaseRevision=root._task.feedback_revision||0;localStorage.setItem(storageKey(root._task)+'-revision',String(root._feedbackBaseRevision));}root._dirty=true;const draft=JSON.parse(localStorage.getItem(storageKey(root._task))||'{}');draft[e.dataset.field]=e.type==='checkbox'?e.checked:e.value;localStorage.setItem(storageKey(root._task),JSON.stringify(draft));};
+    if(local&&'script' in local){const review=root.querySelector('[data-script-review]');if(review)review.textContent='불러온 편집 내용을 다시 검사해 주세요.';}
+    root.oninput=event=>{const e=event.target;if(!e.dataset.field)return;if(e.dataset.field==='script'){const review=root.querySelector('[data-script-review]');if(review)review.textContent='대본이 바뀌었어요. 다시 검사해 주세요.';}if(!root._dirty){root._feedbackBaseRevision=root._task.feedback_revision||0;localStorage.setItem(storageKey(root._task)+'-revision',String(root._feedbackBaseRevision));}root._dirty=true;const draft=JSON.parse(localStorage.getItem(storageKey(root._task))||'{}');draft[e.dataset.field]=e.type==='checkbox'?e.checked:e.value;localStorage.setItem(storageKey(root._task),JSON.stringify(draft));};
     root.onchange=async event=>{
       if(event.target.matches('[data-pf-version]')){
         root._selected=event.target.value;root._dirty=false;
@@ -91,6 +98,12 @@
       if(action==='reproduce'&&root._dirty){message('입력한 항목의 피드백 저장 버튼을 먼저 눌러주세요.');return;}
       button.disabled=true;message('저장·요청 중…');
       try{
+        if(action==='check-script'){
+          const text=value('script'),result=await api('/'+task.id+'/check-script',{text});
+          if(root._task.id===task.id&&value('script')===text){root.querySelector('[data-script-review]').innerHTML=scriptReview(result);message('현재 입력한 대본 검사 완료');}
+          else message('검사 중 대본이 바뀌었어요. 다시 검사해 주세요.');
+          return;
+        }
         const fresh=await api('/'+task.id);
         const feedbackActions=['save-feedback','save-script','restore-script','apply-proposal','regenerate-voice','revise-edit','request-edit','reproduce','discard-feedback','select-candidate'];
         const result=await api('/'+task.id+'/'+kind,{revision:fresh.revision,...(feedbackActions.includes(kind)?{feedback_revision:root._feedbackBaseRevision??task.feedback_revision??0}:{}),...body});
@@ -105,5 +118,5 @@
       }catch(e){message(e.message);}finally{button.disabled=false;}
     };
   }
-  window.ProductionFlow={mount,api};
+  window.ProductionFlow={mount,api,scriptReview};
 })();
