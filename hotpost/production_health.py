@@ -21,8 +21,14 @@ def check(settings):
         for name, url, headers in endpoints:
             try:
                 response = session.get(url, headers=headers(), timeout=3, allow_redirects=False)
-                checks[name] = {'ready': response.status_code == 200,
-                                'message': '연결됨' if response.status_code == 200 else f'HTTP {response.status_code}'}
+                ready = response.status_code == 200
+                message = '연결됨' if ready else f'HTTP {response.status_code}'
+                if ready and name == 'voicebench':
+                    health = response.json()
+                    if health.get('ready') is False:
+                        ready = False
+                        message = '\n'.join(health.get('errors') or ['음성 생성 준비가 되지 않았습니다.'])
+                checks[name] = {'ready': ready, 'message': message}
             except (OSError, RuntimeError, requests.RequestException):
                 checks[name] = {'ready': False, 'message': '서비스 주소·실행 상태·연결 키를 확인하세요.'}
     try:

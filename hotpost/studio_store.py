@@ -155,6 +155,7 @@ class StudioStore:
 
     def claim(self):
         with self.transaction() as db:
+            self.pause_queued(db)
             # Finish an already-prepared video's downstream stages before the
             # next slow source search, so the first review becomes ready sooner.
             row = db.execute("""SELECT * FROM jobs WHERE status='queued'
@@ -176,6 +177,15 @@ class StudioStore:
             db.execute("UPDATE jobs SET checkpoint=?,updated=? WHERE id=?", (
                 json.dumps(value, ensure_ascii=False), time.time(), job_id))
 
+    @staticmethod
+    def pause_queued(db):
+        db.execute("""UPDATE jobs SET status='paused' WHERE status='queued'
+            AND kind NOT IN ('proposal','refresh_sources','suggest_edit')
+            AND COALESCE(json_extract(payload,'$.launch'),0)<>1
+            AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=jobs.task_id
+                AND json_extract(tasks.state,'$.automation.protocol')=2
+                AND json_extract(tasks.state,'$.automation.paused_by_user')=1)""")
+
     def defer(self, job, message, seconds, waiting=False):
         with self.transaction() as db:
             state = self.get(job['task_id'], db)
@@ -192,12 +202,16 @@ class StudioStore:
                 checkpoint['not_before'] = 0
             db.execute("UPDATE jobs SET status='queued',checkpoint=?,updated=? WHERE id=?",
                        (json.dumps(checkpoint),time.time(),job['id']))
+            if state.get('automation', {}).get('paused_by_user') and job['kind'] not in {'proposal','refresh_sources','suggest_edit'} and not job['payload'].get('launch'):
+                db.execute("UPDATE jobs SET status='paused' WHERE id=?", (job['id'],))
+                state.update(status='paused', message='자동 진행 중지 · 재개하면 중단 단계부터 이어집니다')
             self.save(db,state)
 
     def recover(self):
         # Called only after the process-exclusive studio worker lock is held.
         with self.transaction() as db:
             db.execute("UPDATE jobs SET status='queued' WHERE status='running'")
+            self.pause_queued(db)
 
     def jobs(self, task_id):
         with self.connect() as db:

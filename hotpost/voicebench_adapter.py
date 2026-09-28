@@ -72,7 +72,7 @@ class VoiceBenchAdapter:
                    progress: Callable[[str, int], None] | None = None,
                    request_id: int | None = None,
                    on_submitted: Callable[[int], None] | None = None,
-                   retry_failed: bool = False) -> dict:
+                   retry_failed: bool = False, generation_key: str | None = None) -> dict:
         script = text.strip()
         if not script:
             raise ValueError("VoiceBench cannot synthesize an empty script.")
@@ -85,10 +85,13 @@ class VoiceBenchAdapter:
         headers = self._headers()
         timeout = min(60.0, float(self.settings.voicebench_timeout))
         progress("VoiceBench 음성 생성을 요청하는 중", 5)
+        payload = {"text": script}
+        if generation_key:
+            payload['generation_key'] = generation_key
         try:
             if request_id is None:
                 submitted = self._response_json(self.session.post(
-                    self._url("/v1/tts"), json={"text": script}, headers=headers,
+                    self._url("/v1/tts"), json=payload, headers=headers,
                     timeout=timeout,
                 ))
             else:
@@ -101,7 +104,7 @@ class VoiceBenchAdapter:
                 # Unknown/running outcomes always retain the existing ID.
                 if retry_failed and submitted.get('status') in {'failed', 'cancelled'}:
                     submitted = self._response_json(self.session.post(
-                        self._url('/v1/tts'), json={'text':script}, headers=headers, timeout=timeout))
+                        self._url('/v1/tts'), json=payload, headers=headers, timeout=timeout))
         except requests.RequestException as exc:
             raise RuntimeError(
                 f"VoiceBench is not reachable at {self.settings.voicebench_url}."

@@ -58,7 +58,12 @@
     if(options.editor&&local){for(const field of root.querySelectorAll('[data-field]'))if(field.dataset.field in local){if(field.type==='checkbox')field.checked=local[field.dataset.field];else field.value=local[field.dataset.field];}root._dirty=true;root._feedbackBaseRevision=Number(localStorage.getItem(storageKey(t)+'-revision')??t.feedback_revision??0);}
     root.oninput=event=>{const e=event.target;if(!e.dataset.field)return;if(!root._dirty){root._feedbackBaseRevision=root._task.feedback_revision||0;localStorage.setItem(storageKey(root._task)+'-revision',String(root._feedbackBaseRevision));}root._dirty=true;const draft=JSON.parse(localStorage.getItem(storageKey(root._task))||'{}');draft[e.dataset.field]=e.type==='checkbox'?e.checked:e.value;localStorage.setItem(storageKey(root._task),JSON.stringify(draft));};
     root.onchange=async event=>{
-      if(event.target.matches('[data-pf-version]')){root._selected=event.target.value;root._dirty=false;mount(root,root._task,options);}
+      if(event.target.matches('[data-pf-version]')){
+        root._selected=event.target.value;root._dirty=false;
+        // An explicit version switch must bypass the focus/playback refresh guard.
+        event.target.blur();root.querySelectorAll('video,audio').forEach(v=>v.pause());
+        mount(root,root._task,options);
+      }
       if(event.target.matches('[data-upload]')&&event.target.files[0]){
         const file=event.target.files[0];message('영상 업로드·검증 중…');
         try{const r=await fetch(`/api/studio/${t.id}/upload-source?name=${encodeURIComponent(file.name)}`,{method:'POST',body:file});const result=await r.json();if(!r.ok)throw Error(result.error);options.onUpdate?.(result);root._dirty=false;mount(root,result,options);message('영상 업로드 완료 · 사용할 소스 선택 후 재제작하세요.');}catch(e){message(e.message);}

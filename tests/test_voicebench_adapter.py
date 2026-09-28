@@ -65,6 +65,18 @@ def test_voicebench_submits_once_and_downloads_wav(tmp_path):
     assert result['audio']['duration'] == 1
 
 
+def test_regeneration_key_crosses_http_boundary_without_engine_overrides(tmp_path):
+    class RegenerationSession(Session):
+        def post(self, url, **kwargs):
+            assert kwargs['json']=={'text':'실제 대본','generation_key':'run-new'}
+            return Response({'id':17,'status':'succeeded','segment_count':1})
+    settings=_settings(tmp_path)
+    target=settings.data_dir/'regenerated.wav'
+    VoiceBenchAdapter(settings,session=RegenerationSession(valid_wav())).synthesize(
+        '실제 대본',target,generation_key='run-new')
+    assert target.read_bytes()==valid_wav()
+
+
 def valid_wav():
     buffer = io.BytesIO()
     with wave.open(buffer, 'wb') as audio:

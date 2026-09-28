@@ -60,6 +60,37 @@ def transient(exc):
     return any(s in text for s in ('timeout', 'timed out', '시간 초과', '연결하지 못', 'connection', 'http 429', 'http 502', 'http 503', 'http 504'))
 
 
+def validate_edit_feedback(edit, changes):
+    """Reject invalid editor input before it replaces a usable production run."""
+    plan = json.loads(Path(edit['plan_path']).read_text(encoding='utf-8'))
+    beats = {b['id']: b for b in plan['beats']}
+    cues = {c['id']: dict(c) for c in plan['cues']}
+    for change in changes:
+        beat = beats.get(change['beat_id'])
+        if beat is None:
+            raise ValueError('존재하지 않는 구간입니다.')
+        if 'shot_id' in change and change['shot_id'] not in {o['shot_id'] for o in beat['options']}:
+            raise ValueError('제안된 장면 후보에서 선택하세요.')
+        if 'emphasis' in change and (type(change['emphasis']) is not int or change['emphasis'] not in (0, 1, 2)):
+            raise ValueError('잘못된 강조 강도')
+        if 'text' in change:
+            text = change['text']
+            if not isinstance(text, str) or not text.strip() or '\n' in text.strip() or len(text.strip()) > 100:
+                raise ValueError('자막은 비어 있지 않은 한 줄로 입력하세요.')
+        cue = cues[beat['cue_id']]
+        for key in ('start', 'end'):
+            if key in change:
+                value = float(change[key])
+                if not math.isfinite(value):
+                    raise ValueError('자막 시간은 숫자로 입력하세요.')
+                cue[key] = value
+    previous = 0
+    for cue in cues.values():
+        if not previous <= cue['start'] < cue['end'] <= plan['duration'] + .001:
+            raise ValueError('자막 시간이 겹치거나 음성 범위를 벗어났습니다.')
+        previous = cue['end']
+
+
 def capcut_running():
     if os.name == 'nt':
         p = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq CapCut.exe', '/FO', 'CSV', '/NH'],
@@ -166,6 +197,7 @@ class WorkflowMixin:
                 for c in changes:
                     if not isinstance(c, dict) or not isinstance(c.get('beat_id'), str): raise ValueError('올바르지 않은 구간')
                     by_id.setdefault(c['beat_id'], {}).update(c)
+                validate_edit_feedback(edit, list(by_id.values()))
                 feedback['changes'] = list(by_id.values())
             elif action == 'request-edit':
                 request = str(data.get('request', '')).strip()
@@ -177,9 +209,12 @@ class WorkflowMixin:
                 ids = feedback.get('source_ids', [v['id'] for v in s['sources']])
                 if not ids: raise ValueError('사용할 소스를 한 개 이상 선택하세요.')
                 snapshot(s)
+                # Reproduce is an explicit start request. A later pause must
+                # remain authoritative when the running step eventually ends.
+                s['automation'].update(active=True, paused_by_user=False)
                 s['pending_reproduction'] = copy.deepcopy(feedback)
                 s['feedback'] = {}
-                db.execute("UPDATE jobs SET status='superseded' WHERE task_id=? AND status='queued' AND kind NOT IN ('refresh_sources','proposal','suggest_edit')", (task_id,))
+                db.execute("UPDATE jobs SET status='superseded' WHERE task_id=? AND status IN ('queued','paused') AND kind NOT IN ('refresh_sources','proposal','suggest_edit')", (task_id,))
                 if not db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status='running' AND kind NOT IN ('refresh_sources','proposal','suggest_edit')", (task_id,)).fetchone():
                     self.activate_reproduction(s, db)
                 else:
@@ -193,6 +228,8 @@ class WorkflowMixin:
         return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     def activate_reproduction(self, s, db):
+        if s.get('automation', {}).get('paused_by_user'):
+            return
         feedback = s.pop('pending_reproduction')
         old = snapshot(s)
         if old['status'] != 'completed': old['status'] = 'superseded'
@@ -238,6 +275,8 @@ class WorkflowMixin:
             text = script['text']
             for pair in run['inputs'].get('pronunciations', []): text = text.replace(pair['from'], pair['to'])
             payload = dict(script_id=script['id'], voice_id=voice_id, speed=run['inputs'].get('speed',1), spoken_text=text)
+            if run['inputs'].get('regenerate_voice'):
+                payload['generation_key'] = key
             s['automation']['script_selection'] = {'mode':'automatic','script_id':script['id']}
         elif not edit or edit['voice_id'] != voice['id']:
             if digest(voice['path']) != voice['sha256']: raise Conflict('음성 파일이 변경되었습니다.')

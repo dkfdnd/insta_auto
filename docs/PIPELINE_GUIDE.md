@@ -4,7 +4,21 @@
 
 insta_auto는 후보 선정·원본 자료 확보, PersonalProject1은 대본 재가공,
 VoiceBench는 음성 합성, auto_capcut은 컷·자막·효과를 담당한다.
-현재 완료 상태는 `draft_ready`(CapCut 초안)이다. MP4 내보내기·게시 자동화는 포함하지 않는다.
+현재 제작실 protocol 2는 CapCut 프로젝트 등록과 최종 MP4 내보내기까지 진행한다.
+실제 CapCut 실행 환경에서 내보내기 검증을 통과해야 완료로 표시한다. 게시 자동화는 포함하지 않는다.
+
+## 이 PC의 서비스 함께 실행
+
+`start-local.cmd`를 실행하면 설정에 지정된 형제 프로젝트의 대본·음성 서버와
+Hotpost를 실행한다. 이미 정상 실행 중인 서버는 재사용하며, 다른 프로그램이
+포트를 쓰고 있으면 해당 프로세스를 보존하고 오류를 알린다. Instagram 로그인이나
+신규 수집은 실행하지 않는다. auto_capcut은 요청 시 별도 Python 프로세스로 실행된다.
+
+대본 서비스 포트는 `config.json`/`HOTPOST_STUDIO_URL`을 따른다. 현재 저장 설정은
+18767이므로 독립 `start.cmd`의 기본 포트 18765와 구분한다. 음성 API 키는 기존
+로컬 파일에서만 읽는다. VoiceBench의 PC별 기본 엔진은 Git 제외 파일
+`.runtime/studio-settings.json`에 지정할 수 있다. 원격 PC와 DB·모델·자료를 공유할
+필요가 없으며, 코드 pull은 이러한 로컬 데이터를 전송하지 않는다.
 
 ## 실행 위치
 
@@ -18,9 +32,9 @@ VoiceBench는 음성 합성, auto_capcut은 컷·자막·효과를 담당한다.
 insta_auto의 `HOTPOST_STUDIO_URL`, `HOTPOST_STUDIO_API_KEY_FILE`,
 `HOTPOST_VOICEBENCH_URL`, `HOTPOST_VOICEBENCH_API_KEY_FILE`,
 `HOTPOST_AUTO_CAPCUT_ROOT`, `HOTPOST_AUTO_CAPCUT_PYTHON`으로 배포 위치를 변경할 수 있다.
-이 Windows 작업공간의 폴더명은 `VoiceBench`와 `script_auto`(PersonalProject1)이다.
-대본 API 키 기본 경로는 `../script_auto/data/access-token.txt`이다.
-VoiceBench 코드 기본 포트는 8877이며, 현재 로컬 설정은 위 표의 8765를 사용한다.
+형제 폴더는 `VoiceBench`/`Voice`, `script_auto`/`PersonalProject1` 중 실제 서비스가
+있는 경로를 자동으로 찾는다. API 키도 선택한 폴더의 로컬 파일을 읽는다.
+VoiceBench 코드 기본 포트는 8765이다.
 키 내용은 설정 문서에 복사하지 않는다.
 insta_auto의 전용 환경은 `requirements.txt`, auto_capcut은 자기 `requirements.txt`로 설치한다.
 모델·FFmpeg·CapCut 및 로그인 세션은 별도 런타임 전제다.

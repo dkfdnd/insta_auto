@@ -107,6 +107,55 @@ def test_error_classification():
     assert not transient(RuntimeError('로그인 필요'))
 
 
+@pytest.mark.parametrize('boundary', ['retry', 'capcut_wait', 'restart'])
+def test_pause_during_running_step_survives_retry_and_restart(prepared, boundary):
+    studio,task=prepared
+    job=studio.store.claim()
+    studio.action(task,'pause-auto',{})
+    if boundary=='restart':
+        studio.store.recover()
+    else:
+        studio.store.defer(job,'connection timeout',0,waiting=boundary=='capcut_wait')
+    assert studio.store.claim() is None
+    assert next(j for j in studio.store.jobs(task) if j['id']==job['id'])['status']=='paused'
+    studio.action(task,'resume-auto',{})
+    assert studio.store.claim()['id']==job['id']
+
+
+def test_pause_after_requesting_next_version_still_requires_explicit_resume(prepared):
+    studio,task=prepared
+    job=studio.store.claim()
+    studio.action(task,'save-script',{'text':'다음 버전을 위한 수정 대본이에요.'})
+    studio.action(task,'reproduce',{})
+    studio.action(task,'pause-auto',{})
+    folder=studio.folder(task);voice=folder/'pending.wav';voice.write_bytes(b'audio')
+    s=studio.store.get(task)
+    result={'id':s['pending_voice_id'],'script_id':s['script_id'],'path':str(voice),'sha256':hashlib.sha256(b'audio').hexdigest()}
+    studio.store.finish(job,result,lambda s,db,r:studio._accept(s,job,r,db))
+    assert studio.store.get(task)['automation']['active'] is False
+    assert studio.store.claim() is None
+    studio.action(task,'resume-auto',{})
+    assert studio.store.claim()['kind']=='voice'
+
+
+def test_paused_work_allows_explicit_reproduction_and_manual_tools(prepared):
+    studio,task=prepared
+    studio.action(task,'pause-auto',{})
+    with studio.store.transaction() as db:
+        studio.store.enqueue(db,task,'register',{'launch':True},'manual-open')
+        studio.store.enqueue(db,task,'proposal',{},'manual-proposal')
+    assert studio.store.claim()['payload']['launch'] is True
+    assert studio.store.claim()['kind']=='proposal'
+    # Complete the isolated manual jobs before starting a new production.
+    with studio.store.transaction() as db:
+        db.execute("UPDATE jobs SET status='done' WHERE task_id=? AND status='running'",(task,))
+    studio.action(task,'save-script',{'text':'명시적으로 새 제작을 시작해요.'})
+    studio.action(task,'reproduce',{})
+    assert studio.store.get(task)['automation']['active']
+    assert not any(j['status']=='paused' for j in studio.store.jobs(task))
+    assert studio.store.claim()['kind']=='voice'
+
+
 def test_invalid_feedback_preserves_saved_values(prepared):
     studio,task=prepared
     with pytest.raises(ValueError): studio.action(task,'save-feedback',{'source_ids':['foreign']})
@@ -123,6 +172,15 @@ def test_voice_feedback_sets_spoken_text_preserving_captions(prepared):
     job=studio.store.claim()
     assert job['payload']['speed']==1.05 and '도꾸' in job['payload']['spoken_text']
     s=studio.store.get(task);assert '도구' in s['scripts'][0]['text']
+
+
+def test_explicit_voice_regeneration_has_stable_key_for_retry(prepared):
+    studio,task=prepared
+    studio.action(task,'regenerate-voice',{})
+    studio.action(task,'reproduce',{})
+    job=studio.store.claim()
+    assert job['kind']=='voice'
+    assert job['payload']['generation_key']==studio.store.get(task)['run_id']
 
 
 def test_upload_checks_video_and_deduplicates(prepared,monkeypatch):
@@ -152,6 +210,29 @@ def test_feedback_revision_ignores_worker_progress_but_rejects_other_editor(prep
     with pytest.raises(Conflict): studio.action(task,'save-script',{'text':'오래된 화면에서 작성한 대본이에요.','feedback_revision':0})
     studio.action(task,'save-feedback',{'speed':1.05,'feedback_revision':1})
     assert studio.store.get(task)['feedback_revision']==2
+
+
+@pytest.mark.parametrize('change', [
+    {'start':9, 'end':2}, {'start':-1}, {'end':4}, {'end':float('nan')},
+    {'text':''}, {'text':'first\nsecond'}, {'text':'x'*101},
+    {'emphasis':3}, {'emphasis':True}, {'shot_id':'foreign'}, {'beat_id':'missing'},
+])
+def test_invalid_scene_feedback_is_rejected_before_reproduction(prepared, change):
+    studio,task=prepared
+    plan=studio.folder(task)/'feedback-plan.json'
+    plan.write_text(json.dumps({'duration':3, 'beats':[
+        {'id':'beat-1','cue_id':'cue-1','options':[{'shot_id':'shot-1'}]},
+        {'id':'beat-2','cue_id':'cue-2','options':[{'shot_id':'shot-1'}]}],
+        'cues':[{'id':'cue-1','start':0,'end':1},{'id':'cue-2','start':1.5,'end':3}]}))
+    studio.store.change(task,lambda s,db:s['edits'].append({'id':'edit-1','plan_path':str(plan)}))
+    studio.action(task,'revise-edit',{'edit_id':'edit-1','changes':[{'beat_id':'beat-1','emphasis':1}]})
+    before=studio.store.get(task)
+    with pytest.raises(ValueError):
+        studio.action(task,'revise-edit',{'edit_id':'edit-1','changes':[{'beat_id':'beat-1',**change}]})
+    after=studio.store.get(task)
+    assert after['feedback']==before['feedback']
+    assert after['feedback_revision']==before['feedback_revision']
+    assert after['run_id']==before['run_id']
 
 
 def test_frame_extraction_reuse_never_deletes_returned_scene_frame(tmp_path,monkeypatch):

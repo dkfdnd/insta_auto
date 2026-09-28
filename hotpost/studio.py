@@ -114,7 +114,7 @@ class Studio(WorkflowMixin):
                 if not state.get('automation'): raise ValueError('자동 제작 대상이 아닙니다.')
                 state['automation']['paused_by_user'] = True
                 if enabled(state):
-                    db.execute("UPDATE jobs SET status='paused' WHERE task_id=? AND status='queued' AND kind NOT IN ('proposal','refresh_sources','suggest_edit')", (task_id,))
+                    db.execute("UPDATE jobs SET status='paused' WHERE task_id=? AND status='queued' AND kind NOT IN ('proposal','refresh_sources','suggest_edit') AND COALESCE(json_extract(payload,'$.launch'),0)<>1", (task_id,))
                 state.update(message='자동 진행 중지 · 진행 중인 단계의 결과를 보존합니다')
                 self.store.event(db, task_id, action, {})
                 return
@@ -440,7 +440,7 @@ class Studio(WorkflowMixin):
             result = VoiceBenchAdapter(self.settings).synthesize(p.get('spoken_text', script["text"]), voice,
                 progress=lambda message, pct: self.store.change(state['id'], lambda s, db: s.update(message=message, progress=pct)),
                 request_id=job["checkpoint"].get("request_id"), on_submitted=checkpoint,
-                retry_failed=bool(job['checkpoint'].get('retry_requested')))
+                retry_failed=bool(job['checkpoint'].get('retry_requested')), generation_key=p.get('generation_key'))
             _atomic_json(metadata, result)
         result = json.loads(metadata.read_text(encoding="utf-8"))
         if p["speed"] != 1:
