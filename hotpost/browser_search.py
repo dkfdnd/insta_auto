@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 import time
 import html
+import json
 from pathlib import Path
 from urllib.parse import parse_qs, quote, quote_plus, unquote, urljoin, urlparse
 
@@ -104,6 +105,65 @@ class BrowserSearcher:
         self.previous_searches: list[dict] = []
         self.progress = lambda _message: None
 
+    def _pace(self, provider):
+        seconds = max(0, self.settings.source_browser_search_interval)
+        if seconds:
+            self.progress(f'{provider} · 다음 검색 전 {seconds:g}초 대기')
+            time.sleep(seconds)
+
+    def _cooldown_path(self, provider):
+        return self.settings.data_dir / 'search_cooldowns' / f'{provider}.json'
+
+    def _cooling_down(self, provider):
+        until = BROWSER_COOLDOWNS.get(provider, 0)
+        try:
+            until = max(until, float(json.loads(self._cooldown_path(provider).read_text())['until']))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        if until <= time.time():
+            return False
+        self.notes.append(f'{provider} 인증/요청 제한 후 휴식 중 · 검색 건너뜀')
+        self.searches.append({'provider': provider, 'query': '', 'language': '',
+                              'status': 'cooldown', 'candidates': 0})
+        self.progress(f'{provider} · 인증/요청 제한으로 이번 검색 건너뜀')
+        return True
+
+    def _block(self, provider, audit, reason):
+        from .editing_adapter import _atomic_json
+        seconds = max(60, self.settings.source_browser_block_cooldown)
+        until = time.time() + seconds
+        BROWSER_COOLDOWNS[provider] = until
+        target = self._cooldown_path(provider)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_json(target, {'until': until, 'reason': reason})
+        audit['status'] = reason
+        self.notes.append(f'{provider} {reason} · {seconds}초 동안 재검색 중지')
+        self.progress(f'{provider} · 인증/요청 제한으로 검색 중지 · 다른 검색으로 진행')
+
+    @staticmethod
+    def _captcha(page):
+        if any(token in page.url.lower() for token in ('/sorry/', '/showcaptcha', '/captcha')):
+            return True
+        body = page.locator('body').inner_text().lower()
+        return any(token in body for token in ('unusual traffic', 'verify you are human',
+                   'confirm you are not a robot', '로봇이 아닙니다', '비정상적인 트래픽'))
+
+    def _check_block(self, page, provider, audit, response=None):
+        if response is not None and response.status == 429:
+            self._block(provider, audit, 'rate_limited')
+            return True
+        if not self._captcha(page):
+            return False
+        self.progress(f'{provider} · CAPTCHA 인증 대기 · 열린 Chrome에서 직접 확인해 주세요')
+        if not self.settings.source_browser_headless:
+            deadline = time.monotonic() + self.settings.source_browser_captcha_wait
+            while time.monotonic() < deadline:
+                page.wait_for_timeout(1000)
+                if not self._captcha(page):
+                    return False
+        self._block(provider, audit, 'captcha')
+        return True
+
     def run(self, frames: list[Path], queries: list[str], limit: int) -> dict:
         if not self.settings.source_browser_search or limit <= 0:
             return {"candidates": [], "terms": [], "notes": []}
@@ -150,28 +210,25 @@ class BrowserSearcher:
                 "searches": self.searches}
 
     def _google(self, context, frames: list[Path], limit: int) -> None:
+        if self._cooling_down('google-lens'):
+            return
         page = context.new_page()
         try:
             for i, frame in enumerate(frames, 1):
+                self._pace('Google Lens')
                 self.progress(f'Google Lens · 장면 {i}/{len(frames)} 이미지 검색')
                 audit = {'provider': 'google-lens', 'query': frame.name, 'language': 'image', 'status': 'started', 'candidates': 0}
                 self.searches.append(audit)
-                page.goto("https://www.google.com/imghp?hl=en", wait_until="domcontentloaded", timeout=60000)
+                response = page.goto("https://www.google.com/imghp?hl=en", wait_until="domcontentloaded", timeout=60000)
+                if self._check_block(page, 'google-lens', audit, response):
+                    break
                 page.get_by_role("button", name="Search by image").click()
                 upload = page.locator("input[type=file]")
                 upload.wait_for(state="attached")
                 upload.set_input_files(str(frame))
                 page.wait_for_timeout(3500)
-                if "/sorry/" in page.url or "unusual traffic" in page.locator("body").inner_text().lower():
-                    page.screenshot(path=str(self.debug_dir / "google_captcha.png"), full_page=True)
-                    if not self.settings.source_browser_headless:
-                        deadline = time.time() + self.settings.source_browser_captcha_wait
-                        while time.time() < deadline and "/sorry/" in page.url:
-                            page.wait_for_timeout(1000)
-                    if "/sorry/" in page.url:
-                        self.notes.append("Google Lens CAPTCHA: 전용 브라우저에서 사람 확인 후 다음 실행부터 재사용")
-                        audit['status'] = 'captcha'
-                        break
+                if self._check_block(page, 'google-lens', audit):
+                    break
                 found = _anchors(page, "google-lens", frame.name, "visual-match")
                 self.candidates.extend(found)
                 audit.update(status='results' if found else 'no_results', candidates=len(found))
@@ -187,14 +244,22 @@ class BrowserSearcher:
             page.close()
 
     def _yandex(self, context, frames: list[Path], limit: int) -> None:
+        if self._cooling_down('yandex-images'):
+            return
         page = context.new_page()
         try:
             for frame in frames:
+                self._pace('Yandex')
                 self.progress(f'Yandex · {frame.name} 이미지 검색')
                 audit = {'provider': 'yandex-images', 'query': frame.name, 'language': 'image', 'status': 'started', 'candidates': 0}
                 self.searches.append(audit)
-                page.goto("https://yandex.com/images/", wait_until="domcontentloaded", timeout=60000)
+                response = page.goto("https://yandex.com/images/", wait_until="domcontentloaded", timeout=60000)
+                if self._check_block(page, 'yandex-images', audit, response):
+                    break
                 page.locator("input[type=file]").set_input_files(str(frame))
+                page.wait_for_timeout(2500)
+                if self._check_block(page, 'yandex-images', audit):
+                    break
                 page.wait_for_url("**/images/search**", timeout=60000)
                 page.wait_for_timeout(2500)
                 body = page.locator("body").inner_text()
@@ -234,9 +299,7 @@ class BrowserSearcher:
         ]
         per_provider_limit = min(limit, max(1, self.settings.source_candidates_per_platform))
         for provider, template in platforms:
-            if BROWSER_COOLDOWNS.get(provider, 0) > time.time():
-                self.notes.append(f"{provider} 429 쿨다운 중 · 검색 건너뜀")
-                self.searches.append({'provider': provider, 'query': '', 'language': '', 'status': 'cooldown', 'candidates': 0})
+            if self._cooling_down(provider):
                 continue
             auth = probe_platform_auth(context, provider)
             if auth != "authenticated":
@@ -258,20 +321,17 @@ class BrowserSearcher:
                     encoded = quote(query, safe="") if provider == "douyin" else quote_plus(query)
                     search_url = template.format(encoded)
                     for attempt in range(2):
+                        self._pace(provider)
                         try:
                             response = page.goto(search_url, wait_until="commit", timeout=12000)
                             audit['http_status'] = response.status if response else None
                             loaded = True
                             if response and response.status == 429:
-                                BROWSER_COOLDOWNS[provider] = time.time() + 60
-                                self.notes.append(f"{provider} 429 제한 · 60초 쿨다운")
-                                audit['status'] = 'rate_limited'
+                                self._block(provider, audit, 'rate_limited')
                             break
                         except Exception as exc:  # SPA 로딩 지연은 1회 재시도한다.
                             audit.update(status='error', error=type(exc).__name__)
                             self.notes.append(f"{provider} 페이지 로딩 지연: {type(exc).__name__}")
-                            if attempt == 0:
-                                time.sleep(1)
                     if BROWSER_COOLDOWNS.get(provider, 0) > time.time():
                         break
                     if not loaded:
@@ -280,6 +340,8 @@ class BrowserSearcher:
                         audit['status'] = 'http_error'
                         continue
                     page.wait_for_timeout(2000)
+                    if self._check_block(page, provider, audit):
+                        break
                     page.mouse.wheel(0, 900)
                     page.wait_for_timeout(500)
                     found = [*_anchors(page, f"playwright-{provider}", query, "platform-search"),

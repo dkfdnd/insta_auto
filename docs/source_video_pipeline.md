@@ -20,6 +20,11 @@
 3. 전용 Playwright Chrome 프로필로 Google Lens·Yandex 역이미지와 TikTok·Douyin·
    Xiaohongshu·Bilibili 제품 검색을 수행한다. 웹/Bing/YouTube 검색, 로컬 후보 캐시,
    선택적 Pexels 후보도 합친다. 전용 브라우저 쿠키가 있으면 `yt-dlp`와 공유한다.
+   각 검색·재시도 전 기본 15초 휴식(`source_browser_search_interval`)을 둔다.
+   CAPTCHA는 진행 화면에 수동 인증 대기를 표시하며, 미해결 CAPTCHA 또는 HTTP 429 뒤에는
+   해당 공급자를 기본 30분(`source_browser_block_cooldown`) 쉬게 한다. 휴식 상태는 로컬 파일에
+   저장하여 검색 프로세스가 바뀌어도 유지한다. 전체 검색 시간 제한은 그대로 적용하므로
+   느린 검색에서는 완료된 검색 수가 줄어들 수 있다. 이 간격이 CAPTCHA 방지를 보장하지는 않는다.
 4. 영상 상세 URL을 검증하고 중복 URL을 제거한다. 초기 최대 40개 후보를 플랫폼별로 배분한다.
    다운로드 실패는 성공 검사 한도를 소모하지 않는다. 기본 성공 다운로드 30개, 총 시도 60회,
    다운로드/검증 단계 900초의 예산을 적용한다. 진행 중인 한 건의 검증은 예산을 넘겨 완료할 수 있다.

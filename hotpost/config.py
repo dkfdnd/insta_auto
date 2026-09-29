@@ -106,6 +106,8 @@ class Settings:
     source_browser_headless: bool = False
     source_browser_frames: int = 4
     source_browser_captcha_wait: int = 60
+    source_browser_search_interval: float = 15.0  # 검색·재시도 전 최소 휴식 시간
+    source_browser_block_cooldown: int = 1800  # CAPTCHA/429 이후 같은 공급자 검색 중지
     source_browser_timeout: int = 360  # 전체 브라우저 검색 제한; 추가 검색은 최대 180초
     source_use_openclip: bool = True
     source_openclip_model: str = "ViT-B-32-quickgelu"
