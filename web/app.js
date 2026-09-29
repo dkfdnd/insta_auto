@@ -229,7 +229,6 @@
     return `<div class="m ${na ? 'na' : ''}"><div class="k">${label}</div><div class="v">${na ? '–' : fmt(val)}</div><div class="r ${ratioCls(ratio)}">${na ? '' : ratioTxt(ratio) + (ratio != null ? ' 평소 대비' : '')}</div></div>`;
   }
   function card(p, i) {
-    const flags = p.flags.filter((f) => flagTxt[f]).map((f) => `<span class="flag ${f === 'fresh' ? 'neutral' : ''}">${flagTxt[f]}</span>`).join('');
     const thumb = p.thumb ? `<img loading="lazy" src="${esc(p.thumb)}" alt="">` : `<div class="ph">${isVideo(p) ? '🎬' : '🖼'}</div>`;
     return `<article class="card" data-code="${esc(p.shortcode)}">
       <div class="thumb">${thumb}
@@ -239,18 +238,13 @@
         <div class="rank">#${i + 1}</div>
       </div>
       <div class="body">
-        ${p.tier ? `<div class="flags"><span class="flag neutral" title="${esc((p.assessment?.reasons || []).join(' · '))}">${esc(p.assessment?.label || '잠정 후보')}</span></div>` : ''}
         <div class="who"><span class="avatar">${initials(p.username)}</span><span class="name">@${esc(p.username)}</span><span class="time" title="${dateStr(p.taken_at)}">${ago(p.age_hours)}</span></div>
-        <div class="hint">핫 최초 감지일 · ${window.HotpostDetection.dateKey(p.hot_detected_at) || (p.tier ? '기록 없음' : '미감지')} (한국시간)</div>
-        <div class="metrics">
-          ${metric('조회수', p.views, p.ratios.views, !isVideo(p) || p.views == null)}
-          ${metric('좋아요', p.likes, p.ratios.likes, false)}
-          ${metric('댓글', p.comments, p.ratios.comments, false)}
+        <div class="metrics benchmark-metrics">
+          ${isVideo(p) ? metric('조회수', p.views, p.ratios.views, p.views == null) : metric('좋아요', p.likes, p.ratios.likes, false)}
         </div>
         <div class="cap">${esc(p.caption.replace(/#\S+/g, '').trim()) || '<span class="hint">(캡션 없음)</span>'}</div>
-        ${flags ? `<div class="flags">${flags}</div>` : ''}
         ${isVideo(p) ? `<div class="production-status" data-code="${esc(p.shortcode)}">${productionMarkup(p.shortcode)}</div>` : ''}
-        <div class="foot"><span class="conf">신뢰도 ${confTxt[p.confidence]} · 비교 ${p.baseline.peers}개</span><a href="${esc(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Instagram ↗</a></div>
+        <div class="foot"><button class="card-open-production">${isVideo(p) ? '제작 진행 보기 →' : '게시물 보기 →'}</button><a href="${esc(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">원본 ↗</a></div>
       </div>
     </article>`;
   }
@@ -301,12 +295,21 @@
     if (!p) return;
     clearTimeout(flowTimer); flowCode=p.shortcode;
     const a = acctMap[p.username] || {}, v = p.velocity;
-    $('#modal-body').innerHTML = `<div class="detail">
+    $('#modal-body').innerHTML = `<div class="detail production-detail"><div class="detail-body">
+      <div class="benchmark-header">
       <div class="thumb">${p.thumb ? `<img src="${esc(p.thumb)}" alt="">` : `<div class="ph">${isVideo(p) ? '🎬' : '🖼'}</div>`}</div>
-      <div class="detail-body">
-        <div class="who"><span class="avatar">${initials(p.username)}</span><span class="name">@${esc(p.username)}</span>${a.full_name ? `<span class="fn">${esc(a.full_name)}</span>` : ''}<span class="time">${dateStr(p.taken_at)} (${ago(p.age_hours)})</span></div>
-        <h3>${tierTxt(p.tier) || '—'} 평소 대비 ×${p.multiplier.toFixed(1)} <small class="hint">${kindTxt(p.kind)}</small></h3>
+      <div class="benchmark-summary">
+        <span class="hint">벤치마크 원본 · ${kindTxt(p.kind)}</span>
+        <h3>${p.tier ? '🔥 터진 ' : ''}${isVideo(p) ? '영상' : '게시물'}</h3>
+        <div class="who"><span class="name">@${esc(p.username)}</span></div>
+        <div class="benchmark-performance">${isVideo(p) ? `조회수 <strong>${fmt(p.views)}</strong>${p.ratios.views != null ? `<span>평소 조회수 대비 ${ratioTxt(p.ratios.views)}</span>` : ''}` : `좋아요 <strong>${fmt(p.likes)}</strong>${p.ratios.likes != null ? `<span>평소 좋아요 대비 ${ratioTxt(p.ratios.likes)}</span>` : ''}`}</div>
+        <a href="${esc(p.url)}" target="_blank" rel="noopener">Instagram에서 원본 보기 ↗</a>
+      </div></div>
         ${isVideo(p) ? '<div id="production-flow"></div>' : ''}
+        <details class="video-info"><summary>${isVideo(p) ? '영상' : '게시물'} 정보 더보기</summary><div class="video-info-body">
+        <p class="hint">게시일 ${dateStr(p.taken_at)} · ${ago(p.age_hours)}${a.full_name ? ' · '+esc(a.full_name) : ''}</p>
+        <div class="fullcap">${esc(p.caption) || '(캡션 없음)'}</div>
+        ${p.hashtags.length ? `<div class="tags">${p.hashtags.map((h) => `<span data-tag="${esc(h)}">#${esc(h)}</span>`).join('')}</div>` : ''}
         <div class="cmp">
           ${isVideo(p) ? bar('조회수', p.views, p.baseline.views, p.ratios.views) : ''}
           ${bar('좋아요', p.likes, p.baseline.likes, p.ratios.likes)}
@@ -320,7 +323,7 @@
           <div>신뢰도<b>${confTxt[p.confidence]}</b></div>
           <div>판정 상태<b>${esc(p.assessment?.label || '재분석 필요')}</b></div>
           <div>보정 전 배수<b>${p.assessment ? '×' + p.assessment.unadjusted_multiplier.toFixed(2) : '—'}</b></div>
-          ${p.assessment?.reasons?.length ? `<div>추가 확인 사항<b>${esc(p.assessment.reasons.join(' · '))}</b></div>` : ''}
+          ${p.assessment?.reasons?.length ? `<div>시스템 판정 참고<b>${esc(p.assessment.reasons.join(' · '))}</b></div>` : ''}
           ${v ? `<div>증가 속도 (${v.hours}h)<b>${v.views_per_hour != null ? fmt(v.views_per_hour) + ' 뷰/h · ' : ''}${v.comments_per_hour} 댓글/h</b></div>` : ''}
           ${p.growth ? `<div>최근 조회 상태<b>${esc(p.growth.state)}</b></div><div>최근 조회 속도<b>${p.growth.views_per_hour == null ? '성공 관측 부족' : fmt(p.growth.views_per_hour) + ' 뷰/h'}</b></div>
             <div>가속도<b>${p.growth.acceleration == null ? '비교 구간 부족' : fmt(p.growth.acceleration) + ' 뷰/h²'}</b></div>
@@ -329,14 +332,12 @@
           ${p.tracking ? `<div>14일 추적<b>D+${p.tracking.day} · 성공 ${p.tracking.successful_observations}회${p.tracking.finalized_at ? ' · 종료' : ''}</b></div>` : ''}
         </div>
         ${p.flags.filter((f) => flagTxt[f]).length ? `<div class="flags">${p.flags.filter((f) => flagTxt[f]).map((f) => `<span class="flag">${flagTxt[f]}</span>`).join('')}</div>` : ''}
-        <div class="fullcap">${esc(p.caption) || '(캡션 없음)'}</div>
-        ${p.hashtags.length ? `<div class="tags">${p.hashtags.map((h) => `<span data-tag="${esc(h)}">#${esc(h)}</span>`).join('')}</div>` : ''}
+        ${isVideo(p) ? '<h4>개별 소스·대본 도구</h4>' : ''}
         <div class="detail-actions">
-          <a class="linkbtn secondary" href="${esc(p.url)}" target="_blank" rel="noopener">Instagram에서 보기 ↗</a>
           ${isVideo(p) ? `<button class="linkbtn source-download" id="source-download" data-code="${esc(p.shortcode)}">소스 영상 찾기·다운로드</button><button class="linkbtn secondary" id="transcript-extract">대본 추출</button>` : ''}
         </div>
         ${isVideo(p) ? '<div class="source-status" id="source-status" hidden></div><div class="source-status transcript-status" id="transcript-status" hidden></div>' : ''}
-      </div></div>`;
+      </div></details></div></div>`;
     $$('.tags span', modal).forEach((s) => s.addEventListener('click', () => { closeDetail(); state.q = '#' + s.dataset.tag; $('#q').value = state.q; showSearch(true); renderAll(); }));
     const sourceBtn = $('#source-download', modal);
     if (sourceBtn) sourceBtn.addEventListener('click', () => startSourceJob(p.shortcode, sourceBtn));

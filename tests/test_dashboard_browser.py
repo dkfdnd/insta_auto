@@ -187,3 +187,35 @@ def test_mobile_layout_fits_viewport(dashboard,path):
     page.wait_for_selector(ready)
     if 'accounts' in path:page.locator('#notification-toggle').click()
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+
+@pytest.mark.parametrize('width',[1440,390])
+def test_detail_prioritizes_production_and_collapses_analysis(dashboard,width):
+    page,state=dashboard
+    page.set_viewport_size({'width':width,'height':1000})
+    original=json.dumps(state['report'],sort_keys=True)
+    page.goto('http://dashboard.test/');page.wait_for_selector('.card')
+    card=page.locator('.card').first
+    for label in ['핫 최초 감지일','신뢰도','잠정 후보','비교 게시물']:
+        assert label not in card.inner_text()
+    assert '조회수' in card.inner_text()
+    card.locator('.card-open-production').click()
+    page.wait_for_selector('#begin-auto')
+    assert page.locator('.benchmark-performance').is_visible()
+    assert page.locator('#production-flow').is_visible()
+    info=page.locator('.video-info')
+    assert not info.evaluate('(el)=>el.open')
+    assert not info.locator('.kv').is_visible()
+    assert not page.locator('#source-download').is_visible()
+    assert '추가 확인 사항' not in page.locator('#modal-body').inner_text()
+    info.locator('summary').click()
+    assert info.locator('.kv').is_visible()
+    for label in ['핫 최초 감지일','팔로워','비교 게시물','반응 성숙도','신뢰도','판정 상태']:
+        assert label in info.inner_text()
+    assert page.locator('#source-download').is_visible()
+    assert page.locator('#transcript-extract').is_visible()
+    assert page.locator('#production-flow').is_visible()
+    assert page.locator('.modal-card').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
+    info.locator('summary').click()
+    page.keyboard.press('Escape')
+    assert not page.locator('#modal').is_visible()
+    assert json.dumps(state['report'],sort_keys=True)==original
