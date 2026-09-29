@@ -24,6 +24,11 @@ def task(key, status, stage, automatic=True, job_status='queued'):
         feedback={},feedback_revision=0,script_candidates=[],run_id='v2',latest_completed_run_id='v1',
         pipeline=[dict(id='v1',number=1,status='completed',steps=[],artifacts={},video_url='/old.mp4'),
                   dict(id='v2',number=2,status='running',steps=[],artifacts={})])
+    keys=['sources','transcript','script','voice','project','export']
+    index={'prepare':0,'rewrite':2,'voice':3,'edit':4,'export':5,'completed':6}[stage]
+    t['pipeline'][1]['steps']=[dict(key=k,label=k,status='completed' if i<index else 'running' if i==index else 'pending') for i,k in enumerate(keys)]
+    if status=='completed':
+        t['latest_completed_run_id']='v2';t['pipeline'][1]['status']='completed';t['pipeline'][1]['video_url']='/final.mp4'
     if automatic:
         t['automation'] = dict(protocol=2,stage=stage,active=True)
     return t
@@ -81,16 +86,16 @@ def studio_page():
 def test_columns_filters_and_stable_polling(studio_page):
     page,tasks=studio_page
     assert page.locator('.kanban-column').count()==6
-    assert page.locator('[data-stage="export"] [data-work="export"] .board-status').inner_text()=='외부 작업 대기'
+    assert page.locator('[data-stage="export"] [data-work-card="export"] .board-status').inner_text()=='외부 작업 대기'
     assert page.locator('.work-card.is-running').count()==1
-    page.locator('[data-work="voice"]').evaluate('(e)=>{window.keptCard=e;window.keptActivity=e.querySelector(".activity-dot")}')
+    page.locator('[data-work-card="voice"]').evaluate('(e)=>{window.keptCard=e;window.keptActivity=e.querySelector(".activity-dot")}')
     page.evaluate('refreshStudio()')
-    assert page.evaluate('keptCard===document.querySelector("[data-work=voice]") && keptActivity===keptCard.querySelector(".activity-dot")')
+    assert page.evaluate('keptCard===document.querySelector("[data-work-card=voice]") && keptActivity===keptCard.querySelector(".activity-dot")')
     tasks[2].update(status='editing',revision=2)
     tasks[2]['jobs']=[dict(kind='edit',status='running')]
     page.evaluate('refreshStudio()')
     assert page.locator('[data-stage="edit"] [data-work="voice"]').count()==1
-    assert page.evaluate('keptCard===document.querySelector("[data-work=voice]")')
+    assert page.evaluate('keptCard===document.querySelector("[data-work-card=voice]")')
     page.locator('[data-filter="review"]').click()
     assert page.locator('.work-card').count()==2
     page.locator('#search').fill('없는 작업')
@@ -221,7 +226,7 @@ def test_attention_actions_and_reduced_motion(studio_page):
     tasks[2].update(status='attention',error='음성 연결 실패',revision=2)
     tasks[2]['jobs'][0]['status']='failed'
     page.evaluate('refreshStudio()')
-    assert page.locator('[data-stage="voice"] [data-work="voice"] [class="board-status"]').inner_text()=='확인 필요'
+    assert page.locator('[data-stage="voice"] [data-work-card="voice"] [class="board-status"]').inner_text()=='확인 필요'
     page.locator('[data-work="voice"]').click()
     assert page.locator('.pf-runtime [data-pf="retry"]').is_visible()
     page.locator('#close-work').click()
@@ -229,4 +234,37 @@ def test_attention_actions_and_reduced_motion(studio_page):
     tasks[2]['jobs'][0]['status']='running'
     page.evaluate('refreshStudio()')
     page.emulate_media(reduced_motion='reduce')
-    assert page.locator('[data-work="voice"] .activity-dot').evaluate('(e)=>getComputedStyle(e).animationName')=='none'
+    assert page.locator('[data-work-card="voice"] .activity-dot').evaluate('(e)=>getComputedStyle(e).animationName')=='none'
+
+
+def test_numbered_progress_and_vertical_journey(studio_page):
+    page,tasks=studio_page
+    card=page.locator('[data-work-card="voice"]')
+    assert card.locator('.card-phase').inner_text()=='4 / 6 단계'
+    assert card.locator('.milestone-progress').get_attribute('aria-valuenow')=='3'
+    assert card.locator('[data-step-state="done"]').count()==3
+    assert card.locator('[data-step="voice"]').get_attribute('data-step-state')=='current'
+    assert card.locator('.card-open').inner_text()=='음성 제작 작업 열기 →'
+    card.locator('h3').click()
+    assert page.locator('#journey-current').inner_text()=='4 / 6 단계'
+    assert page.locator('[data-journey="voice"]').get_attribute('aria-current')=='step'
+    page.locator('[data-journey="script"] button').click()
+    assert page.locator('[data-field="script"]').is_visible()
+    tasks[2].update(status='editing',revision=2)
+    page.evaluate('refreshStudio()')
+    assert page.locator('#journey-current').inner_text()=='5 / 6 단계'
+    assert page.locator('[data-field="script"]').is_visible()
+    page.locator('#close-work').click()
+    assert page.locator('[data-work-card="done"] .milestone-progress').get_attribute('aria-valuenow')=='6'
+
+
+def test_mobile_progress_expansion_and_stage_navigation(studio_page):
+    page,_=studio_page
+    page.set_viewport_size({'width':390,'height':844})
+    page.locator('[data-jump-stage="export"]').click()
+    page.wait_for_function('document.querySelector("#work-list").scrollLeft>0')
+    page.locator('[data-work="voice"]').click()
+    assert page.locator('#journey-panel').get_attribute('open') is None
+    page.locator('#journey-panel > summary').click()
+    assert page.locator('[data-journey="voice"]').is_visible()
+    assert page.locator('#work-drawer').bounding_box()['width']<=390

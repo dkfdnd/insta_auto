@@ -6,6 +6,8 @@
   let tasks=[], selectedId=null, requestedId=new URLSearchParams(location.search).get('work'), filter='all', tab='script', dirty=false, saving=false, timer, saveTimer, lastRevision=-1, activeEditId=null;
   const current=()=>tasks.find(t=>t.id===selectedId);
   const board=window.StudioBoard.mount($('#work-list'),$('#overview'));
+  const updateJourney=window.StudioBoard.mountJourney($('#drawer-journey'));
+  $('#board-stages').innerHTML=window.StudioBoard.columns.map(([id,title],i)=>`<button data-jump-stage="${id}"><span>${String(i+1).padStart(2,'0')}</span>${title}</button>`).join('');
   const panels=new Map(), memories=new Map();
   let selecting=false;
   const description=t=>window.StudioBoard.describe(t);
@@ -14,7 +16,8 @@
     $('#drawer-title').textContent=t.title||t.shortcode;
     $('#drawer-code').textContent=`WORKSPACE / ${t.shortcode}`;
     const d=description(t);
-    $('#drawer-status').textContent=`${window.StudioBoard.columns.find(c=>c[0]===d.stage)[1]} · ${d.label} · ${d.versions}`;
+    $('#drawer-status').textContent=`${d.phase} · ${d.stageName} · ${d.label}`;
+    updateJourney(t);$('#journey-current').textContent=d.phase;
   }
   function applyDetailTab(panel=$('#detail')){
     if(panel!==$('#detail'))return;
@@ -47,7 +50,7 @@
         if(!panel.childNodes.length||lastRevision!==current().revision&&!panel._legacyEditing)renderDetail();
         applyDetailTab();restoreScroll=memory?.scroll||0;
       }
-      $('#work-drawer').hidden=false;updateDrawerHeader();syncDrawerMode();
+      $('#work-drawer').hidden=false;$('#journey-panel').open=!matchMedia('(max-width:750px)').matches;updateDrawerHeader();syncDrawerMode();
       if(restoreScroll!==null)$('#drawer-scroll').scrollTop=restoreScroll;
       const url=new URL(location.href);url.searchParams.set('work',id);history.replaceState(null,'',url);
       renderList();$('#drawer-title').focus({preventScroll:true});
@@ -150,7 +153,10 @@
   }
   async function saveScript(){const t=current(),input=$('#script-editor');if(!t||!input||!dirty)return;if(saving){await saving;if(dirty)return saveScript();return;}const text=input.value;saving=(async()=>{const saved=await action('save-script',{text},{quiet:true});dirty=input.value!==text;if(dirty){localStorage.setItem('studio-draft-'+t.id,JSON.stringify({base:saved.script_id,text:input.value}));}else{localStorage.removeItem('studio-draft-'+t.id);}$('#save-status').textContent=dirty?'수정 중…':`저장됨 · ${text.length}자`;})();try{await saving;}finally{saving=false;}}
   function showCandidates(beatId){const t=current(),e=revision(t,'edits',t.edit_id),b=e.plan.beats.find(b=>b.id===beatId);$('#candidate-caption').textContent=`“${b.text}” · 실제 확보된 장면 중에서 선택하세요.`;$('#candidates').innerHTML=b.options.map((o,i)=>{const s=e.plan.shots.find(s=>s.id===o.shot_id);return `<article class="candidate"><video src="${esc(s.video_url)}#t=${s.start},${s.end}" poster="${esc(s.thumbnail_url)}" controls preload="none"></video><h4>후보 ${i+1} <span class="pill ${o.relation==='direct'?'draft_review':'review'}">${{direct:'직접 대응',context:'제품 맥락',illustration:'대체 장면'}[o.relation]}</span></h4><p>${esc(s.observation)}<br>${esc(o.reason)}</p><button class="primary" data-choose-shot="${s.id}" data-for-beat="${b.id}">${b.selected_shot_id===s.id?'현재 장면':'이 장면 사용'}</button></article>`;}).join('');$('#candidate-dialog').showModal();}
-  document.addEventListener('click',async event=>{const el=event.target.closest('button');if(!el)return;try{
+  document.addEventListener('click',async event=>{const el=event.target.closest('button');
+    if(!el){const card=event.target.closest('[data-work-card]');if(card&&!event.target.closest('a,input,select,video,audio'))await openWork(card.dataset.workCard);return;}
+    try{
+    if(el.dataset.jumpStage){const lane=$(`[data-stage="${el.dataset.jumpStage}"]`);$('#work-list').scrollTo({left:lane.getBoundingClientRect().left-$('#work-list').getBoundingClientRect().left+$('#work-list').scrollLeft,behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'instant':'smooth'});return;}
     if(el.dataset.work){await openWork(el.dataset.work);return;}
     if(el.id==='close-work'){await closeWork();return;}
     if(el.id==='expand-work'){$('#work-drawer').classList.toggle('expanded');const full=$('#work-drawer').classList.contains('expanded');el.textContent=full?'패널로 축소':'전체화면';el.setAttribute('aria-pressed',String(full));syncDrawerMode();return;}
