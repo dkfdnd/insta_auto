@@ -1,5 +1,5 @@
-# Reference accounts exported from managed_accounts on 2026-09-28 (Asia/Seoul).
-# Snapshot for sharing and initial DB setup; existing installations use the managed_accounts DB.
+# Shared monitoring accounts. Web changes update this file; commit/push to share.
+# Login sessions, collected data and local notes are not included.
 
 https://www.instagram.com/smileful_it/
 https://www.instagram.com/campdog.5bok.billion/

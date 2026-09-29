@@ -106,7 +106,7 @@ def test_columns_filters_and_stable_polling(studio_page):
 def test_feedback_survives_poll_tab_close_switch_and_save(studio_page):
     page,tasks=studio_page
     page.locator('[data-work="voice"]').click()
-    page.locator('[data-detail-tab="script"]').click()
+    page.locator('#detail-tabs [data-detail-tab="script"]').click()
     editor=page.locator('[data-field="script"]')
     editor.fill('저장하기 전 직접 고친 문장')
     editor.evaluate('(e)=>window.keptEditor=e')
@@ -114,9 +114,9 @@ def test_feedback_survives_poll_tab_close_switch_and_save(studio_page):
     page.evaluate('refreshStudio()')
     assert page.evaluate('keptEditor===document.querySelector("[data-field=script]")')
     assert editor.input_value()=='저장하기 전 직접 고친 문장'
-    assert page.locator('[data-detail-tab="script"]').get_attribute('aria-pressed')=='true'
-    page.locator('[data-detail-tab="voice"]').click()
-    page.locator('[data-detail-tab="script"]').click()
+    assert page.locator('#detail-tabs [data-detail-tab="script"]').get_attribute('aria-pressed')=='true'
+    page.locator('#detail-tabs [data-detail-tab="voice"]').click()
+    page.locator('#detail-tabs [data-detail-tab="script"]').click()
     assert editor.input_value()=='저장하기 전 직접 고친 문장'
     page.locator('#close-work').click()
     page.locator('[data-work="source"]').click()
@@ -132,7 +132,7 @@ def test_feedback_survives_poll_tab_close_switch_and_save(studio_page):
 def test_results_version_and_keyboard_drawer(studio_page):
     page,_=studio_page
     page.locator('[data-work="voice"]').click()
-    page.locator('[data-detail-tab="results"]').click()
+    page.locator('#detail-tabs [data-detail-tab="results"]').click()
     assert page.locator('.pf-summary > video').get_attribute('src')=='/old.mp4'
     page.locator('[data-pf-version]').select_option('v2')
     assert page.locator('.pf-summary > video').count()==0
@@ -156,11 +156,11 @@ def test_manual_approval_and_tab_input_preservation(studio_page):
     page,tasks=studio_page
     page.locator('[data-work="script"]').click()
     page.locator('#script-request').fill('도입부를 더 짧게')
-    page.locator('[data-detail-tab="sources"]').click()
-    page.locator('[data-detail-tab="script"]').click()
+    page.locator('#detail-tabs [data-detail-tab="sources"]').click()
+    page.locator('#detail-tabs [data-detail-tab="script"]').click()
     assert page.locator('#script-request').input_value()=='도입부를 더 짧게'
     page.locator('[data-action="approve-script"]').click()
-    page.wait_for_function('document.querySelector("[data-detail-tab=voice]").getAttribute("aria-pressed")==="true"')
+    page.wait_for_function('document.querySelector("#detail-tabs [data-detail-tab=voice]").getAttribute("aria-pressed")==="true"')
     assert tasks[1]['approved_script_id']=='s1'
 
 
@@ -199,7 +199,7 @@ def test_scroll_media_position_and_paused_refresh(studio_page):
     page.locator('#close-work').click()
     page.locator('[data-work="voice"]').click()
     page.wait_for_function('document.querySelector("[data-pf-section=voice] audio").currentTime>=1.9')
-    page.locator('[data-detail-tab="script"]').click()
+    page.locator('#detail-tabs [data-detail-tab="script"]').click()
     page.locator('#drawer-scroll').evaluate('(e)=>e.scrollTop=200')
     top=page.locator('#drawer-scroll').evaluate('(e)=>e.scrollTop')
     assert top>0

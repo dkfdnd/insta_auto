@@ -267,7 +267,7 @@ def test_spa_embedded_video_ids_are_recovered():
     assert xhs[0]["url"].endswith("/explore/0123456789abcdef01234567")
 
 
-def test_account_registry_migrates_legacy_once_and_supports_crud(tmp_path: Path):
+def test_account_registry_syncs_git_file_and_supports_crud(tmp_path: Path):
     legacy = tmp_path / "influencer_list.txt"
     legacy.write_text("@first | 주방\nhttps://instagram.com/second/\n", encoding="utf-8")
     settings = Settings(data_dir=tmp_path / "data", influencer_file=legacy)

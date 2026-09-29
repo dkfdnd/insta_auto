@@ -46,8 +46,12 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 메모도 함께 저장할 수 있으며 삭제하면 다음 수집·분석부터 제외된다. 삭제해도 이미 수집한 게시물과 통계 원본은
 보존되므로 계정을 다시 등록하면 이어서 사용할 수 있다.
 
-기존 `influencer_list.txt` 목록은 계정 DB를 처음 만드는 시점에 한 번 자동으로 가져온다. 이후 SQLite가 기준
-저장소가 되며, 웹에서 모든 계정을 삭제해도 텍스트 파일에서 다시 생성되지 않는다.
+`influencer_list.txt`가 공유 계정 목록의 기준이다. 웹에서 추가·삭제하면 파일에도 저장되며, 이 파일을
+커밋·push한 뒤 다른 PC에서 pull하면 다음 계정 목록 조회 또는 수집 전에 로컬 DB에 반영된다.
+앱이 Git 명령을 자동 실행하지는 않는다. 메모·로그인 세션·게시물·통계·제작 이력은 PC별로 유지한다.
+파일의 잘못된 계정이나 Git 충돌은 반영하지 않는다. 파일이 사라져도 기존 DB는 유지하며, 계정 전체 삭제는
+웹에서 수행한다. 삭제 이전의 계정·메모는 `data/account-imports/`에 로컬 백업한다.
+기존 `아이디 | 메모` 형식은 신규 계정의 초기 메모로만 읽으며, 웹에서 수정한 메모는 Git으로 내보내지 않는다.
 
 ```
 https://www.instagram.com/some_account?stkn=xxxx
@@ -89,7 +93,7 @@ third_account
 ## 구조
 
 ```
-influencer_list.txt      # 기존 목록 최초 마이그레이션용
+influencer_list.txt      # Git으로 공유하는 모니터링 계정 목록
 config.json              # 기준값/아이디
 hotpost/
   sources.py             # 목록 파서

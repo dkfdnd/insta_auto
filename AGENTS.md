@@ -23,7 +23,7 @@
 
 ## 주요 경로와 계약
 
-- 모니터링 계정의 기준 저장소는 SQLite `managed_accounts`다. `influencer_list.txt`는 DB 최초 생성 시 한 번만 가져온다. 등록·삭제는 `hotpost/accounts.py`, 웹 API는 `hotpost/server.py`, UI는 `web/accounts.*`에 있다. 삭제해도 과거 게시물은 보존하고 다음 리포트에서만 제외한다.
+- 모니터링 계정 구성·순서의 기준은 Git의 `influencer_list.txt`다. `hotpost/accounts.py`가 목록 조회·수집 전에 SQLite `managed_accounts`를 동기화하며 웹 추가·삭제도 파일에 저장한다. 직접 DB만 변경하지 않는다. 계정 메모·로그인·수집 결과는 PC별 로컬 데이터이며 파일에 내보내지 않는다. 웹 API는 `hotpost/server.py`, UI는 `web/accounts.*`에 있다. 삭제해도 과거 게시물은 보존하고 다음 리포트에서만 제외한다. Git 충돌·잘못된 파일은 반영하지 않고 기존 DB를 유지한다.
 - 수집·분석은 `hotpost/cli.py` → `hotpost/collectors/` → `hotpost/storage.py` → `hotpost/analyze.py` → `hotpost/report.py` 순서다. 수동 수집과 macOS LaunchAgent 수집은 `data/collect.lock`으로 중복 실행을 막는다. 일정 설치/삭제는 사용자 OS 상태를 변경하므로 명시적 요청 없이 실행하지 않는다.
 - 소스 찾기는 `hotpost/source_finder.py`와 `hotpost/browser_search.py`가 담당한다. 후보를 실제로 받은 뒤 유사도와 텍스트 오버레이를 검사하여 최대 20개를 ZIP에 넣는다. 기준 Instagram 릴스는 분석용이며 ZIP에 포함하지 않는다. `manifest.json`의 원 URL·권리 상태를 유지한다.
 - 대본 추출은 `hotpost/transcript.py`가 담당한다. `speech`는 실제 오디오 전사, `screen_text`는 프레임 OCR이며 둘을 같은 종류의 대사로 취급하지 않는다. API는 `POST /api/transcript-jobs`, `GET /api/transcript-jobs/{id}`, `GET /api/transcript-jobs/{id}/download?format=txt|json`이다. 작업 상태는 SQLite 큐에 보존된다.

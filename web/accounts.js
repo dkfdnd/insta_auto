@@ -150,7 +150,7 @@
       const response = await fetch('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account: $('#account-input').value, note: $('#account-note').value }) });
       const data = await response.json(); if (!response.ok) throw new Error(data.error || '등록하지 못했습니다.');
-      message(data.created ? `@${data.account.username} 계정을 등록했습니다.` : `@${data.account.username} 정보를 수정했습니다.`);
+      message(data.created ? `@${data.account.username} 계정을 등록하고 Git 공유 목록에 저장했습니다. 커밋·push하면 다른 PC와 공유됩니다.` : `@${data.account.username}의 이 PC 메모를 수정했습니다.`);
       $('#account-input').value = ''; $('#account-note').value = ''; await loadAccounts();
     } catch (error) { message(error.message, true); }
     finally { button.disabled = false; }
@@ -159,12 +159,12 @@
   $('#account-list').addEventListener('click', async (event) => {
     const button = event.target.closest('[data-delete]'); if (!button) return;
     const username = button.dataset.delete;
-    if (!confirm(`@${username} 계정을 관리 목록에서 삭제할까요?\n기존 수집 데이터는 삭제되지 않습니다.`)) return;
+    if (!confirm(`@${username} 계정을 관리 목록과 Git 공유 파일에서 삭제할까요?\n기존 수집 데이터는 삭제되지 않습니다.`)) return;
     button.disabled = true;
     try {
       const response = await fetch('/api/accounts/' + encodeURIComponent(username), { method: 'DELETE' });
       const data = await response.json(); if (!response.ok) throw new Error(data.error || '삭제하지 못했습니다.');
-      message(`@${username} 계정을 관리 목록에서 삭제했습니다.`); await loadAccounts();
+      message(`@${username} 계정을 관리 목록과 Git 공유 파일에서 삭제했습니다. 기존 수집 데이터는 보존됩니다.`); await loadAccounts();
     } catch (error) { message(error.message, true); button.disabled = false; }
   });
   $('#account-refresh').addEventListener('click', loadAccounts);

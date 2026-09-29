@@ -187,7 +187,7 @@ def make_handler(settings: Settings):
                     item, created = accounts.add(str(data.get("account") or ""), str(data.get("note") or ""))
                     self._json({"account": item, "created": created},
                                HTTPStatus.CREATED if created else HTTPStatus.OK)
-                except (ValueError, json.JSONDecodeError) as exc:
+                except (ValueError, OSError) as exc:
                     self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if path == "/api/platform-session":
@@ -303,8 +303,13 @@ def make_handler(settings: Settings):
                     self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if path == "/api/accounts":
-                items = accounts.list()
-                self._json({"accounts": items, "count": len(items)}); return
+                try:
+                    items = accounts.list()
+                    self._json({"accounts": items, "count": len(items),
+                                "source": "git_file", "file": settings.influencer_file.name})
+                except (ValueError, OSError) as exc:
+                    self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
+                return
             if path == "/api/criteria":
                 store = Storage(settings.db_path)
                 try:
@@ -424,7 +429,7 @@ def make_handler(settings: Settings):
                 if not accounts.delete(username):
                     self._json({"error": "관리 목록에서 계정을 찾지 못했습니다."}, HTTPStatus.NOT_FOUND); return
                 self._json({"deleted": username})
-            except ValueError as exc:
+            except (ValueError, OSError) as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     return partial(Handler, directory=str(settings.web_dir))
