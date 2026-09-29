@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>오늘의 터진 게시물</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-<link rel="stylesheet" href="style.css?v=10">
+<link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 <header class="top">
@@ -30,20 +30,21 @@
   <div id="collection-health" class="banner" role="status" hidden></div>
 
   <section class="stats" id="stats"></section>
-  <section class="section">
+  <div class="discovery-overview">
+  <section class="topic-panel" aria-labelledby="topics-title">
     <div class="section-head">
-      <h2>오늘의 핫 주제</h2>
-      <p class="hint">기준을 통과한 게시물을 상위 카테고리로 묶었습니다. 클릭하면 해당 주제만 봅니다.</p>
+      <h2 id="topics-title">오늘의 핫 주제</h2>
+      <p class="hint">관심 주제를 누르면 영상만 모아볼 수 있어요.</p>
     </div>
     <div class="chips" id="topics"></div>
   </section>
+  <aside id="current-settings" class="discovery-summary" aria-label="현재 설정"></aside>
+  </div>
 
   <section class="section">
-    <div class="section-head">
+    <div class="section-head listing-heading">
       <h2>터진 게시물</h2>
-      <p class="hint" id="result-count"></p>
-    </div>
-    <div class="listing-toolbar"><div id="current-settings" class="current-settings" aria-label="현재 설정"></div><a class="btn ghost" href="settings.html">설정 변경</a><div class="compact-search"><button class="icon-button" id="search-toggle" aria-label="검색창 열기" aria-expanded="false" aria-controls="search-box"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button><div id="search-box" hidden><input id="q" type="search" aria-label="게시물 검색" placeholder="캡션·해시태그 검색"></div></div></div>
+      <div class="compact-search"><button class="icon-button" id="search-toggle" aria-label="검색창 열기" aria-expanded="false" aria-controls="search-box"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button><div id="search-box" hidden><input id="q" type="search" aria-label="게시물 검색" placeholder="캡션·해시태그 검색"></div></div></div>
     <div class="grid" id="cards"></div>
     <div class="empty" id="empty" hidden></div>
   </section>
@@ -65,6 +66,6 @@
 <script src="production-flow.js?v=5"></script>
 <script src="display-settings.js?v=1"></script>
 <script src="notices.js?v=1"></script>
-<script src="app.js?v=15-production-focus"></script>
+<script src="app.js?v=16-discovery-summary"></script>
 </body>
 </html>

@@ -83,16 +83,29 @@ def test_main_is_compact_and_search_and_category_filters_work(dashboard):
     page.wait_for_selector('.card')
     assert page.locator('#criteria,#period,#presets,#accounts,#method,#acquisition-candidates').count()==0
     assert not page.locator('#q').is_visible()
-    assert '14일' in page.locator('#current-settings').inner_text()
+    assert '14일' in page.locator('#current-settings').text_content()
+    assert page.locator('#result-count').inner_text()=='2'
+    assert page.locator('.listing-heading #current-settings,.listing-heading #result-count').count()==0
+    topic_box=page.locator('.topic-panel').bounding_box()
+    summary_box=page.locator('#current-settings').bounding_box()
+    assert summary_box['x']>topic_box['x'] and summary_box['y']==topic_box['y']
+    assert not page.locator('.threshold-scale').is_visible()
+    page.locator('.discovery-conditions summary').click()
+    assert page.locator('.threshold-scale li').count()==3
+    assert page.locator('.threshold-scale').is_visible()
+    page.locator('.discovery-conditions summary').click()
     labels=page.locator('#topics').inner_text()
     assert '캠핑·여행' in labels and '청소·세탁' in labels and '#' not in labels
     page.locator('#topics button').filter(has_text='캠핑·여행').click()
     assert page.locator('.card').count()==1
+    assert page.locator('#result-count').inner_text()=='1'
+    assert page.locator('#result-context').inner_text()=='캠핑·여행'
     page.locator('#topics button').filter(has_text='캠핑·여행').click()
     page.locator('#search-toggle').click();page.locator('#q').fill('곰팡이')
     page.wait_for_function("document.querySelectorAll('.card').length===1")
     page.locator('#q').press('Escape')
     assert not page.locator('#q').is_visible() and page.locator('.card').count()==2
+    assert page.locator('#result-count').inner_text()=='2'
     page.locator('.card').first.click();assert page.locator('#modal').is_visible()
 
 
@@ -109,7 +122,7 @@ def test_settings_save_survives_navigation_and_reload(dashboard):
     assert state['display']['period']==72 and state['display']['sort']=='views'
     assert state['report']['criteria']['values']['wvViews']==70
     page.goto('http://dashboard.test/');page.wait_for_selector('.card')
-    assert '3일' in page.locator('#current-settings').inner_text() and '조회수순' in page.locator('#current-settings').inner_text()
+    assert '3일' in page.locator('#current-settings').text_content() and '조회수순' in page.locator('#current-settings').text_content()
     page.goto('http://dashboard.test/settings.html');page.wait_for_function("!document.querySelector('#settings-save').disabled")
     assert page.locator('#period [data-v="72"]').get_attribute('aria-pressed')=='true'
     page.locator('#detection [data-v="today"]').click()

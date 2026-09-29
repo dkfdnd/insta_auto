@@ -84,7 +84,16 @@
   const linkedAccount=new URLSearchParams(location.search).get('account');if(linkedAccount)state.account=linkedAccount;
   function currentSettings(){
     const c=R.criteria.values;
-    $('#current-settings').textContent=window.HotpostDisplay.describe(state)+` · 등급 기준 ${c.t1}/${c.t2}/${c.t3}배`;
+    const icon=name=>`<svg viewBox="0 0 24 24" aria-hidden="true">${({filter:'<path d="M4 6h16M7 12h10M10 18h4"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 3v4m8-4v4M4 11h16"/>',sort:'<path d="M7 4v16m-4-4 4 4 4-4M14 5h7m-7 5h5m-5 5h3"/>',video:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4Z"/>',settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>'})[name]}</svg>`;
+    const period=state.detection==='today'?['오늘','감지']:state.period===24?['24','시간']:[state.period/24,'일'];
+    const sort={rank:'급상승순',views:'조회수순',comments:'댓글순',likes:'좋아요순',recent:'최신순'}[state.sort];
+    const full=window.HotpostDisplay.describe(state).split(' · ');
+    const expanded=$('#current-settings details')?.open;
+    $('#current-settings').innerHTML=`<div class="discovery-summary-head"><span>${icon('filter')}현재 보기</span><a href="settings.html" class="icon-button" aria-label="보기 설정 변경" title="보기 설정 변경">${icon('settings')}</a></div>
+      <div class="discovery-numbers"><div class="discovery-count"><span class="summary-label">표시 게시물</span><div><strong id="result-count" aria-live="polite">0</strong><span>개</span></div></div><div class="discovery-period"><span class="summary-label">${icon('calendar')}${state.detection==='today'?'감지일':'최근 기간'}</span><div><strong>${period[0]}</strong><span>${period[1]}</span></div></div></div>
+      <div class="discovery-badges"><span>${icon('sort')}${sort}</span><span>${icon('video')}${{all:'전체 유형',video:'릴스',image:'사진'}[state.kind]}</span><span>${state.tier?'🔥'.repeat(state.tier)+' 이상':'전체 등급'}</span></div>
+      <p id="result-context" class="result-context" hidden></p>
+      <details class="discovery-conditions" ${expanded?'open':''}><summary>세부 조건</summary><div class="condition-tags">${full.map(v=>`<span>${esc(v)}</span>`).join('')}</div><div class="threshold-caption">급상승 등급 기준</div><ol class="threshold-scale" aria-label="급상승 등급 기준">${[1,2,3].map(n=>`<li class="${n===state.tier?'selected':''}"><span class="threshold-mark" aria-hidden="true"></span><strong>${esc(c['t'+n])}<small>배</small></strong><span>${'🔥'.repeat(n)}</span></li>`).join('')}</ol></details>`;
   }
   currentSettings();
   function showSearch(open){$('#search-box').hidden=!open;$('#search-toggle').setAttribute('aria-expanded',String(open));$('#search-toggle').setAttribute('aria-label',open?'검색창 닫기':'검색창 열기');if(open)$('#q').focus();}
@@ -255,9 +264,10 @@
     $('#cards').innerHTML = current.map(card).join('');
     const emp = $('#empty'); emp.hidden = current.length > 0;
     if (!current.length) emp.textContent = state.detection === 'today' ? '현재 필터에 맞는 오늘 최초 감지 핫 게시물이 없습니다. 데이터 기준 시각과 다른 필터도 확인하세요.' : state.tier > 0 ? '조건에 맞는 터진 게시물이 없습니다. 기간을 늘리거나 판정 기준을 낮춰 보세요.' : '조건에 맞는 게시물이 없습니다.';
-    const desc = [state.detection === 'today' ? '오늘 최초 감지 (한국시간)' : state.period <= 24 ? '24시간' : state.period / 24 + '일', state.kind === 'all' ? '' : state.kind === 'video' ? '릴스' : '사진', state.tier ? tierTxt(state.tier) + ' 이상' : '전체', state.account ? '@' + state.account : '', state.topic ? '주제 "' + state.topic + '"' : ''].filter(Boolean).join(' · ');
-    $('#result-count').textContent = `${current.length}개 · ${desc}`;
-    const hotBase = base.filter((p) => p.tier >= 1).length;
+    $('#result-count').textContent = current.length;
+    $('#result-count').setAttribute('aria-label',`현재 표시 게시물 ${current.length}개`);
+    const context=[state.topic,state.q?`검색: ${state.q}`:'',state.account?'@'+state.account:'',state.assessment!=='all'?{confirmed:'성과 확인',provisional:'잠정 후보'}[state.assessment]:''].filter(Boolean).join(' · ');
+    $('#result-context').textContent=context;$('#result-context').hidden=!context;
     return base;
   }
   function renderAll() { recompute(); renderStats(); const base = render(); renderTopics(base); }
