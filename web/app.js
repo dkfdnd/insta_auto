@@ -87,7 +87,28 @@
   if (R.is_sample) { sb.textContent = '샘플 데이터'; sb.classList.add('sample'); }
   else { sb.textContent = { instaloader: '실데이터 · 세션 수집', web: '실데이터 · 웹 수집', dump: '실데이터 · 브라우저 덤프' }[R.source] || '실데이터'; sb.classList.add('live'); }
   if (R.is_sample) { const b = $('#banner'); b.hidden = false; b.innerHTML = '⚠️ 지금 보고 있는 것은 <b>생성된 샘플 데이터</b>입니다. 실제 데이터를 보려면 <code>python -m hotpost login --user 아이디 --browser chrome</code> 로 세션을 만든 뒤 <code>python -m hotpost run</code> 을 실행하세요.'; }
-  else if (R.notes && R.notes.length) { const b = $('#banner'); b.hidden = false; b.innerHTML = '⚠️ 일부 계정 수집 실패: ' + R.notes.map(esc).join(' / '); }
+  else if (R.notes && R.notes.length) {
+    // Report notes are historical. A removed monitoring account must not keep
+    // raising an active warning just because no new collection has run yet.
+    const b = $('#banner');
+    try {
+      const response = await fetch('/api/accounts', {cache:'no-store'});
+      if (!response.ok) throw new Error('account list unavailable');
+      const data = await response.json();
+      const managed = new Set(data.accounts.map(a => a.username.toLowerCase()));
+      const notes = R.notes.filter(note => {
+        const match = /^@([a-z0-9_.]+):/i.exec(note);
+        return !match || managed.has(match[1].toLowerCase());
+      });
+      if (notes.length) {
+        b.hidden = false;
+        b.innerHTML = `⚠️ ${esc(R.generated_at_kst)} 수집 기록 · 일부 계정 수집 실패: ` + notes.map(esc).join(' / ');
+      }
+    } catch (_) {
+      b.hidden = false;
+      b.textContent = '현재 계정 목록을 확인하지 못했습니다. 과거 수집 실패 기록은 레퍼런스 계정에서 확인하세요.';
+    }
+  }
   if (!R.is_sample && R.last_data_update_at && Date.now() / 1000 - R.last_data_update_at > 30 * 3600) {
     const b = $('#banner'); b.hidden = false;
     b.innerHTML += `<div>마지막 데이터 갱신: ${esc(dateStr(R.last_data_update_at))}. 재분석 시각과 실제 관측 시각은 다를 수 있습니다.</div>`;

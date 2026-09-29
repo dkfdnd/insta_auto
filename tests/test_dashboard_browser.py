@@ -117,6 +117,19 @@ def test_settings_save_survives_navigation_and_reload(dashboard):
     assert not page.locator('#period [data-v="72"]').is_disabled()
 
 
+def test_removed_account_warning_is_hidden_but_current_failures_remain(dashboard):
+    page,state=dashboard
+    state['report']['notes']=['@retired_account: 이전 수집 실패']
+    page.goto('http://dashboard.test/');page.wait_for_selector('.card')
+    assert not page.locator('#banner').is_visible()
+    state['report']['notes'].append('@creator: 현재 목록 계정의 수집 실패')
+    page.reload();page.wait_for_selector('.card')
+    assert '@creator' in page.locator('#banner').inner_text()
+    assert '@retired_account' not in page.locator('#banner').inner_text()
+    assert '수집 기록' in page.locator('#banner').inner_text()
+    assert len(state['report']['notes'])==2  # No historical report data is erased.
+
+
 def test_account_summary_candidates_and_notification_actions(dashboard):
     page,state=dashboard
     page.goto('http://dashboard.test/accounts.html');page.wait_for_selector('.account-row')
