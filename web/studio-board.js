@@ -16,6 +16,21 @@
   const stageOfStatus = {preparing:'sources', rewriting:'script', script_review:'script', voice_generating:'voice', voice_review:'voice', editing:'edit', draft_review:'edit', registering:'edit', exporting:'export', completed:'export'};
   const activityNames = {prepare:'자료 준비', rewrite:'대본 재가공', voice:'음성 생성', edit:'영상 편집', revision:'편집 수정', revise:'편집 수정', edit_request:'편집 수정', register:'프로젝트 등록', export:'MP4 내보내기', refresh_sources:'소스 추가 수집', proposal:'대본 수정안 생성', suggest_edit:'편집 수정안 생성'};
   const stateNames = {running:'진행 중', queued:'실행 대기', review:'검토 필요', waiting:'외부 작업 대기', retry:'재시도 대기', paused:'일시중지', error:'확인 필요', completed:'제작 완료', unknown:'상태 확인 필요'};
+  function message(value, fallback='작업 상태를 확인하고 다시 시도해 주세요.') {
+    const s=String(value||'');
+    if(/Source manifest contains no selected local videos|제작에 사용할 소스 영상이 없습니다/.test(s))return '아직 사용할 영상이 없어요. 직접 영상을 넣거나 소스 검색을 다시 시도하세요.';
+    if(/captcha|CAPTCHA|사람 확인/.test(s))return '검색 서비스에서 사람 확인이 필요해요. 인증을 마친 뒤 다시 시도하거나 직접 영상을 넣어주세요.';
+    if(/Failed to fetch|NetworkError|ECONNREFUSED|Connection refused|fetch failed/i.test(s))return '제작 서비스에 연결되지 않았어요. 서비스 실행 상태를 확인하고 다시 시도하세요.';
+    if(/timeout|timed out/i.test(s))return '작업 응답이 늦어지고 있어요. 잠시 후 상태를 확인하고 다시 시도하세요.';
+    if(/no space|disk full/i.test(s))return '저장 공간이 부족해요. 디스크 공간을 확보한 뒤 다시 시도하세요.';
+    if(!s)return fallback;
+    if(!/[가-힣]/.test(s)||/Traceback|[A-Z]:\\|\/Users\/|\/home\//.test(s))return fallback;
+    return s;
+  }
+  function title(task){
+    let text=String(task.title||'').replaceAll(task.shortcode||'\u0000','').replace(/https?:\/\/\S+|#\S+/g,'').trim();
+    return text&&text!==task.id?text.slice(0,110):'새 쇼츠 제작';
+  }
   function describe(task) {
     const jobs=[...(task.jobs||[])].sort((a,b)=>(b.updated||0)-(a.updated||0));
     const relevant=jobs.filter(j=>stageOfKind[j.kind]);
@@ -24,7 +39,7 @@
     const runningJobs=jobs.filter(j=>j.status==='running');
     const primaryRunning=runningJobs.some(j=>stageOfKind[j.kind]);
     const review=['script_review','voice_review','draft_review'].includes(task.status);
-    const state=task.error||task.status==='attention'?'error':primaryRunning?'running':task.status==='paused'?'paused':task.status==='waiting_capcut'?'waiting':task.status==='retry_wait'?'retry':review?'review':task.status==='completed'?'completed':relevant.some(j=>j.status==='queued')?'queued':'unknown';
+    const state=task.error||task.status==='attention'?'error':primaryRunning?'running':task.status==='paused'||task.automation?.paused_by_user?'paused':task.status==='waiting_capcut'?'waiting':task.status==='retry_wait'?'retry':review?'review':task.status==='completed'?'completed':relevant.some(j=>j.status==='queued')?'queued':'unknown';
     const run=(task.pipeline||[]).find(r=>r.id===task.run_id);
     const previous=(task.pipeline||[]).find(r=>r.id===task.latest_completed_run_id);
     // Old output must never count towards a new run's progress.
@@ -42,13 +57,14 @@
     const done=steps.filter(s=>s.state==='done').length;
     const phase=complete?'6 / 6 단계 완료':`${currentIndex+1} / 6 단계`;
     const sourceError=task.source_search?.status==='failed';
-    const message=task.error||(sourceError?task.source_search.message:task.message)||stateNames[state];
+    const sourceResolved=['sources','transcript'].includes(stage)&&task.sources?.length&&/Source manifest contains no selected local videos|제작에 사용할 소스 영상/.test(task.error||'');
+    const note=sourceResolved?`직접 추가한 영상 ${task.sources.length}개가 준비됐어요. 사용할 영상을 선택하고 제작을 이어가세요.`:message(task.error||(sourceError?task.source_search.message:task.message),stateNames[state]);
     const nextAction=complete?'완성 영상 보기':review?{script:'대본 검토하기',voice:'음성 들어보기',edit:'초안 검토하기'}[stage]:state==='error'?'문제 확인하기':`${columns[currentIndex][1]} 작업 열기`;
-    return {stage,state,label:stateNames[state],running:runningJobs.length>0,primaryRunning,review,complete,steps,done,
+    return {stage,state,label:state==='running'&&task.automation?.paused_by_user?'진행 중 · 중지 예약':stateNames[state],running:runningJobs.length>0,primaryRunning,review,complete,steps,done,
       currentIndex,phase,total:6,stageName:columns[currentIndex][1],attention:state==='error'||sourceError,
       versions:run?`제작 V${run.number}`:`대본 ${task.scripts?.length||0}개`,
       previous:previous&&previous.id!==run?.id?`V${previous.number} 완료본 보유`:'',
-      activity:runningJobs.map(j=>activityNames[j.kind]||'추가 작업').join(' · '),message,nextAction,
+      activity:runningJobs.map(j=>activityNames[j.kind]||'추가 작업').join(' · '),message:note,nextAction,
       tab:tabs[currentIndex]};
   }
   function matches(task, filter, query) {
@@ -92,14 +108,15 @@
         const d=views.get(task.id);let card=nodes.get(task.id);
         if(!card){
           card=document.createElement('article');card.className='work-card';card.dataset.workCard=task.id;
-          card.innerHTML='<div class="card-identity"><div class="card-visual"><img hidden alt=""><span class="card-placeholder" aria-hidden="true">▷</span></div><div class="card-heading"><span class="card-mode"></span><h3></h3><p class="card-code"></p></div></div><div class="card-body"><div class="progress-heading"><strong class="card-phase"></strong><span class="card-stage"></span></div><div class="progress-mount"></div><div class="current-work"><div class="card-top"><span class="board-status"></span><span class="activity-dot" hidden aria-hidden="true"></span></div><p class="card-message"></p><p class="card-activity" hidden></p></div></div><footer class="card-footer"><div class="card-version-line"><span class="card-version"></span><span class="card-previous"></span></div><button class="card-open"></button></footer>';
+          card.innerHTML='<div class="card-identity"><div class="card-visual"><img hidden alt=""><span class="card-placeholder" aria-hidden="true">▷</span></div><div class="card-heading"><span class="card-mode"></span><h3></h3></div></div><div class="card-body"><div class="progress-heading"><strong class="card-phase"></strong><span class="card-stage"></span></div><div class="progress-mount"></div><div class="current-work"><div class="card-top"><span class="board-status"></span><span class="activity-dot" hidden aria-hidden="true"></span></div><p class="card-message"></p><p class="card-activity" hidden></p></div></div><footer class="card-footer"><div class="card-version-line"><span class="card-version"></span><span class="card-previous"></span></div><button class="card-open"></button></footer>';
           const button=card.querySelector('.card-open');button.dataset.work=task.id;button.type='button';button.setAttribute('aria-controls','work-drawer');
           card.querySelector('.progress-mount').append(createProgress());nodes.set(task.id,card);
         }
         card.classList.toggle('current',task.id===selectedId);card.classList.toggle('is-running',d.running);card.dataset.state=d.state;
         const button=card.querySelector('.card-open');button.setAttribute('aria-expanded',String(task.id===selectedId));
-        text(button,d.nextAction+' →');button.setAttribute('aria-label',`${task.title||task.shortcode} · ${d.nextAction}`);
-        for(const [selector,value] of Object.entries({h3:task.title||task.shortcode,'.card-code':task.shortcode,'.card-mode':task.automation?'자동 제작':'직접 검토','.card-phase':d.phase,'.card-stage':d.stageName,'.board-status':d.label,'.card-message':d.message,'.card-version':d.versions,'.card-previous':d.previous,'.card-activity':d.activity}))text(card.querySelector(selector),value);
+        const next=d.stage==='sources'&&!task.sources?.length?'영상 넣고 시작하기':d.nextAction;
+        text(button,next+' →');button.setAttribute('aria-label',`${title(task)} · ${next}`);
+        for(const [selector,value] of Object.entries({h3:title(task),'.card-mode':task.automation?'자동 제작':'직접 검토','.card-phase':d.phase,'.card-stage':d.stageName,'.board-status':d.label,'.card-message':d.message,'.card-version':d.versions,'.card-previous':d.previous,'.card-activity':d.activity}))text(card.querySelector(selector),value);
         updateProgress(card.querySelector('.milestone-progress'),d);
         card.querySelector('.card-activity').hidden=!d.running;card.querySelector('.activity-dot').hidden=!d.running;
         const img=card.querySelector('img'),cover=task.thumbnail_url||(task.edits||[]).find(e=>e.id===task.edit_id)?.cover_url||`thumbs/${encodeURIComponent(task.shortcode)}.jpg`;
@@ -126,6 +143,6 @@
       }
     };
   }
-  const api={columns,describe,matches,mount,mountJourney,createProgress,updateProgress};
+  const api={columns,describe,matches,mount,mountJourney,createProgress,updateProgress,message,title};
   if(typeof module==='object'&&module.exports)module.exports=api;else root.StudioBoard=api;
 })(typeof window==='undefined'?globalThis:window);

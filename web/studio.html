@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>제작실 · Hotpost</title><link rel="stylesheet" href="studio.css?v=2"><link rel="stylesheet" href="studio-board.css?v=2"></head>
+<title>제작실 · Hotpost</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"><link rel="stylesheet" href="studio.css?v=3"><link rel="stylesheet" href="studio-board.css?v=3"></head>
 <body>
-<aside class="rail"><a class="brand" href="index.html"><span>h</span> hotpost</a><div class="workspace">MY WORKSPACE</div>
-<nav><a href="index.html">◈ <span>소재 탐색</span></a><a class="active" href="studio.html">▣ <span>제작실</span><i id="rail-count">0</i></a><a href="accounts.html">◎ <span>모니터링 계정</span></a></nav>
-<div class="rail-note"><span class="live-dot"></span> 나의 쇼츠 작업 공간<p>검토는 차례로,<br>제작은 끊김 없이.</p></div></aside>
-<main><header class="page-head"><div><div class="eyebrow">PRODUCTION STUDIO</div><h1>제작실 <span id="total-count">0</span></h1><p>소스 확보부터 최종 영상까지. 각 영상의 현재 단계와 다음 할 일을 확인하세요.</p></div><a class="primary button" href="index.html">＋ 소재 추가</a></header>
+<aside class="rail"><a class="brand" href="index.html"><span>h</span> hotpost</a><div class="workspace">터진게시물에서 이어서</div>
+<nav><a href="index.html">◈ <span>터진게시물</span></a><a class="active" href="studio.html">▣ <span>제작실</span><i id="rail-count">0</i></a><a href="accounts.html">◎ <span>모니터링 계정</span></a></nav>
+<button id="theme-toggle" class="studio-theme" aria-label="화면 테마 전환">☀️</button><div class="rail-note"><span class="live-dot"></span> 나의 쇼츠 작업 공간<p>검토는 차례로,<br>제작은 끊김 없이.</p></div></aside>
+<main><header class="page-head"><div><div class="eyebrow">벤치마크를 우리 영상으로</div><h1>제작실 <span id="total-count">0</span></h1><p>소스 확보부터 최종 영상까지. 각 영상의 현재 단계와 다음 할 일을 확인하세요.</p></div><a class="primary button" href="index.html">＋ 소재 추가</a></header>
 <div id="connection" class="notice" role="status" hidden></div>
 <section id="overview" class="overview" aria-label="제작 현황"></section>
-<div class="work-heading"><div class="tabs" id="filters"><button class="selected" data-filter="all">전체 작업</button><button data-filter="review">검토할 작업</button><button data-filter="running">처리 중</button><button data-filter="attention">확인 필요</button><button data-filter="completed">제작 완료</button></div><label class="search">⌕ <input id="search" placeholder="제목 또는 소재 ID 검색" aria-label="작업 검색"></label></div>
+<div class="work-heading"><div class="tabs" id="filters"><button class="selected" data-filter="all">전체 작업</button><button data-filter="review">검토할 작업</button><button data-filter="running">처리 중</button><button data-filter="attention">확인 필요</button><button data-filter="completed">제작 완료</button></div><label class="search">⌕ <input id="search" placeholder="만들고 있는 영상 검색" aria-label="작업 검색"></label></div>
 <nav id="board-stages" class="board-stages" aria-label="제작 단계로 이동"></nav><div class="board-guide"><span>단계별 작업 보드</span><span>각 카드에 전체 6단계의 진행 상황이 표시됩니다 · 가로 스크롤</span></div>
 <p id="board-empty" class="board-empty" hidden></p>
 <section id="work-list" class="kanban-board" aria-label="제작 단계별 칸반 보드"></section>
@@ -16,12 +16,15 @@
 <div id="toast" role="status" hidden></div>
 <aside id="work-drawer" class="work-drawer" aria-labelledby="drawer-title" hidden>
 <header class="drawer-head"><div><p id="drawer-code" class="eyebrow"></p><h2 id="drawer-title" tabindex="-1"></h2><p id="drawer-status"></p></div><div class="drawer-controls"><button id="expand-work" class="secondary" aria-pressed="false">전체화면</button><button id="close-work" class="icon" aria-label="작업 상세 닫기">×</button></div></header>
-<div class="drawer-layout"><details id="journey-panel" class="journey-panel" open><summary>제작 진행 상황 <span id="journey-current"></span></summary><div id="drawer-journey"></div></details><div class="drawer-workspace"><nav id="detail-tabs" class="detail-tabs" aria-label="상세 작업 종류"><button data-detail-tab="sources">소스</button><button data-detail-tab="script">대본</button><button data-detail-tab="voice">음성</button><button data-detail-tab="edit">편집</button><button data-detail-tab="results">결과·이력</button></nav>
+<div class="drawer-layout"><details id="journey-panel" class="journey-panel" open><summary>제작 진행 상황 <span id="journey-current"></span></summary><div id="drawer-journey"></div></details><div class="drawer-workspace"><section id="work-hero" class="work-hero" aria-label="현재 작업과 다음 행동"></section><nav id="detail-tabs" class="detail-tabs" aria-label="상세 작업 종류"><button data-detail-tab="sources">소스</button><button data-detail-tab="script">대본</button><button data-detail-tab="voice">음성</button><button data-detail-tab="edit">편집</button><button data-detail-tab="results">결과·이력</button></nav>
 <div id="drawer-scroll" class="drawer-scroll"><section id="detail" aria-label="작업 상세"></section></div></div></div>
 </aside>
-<dialog id="candidate-dialog"><div class="dialog-head"><div><div class="eyebrow">SCENE CANDIDATES</div><h2>이 대사에 맞는 장면</h2></div><button id="close-candidates" class="icon" aria-label="닫기">×</button></div><p id="candidate-caption"></p><div id="candidates" class="candidates"></div></dialog>
-<dialog id="script-dialog"><div class="dialog-head"><div><div class="eyebrow">SCRIPT COMPARISON</div><h2>변경 전후를 비교해 주세요</h2></div><button id="close-script-dialog" class="icon" aria-label="비교 닫기">×</button></div><div id="script-comparison"></div></dialog>
-<link rel="stylesheet" href="production-flow.css?v=3">
-<script src="studio-board.js?v=2"></script>
-<script src="production-flow.js?v=5"></script>
-<script src="studio.js?v=7-progress"></script></body></html>
+<dialog id="candidate-dialog"><div class="dialog-head"><div><div class="eyebrow">장면 고르기</div><h2>이 대사에 맞는 장면</h2></div><button id="close-candidates" class="icon" aria-label="닫기">×</button></div><p id="candidate-caption"></p><div id="candidates" class="candidates"></div></dialog>
+<dialog id="script-dialog"><div class="dialog-head"><div><div class="eyebrow">대본 비교</div><h2>변경 전후를 비교해 주세요</h2></div><button id="close-script-dialog" class="icon" aria-label="비교 닫기">×</button></div><div id="script-comparison"></div></dialog>
+<link rel="stylesheet" href="production-flow.css?v=4">
+<script src="display-settings.js?v=1"></script>
+<script src="studio-board.js?v=4"></script>
+<script src="source-upload.js?v=2"></script>
+<script src="production-flow.js?v=7"></script>
+<link rel="stylesheet" href="studio-experience.css?v=2">
+<script src="studio.js?v=9-experience"></script></body></html>

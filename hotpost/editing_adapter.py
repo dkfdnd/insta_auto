@@ -68,7 +68,7 @@ def selected_source_videos(
         if path.is_file():
             selected.append(path)
     if not selected:
-        raise ValueError("Source manifest contains no selected local videos.")
+        raise ValueError("제작에 사용할 소스 영상을 확보하지 못했습니다. 제작실에서 영상을 직접 업로드하거나 소스 검색을 다시 시도하세요.")
     return selected
 
 

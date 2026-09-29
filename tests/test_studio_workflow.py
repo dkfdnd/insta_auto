@@ -248,3 +248,60 @@ def test_frame_extraction_reuse_never_deletes_returned_scene_frame(tmp_path,monk
     for _ in range(2):
         frames=f.extract_frames(tmp_path/'video.mp4',tmp_path/'frames',max_frames=2)
         assert len(frames)==2 and all(p.is_file() for p in frames)
+
+@pytest.mark.parametrize('automatic',[True,False])
+def test_uploaded_sources_resume_without_search_and_preserve_concurrent_upload(tmp_path,monkeypatch,automatic):
+    studio=Studio(Settings(data_dir=tmp_path),workers=False)
+    auto={'protocol':2,'active':True,'stage':'prepare'} if automatic else None
+    state,_=studio.store.create('upload-fixture','업로드로 이어가는 영상',auto)
+    task=state['id'];failed=studio.store.claim();studio.store.fail(failed,'Source manifest contains no selected local videos.')
+    monkeypatch.setattr('hotpost.source_finder.probe_video',lambda p:{'duration':2,'width':100,'height':200})
+    for name in ['first','second']:
+        studio.upload_source(task,io.BytesIO(name.encode()),len(name),name+'.mp4')
+    sources=studio.store.get(task)['sources'];chosen=sources[1]['id']
+    transcript=studio.settings.transcript_dir/'upload-fixture-cache';transcript.mkdir(parents=True)
+    (transcript/'transcript.json').write_text(json.dumps({'speech':[{'text':'실제 원본 발화'}]}),encoding='utf-8')
+    (transcript/'reference.mp4').write_bytes(b'reference')
+    def forbidden(*args,**kwargs):raise AssertionError('An uploaded source must not trigger another search or extraction')
+    monkeypatch.setattr('hotpost.source_finder.find_sources',forbidden)
+    monkeypatch.setattr('hotpost.transcript.extract_transcript',forbidden)
+    def rewrite(settings,transcript,manifest,*args):
+        assert manifest.is_file()
+        return {'variants':[{'text':'우리 규칙으로 가공한 대본'}]}
+    monkeypatch.setattr('hotpost.script_rewriter.rewrite',rewrite)
+    out=studio.action(task,'use-sources',{'source_ids':[chosen]})
+    assert out['status']=='preparing' and not out['error']
+    job=studio.store.claim();assert job['kind']=='prepare'
+    result=studio._prepare(studio.store.get(task),job)
+    assert [v['id'] for v in result['sources']]==[chosen]
+    assert result['sources'][0]['rights']=='user_supplied'
+    from hotpost.source_audit import summarize
+    audit=summarize(result['manifest_path'])
+    assert audit['selected']==audit['usable']==1
+    assert audit['platforms']['직접 업로드']['received']==1
+    studio.upload_source(task,io.BytesIO(b'third'),5,'third.mp4')
+    studio.store.finish(job,result,lambda s,db,r:studio._accept(s,job,r,db))
+    finished=studio.store.get(task)
+    assert len(finished['sources'])==3
+    if automatic:
+        assert finished['status']=='rewriting'
+        public=studio.public(finished)
+        active=next(r for r in public['pipeline'] if r['id']==public['run_id'])
+        assert [v['id'] for v in active['artifacts']['sources']]==[chosen]
+        assert active['status']=='running'
+    else:
+        assert finished['status']=='script_review'
+
+
+def test_source_resume_rejects_missing_files_and_active_work(prepared):
+    studio,task=prepared
+    # Cannot jump backward into preparation from a later stage.
+    with pytest.raises(Conflict):studio.action(task,'use-sources',{'source_ids':['source1']})
+    def reset(s,db):
+        db.execute("UPDATE jobs SET status='done'")
+        s['automation']['stage']='prepare'
+        studio.store.enqueue(db,task,'prepare',{},'new-prepare')
+    studio.store.change(task,reset);studio.store.claim()
+    with pytest.raises(Conflict):studio.action(task,'use-sources',{'source_ids':['source1']})
+    with pytest.raises(ValueError):studio.action(task,'use-sources',{'source_ids':[]})
+    with pytest.raises(ValueError):studio.action(task,'use-sources',{'source_ids':['missing']})

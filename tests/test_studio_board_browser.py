@@ -5,7 +5,7 @@ import mimetypes
 import io
 import wave
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import pytest
 
@@ -61,12 +61,23 @@ def studio_page():
                     parts=path.split('/')
                     t=next(t for t in tasks if t['id']==parts[3])
                     if request.request.method=='POST':
-                        body=request.request.post_data_json
+                        if parts[-1]=='upload-source':
+                            name=parse_qs(urlparse(request.request.url).query)['name'][0]
+                            t.setdefault('_upload_calls',[]).append(name)
+                            if t.get('_fail_upload')==name:
+                                t.pop('_fail_upload')
+                                request.fulfill(status=400,content_type='application/json',body=json.dumps({'error':'영상 확인 실패 · 다시 시도하세요.'}));return
+                            if not any(s.get('original_name')==name for s in t['sources']):
+                                t['sources'].append(dict(id='upload-'+str(len(t['sources'])),original_name=name,url='/'+name,sha256=name))
+                            body={}
+                        else:body=request.request.post_data_json
                         t['revision']+=1
                         if parts[-1]=='save-script':
                             t['feedback']['script_text']=body['text'];t['feedback_revision']+=1
                         elif parts[-1]=='approve-script':
                             t['approved_script_id']=t['script_id'];t['status']='voice_generating'
+                        elif parts[-1]=='use-sources':
+                            t['_used_sources']=body['source_ids'];t['status']='preparing';t['error']='';t['message']='선택한 영상으로 제작을 이어갑니다'
                     result=copy.deepcopy(t)
                 request.fulfill(content_type='application/json',body=json.dumps(result))
             elif path.endswith('.mp4'):
@@ -228,7 +239,7 @@ def test_attention_actions_and_reduced_motion(studio_page):
     page.evaluate('refreshStudio()')
     assert page.locator('[data-stage="voice"] [data-work-card="voice"] [class="board-status"]').inner_text()=='확인 필요'
     page.locator('[data-work="voice"]').click()
-    assert page.locator('.pf-runtime [data-pf="retry"]').is_visible()
+    assert page.locator('#work-hero [data-action="retry"]').is_visible()
     page.locator('#close-work').click()
     tasks[2].update(status='voice_generating',error='',revision=3)
     tasks[2]['jobs'][0]['status']='running'
@@ -268,3 +279,126 @@ def test_mobile_progress_expansion_and_stage_navigation(studio_page):
     page.locator('#journey-panel > summary').click()
     assert page.locator('[data-journey="voice"]').is_visible()
     assert page.locator('#work-drawer').bounding_box()['width']<=390
+
+
+def test_multiple_uploads_partial_failure_retry_and_continue_preserve_draft(studio_page):
+    page,tasks=studio_page
+    t=tasks[0];t.update(status='attention',error='Source manifest contains no selected local videos.',revision=2)
+    t['jobs'][0]['status']='failed';t['_fail_upload']='second.mp4'
+    page.evaluate('refreshStudio()');page.locator('[data-work="source"]').click()
+    assert '직접 영상 넣기' in page.locator('#work-hero').inner_text()
+    assert 'Source manifest' not in page.locator('#work-drawer').inner_text()
+    assert page.locator('[data-upload-open]').is_visible()
+    assert page.locator('[data-upload-files]').get_attribute('multiple') is not None
+    page.locator('#detail-tabs [data-detail-tab="script"]').click()
+    page.locator('[data-field="script"]').fill('업로드 중에도 보존할 새 대본')
+    page.locator('#detail-tabs [data-detail-tab="sources"]').click()
+    with page.expect_file_chooser() as chooser:
+        page.locator('[data-upload-open]').click()
+    assert chooser.value.is_multiple()
+    chooser.value.set_files([{'name':'first.mp4','mimeType':'video/mp4','buffer':b'first'},
+        {'name':'second.mp4','mimeType':'video/mp4','buffer':b'second'},
+        {'name':'notes.txt','mimeType':'text/plain','buffer':b'invalid'}])
+    page.wait_for_function('!document.querySelector("#detail")._uploading')
+    assert len(t['sources'])==1
+    assert t['_upload_calls']==['first.mp4','second.mp4']
+    assert page.locator('[data-upload-state="done"]').count()==1
+    assert page.locator('[data-upload-state="failed"]').count()==2
+    assert page.locator('[data-upload-retry]').count()==1
+    page.locator('[data-upload-retry]').click()
+    page.wait_for_function('document.querySelectorAll("[data-upload-state=done]").length===2')
+    assert len(t['sources'])==2
+    # Real DataTransfer follows the same multiple-file path as the picker.
+    page.locator('[data-dropzone]').evaluate('''el=>{
+        const dt=new DataTransfer();dt.items.add(new File(['third'],'third.webm',{type:'video/webm'}));
+        dt.items.add(new File(['fourth'],'fourth.mov',{type:'video/quicktime'}));
+        el.dispatchEvent(new DragEvent('drop',{bubbles:true,dataTransfer:dt}));
+    }''')
+    page.wait_for_function('document.querySelectorAll("[data-upload-state=done]").length===4')
+    assert len(t['sources'])==4
+    page.locator('[data-pf="clear-sources"]').click()
+    assert page.locator('[data-pf="use-sources"]').is_disabled()
+    page.locator('[data-field="source:upload-1"]').check()
+    page.locator('[data-pf="use-sources"]').click()
+    page.wait_for_function('document.querySelector(".pf-message").textContent.includes("선택한 영상")')
+    assert t['_used_sources']==['upload-1']
+    page.locator('#detail-tabs [data-detail-tab="script"]').click()
+    assert page.locator('[data-field="script"]').input_value()=='업로드 중에도 보존할 새 대본'
+    page.locator('#close-work').click()
+    page.locator('[data-work="voice"]').click()
+    page.locator('#detail-tabs [data-detail-tab="sources"]').click()
+    assert page.locator('[data-upload-list] li').count()==0
+    page.locator('#close-work').click();page.locator('[data-work="source"]').click()
+    page.locator('#detail-tabs [data-detail-tab="sources"]').click()
+    assert page.locator('[data-upload-state="done"]').count()==4
+
+
+def test_mobile_source_hero_clear_actions_and_no_internal_identifiers(studio_page):
+    page,tasks=studio_page
+    t=tasks[0];t.update(shortcode='DdyQWlyKAv9',title='DdyQWlyKAv9',status='attention',error='Source manifest contains no selected local videos.',revision=2)
+    t['jobs'][0]['status']='failed'
+    page.set_viewport_size({'width':390,'height':844});page.evaluate('refreshStudio()')
+    page.locator('[data-work="source"]').click()
+    assert not page.locator('#journey-panel').evaluate('(e)=>e.open')
+    text=page.locator('#work-drawer').inner_text()
+    assert 'DdyQWlyKAv9' not in text and 'Source manifest' not in text
+    assert '직접 영상 넣기' in text
+    page.locator('[data-focus-current]').click()
+    assert page.locator('[data-upload-open]').evaluate('(el)=>el===document.activeElement')
+    box=page.locator('[data-upload-open]').bounding_box()
+    assert box['y']+box['height']<=844
+    assert page.locator('.pf-actionbar').is_hidden()
+    assert page.locator('#work-drawer').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
+    assert page.locator('#work-hero').evaluate('(el)=>getComputedStyle(el).getPropertyValue("--accent").trim()')=='#e8552d'
+
+
+def test_real_video_upload_http_and_resume_in_isolated_studio(tmp_path,monkeypatch):
+    """Real browser + HTTP + ffprobe; no production data or external jobs."""
+    import shutil
+    import subprocess
+    import threading
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from hotpost.config import Settings
+    from hotpost.studio import Studio
+    from hotpost.studio_http import StudioHTTP
+    pw=pytest.importorskip('playwright.sync_api')
+    ffmpeg=shutil.which('ffmpeg')
+    if not ffmpeg:pytest.skip('FFmpeg unavailable')
+    studio=Studio(Settings(data_dir=tmp_path/'data'),workers=False)
+    state,_=studio.store.create('isolated-upload','직접 넣은 영상으로 쇼츠 만들기',{'protocol':2,'active':True,'stage':'prepare'})
+    clips=[]
+    for color in ['red','blue']:
+        path=tmp_path/(color+'.mp4')
+        subprocess.run([ffmpeg,'-v','error','-f','lavfi','-i',f'color=c={color}:s=160x284:r=10','-t','0.3','-c:v','libx264','-pix_fmt','yuv420p',str(path)],check=True,capture_output=True)
+        clips.append(path)
+    class Handler(StudioHTTP,SimpleHTTPRequestHandler):
+        def log_message(self,*args):pass
+        def _json(self,data,status=200):
+            body=json.dumps(data).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+        def do_GET(self):
+            if not self.studio_get(studio):super().do_GET()
+        def do_POST(self):self.studio_post(studio)
+    server=ThreadingHTTPServer(('127.0.0.1',0),partial(Handler,directory=str(WEB)))
+    threading.Thread(target=server.serve_forever,daemon=True).start()
+    try:
+        with pw.sync_playwright() as p:
+            browser=p.chromium.launch(channel='chrome',headless=True)
+            try:
+                page=browser.new_page(viewport={'width':1440,'height':1000})
+                page.goto(f'http://127.0.0.1:{server.server_port}/studio.html?work={state["id"]}')
+                page.locator('[data-upload-files]').set_input_files([str(v) for v in clips])
+                page.wait_for_function('document.querySelectorAll("[data-upload-state=done]").length===2')
+                assert page.locator('.pf-source-card').count()==2
+                page.locator('.pf-source-card video').first.evaluate('(v)=>v.load()')
+                page.wait_for_function('document.querySelector(".pf-source-card video").readyState>=2')
+                page.locator('[data-pf="use-sources"]').click()
+                page.wait_for_function('document.querySelector(".pf-message").textContent.includes("선택한 영상")')
+                stored=studio.store.get(state['id'])
+                run=next(r for r in stored['runs'] if r['id']==stored['run_id'])
+                assert len(run['inputs']['source_ids'])==2
+                assert stored['status']=='preparing' and not stored['error']
+                assert all(v['rights']=='user_supplied' for v in stored['sources'])
+                assert [j['kind'] for j in studio.store.jobs(state['id']) if j['status']=='queued']==['prepare']
+            finally:browser.close()
+    finally:server.shutdown();server.server_close()

@@ -55,3 +55,20 @@ test('error and review leave the current milestone unfinished; completion fills 
   const d=describe({status:'completed'});assert.equal(d.done,6);assert.equal(d.phase,'6 / 6 단계 완료');
   assert.equal(d.steps.every(s=>s.state==='done'),true);
 });
+
+test('user-facing failures are Korean and source recovery explains the next action',()=>{
+  const {message,title}=require('../web/studio-board.js');
+  assert.match(message('Source manifest contains no selected local videos.'),/직접 영상을/);
+  assert.match(message('Failed to fetch'),/연결/);
+  assert.doesNotMatch(message('unknown exception in worker'),/[A-Za-z]/);
+  assert.equal(title({title:'DdyQWlyKAv9',shortcode:'DdyQWlyKAv9'}),'새 쇼츠 제작');
+  assert.equal(title({title:'주방 수납 #추천 https://example.test/abc',shortcode:'abc'}),'주방 수납');
+  const d=describe({status:'attention',error:'Source manifest contains no selected local videos.',automation:{stage:'prepare'},sources:[{id:'upload'}]});
+  assert.match(d.message,/1개가 준비/);
+});
+
+test('a user pause is explicit while an in-flight job still shows real activity',()=>{
+  const t={status:'preparing',automation:{paused_by_user:true,stage:'prepare'},jobs:[{kind:'prepare',status:'paused'}]};
+  assert.equal(describe(t).state,'paused');
+  t.jobs[0].status='running';assert.equal(describe(t).state,'running');assert.match(describe(t).label,/중지 예약/);
+});

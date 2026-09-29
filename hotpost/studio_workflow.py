@@ -132,6 +132,33 @@ class WorkflowMixin:
 
     def workflow_action(self, task_id, action, data):
         state = self.store.get(task_id)
+        if action == 'use-sources':
+            def continue_with_sources(s, db):
+                ids = data.get('source_ids')
+                available = {v['id']: v for v in s['sources']}
+                if not isinstance(ids, list) or not ids or any(not isinstance(v, str) or v not in available for v in ids):
+                    raise ValueError('제작에 사용할 영상을 한 개 이상 선택하세요.')
+                if any(not Path(available[v]['path']).is_file() for v in ids):
+                    raise ValueError('선택한 영상 파일이 없습니다. 영상을 다시 업로드하세요.')
+                if s.get('automation', {}).get('stage', 'prepare') != 'prepare':
+                    raise Conflict('이미 다음 제작 단계입니다. 소스 선택을 저장한 뒤 변경사항을 반영해 주세요.')
+                if not s.get('automation') and s['status'] != 'preparing' and not (
+                    s['status'] == 'attention' and db.execute("SELECT 1 FROM jobs WHERE task_id=? AND kind='prepare' AND status='failed'", (task_id,)).fetchone()
+                ):
+                    raise Conflict('이미 대본 검토를 시작한 영상입니다. 현재 제작 단계를 먼저 마무리하세요.')
+                if db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status='running' AND kind NOT IN ('proposal','suggest_edit')", (task_id,)).fetchone():
+                    raise Conflict('자료 작업이 실행 중입니다. 업로드한 영상은 보관되며, 현재 작업이 끝난 뒤 이어갈 수 있습니다.')
+                db.execute("UPDATE jobs SET status='done' WHERE task_id=? AND kind='prepare' AND status IN ('queued','paused','failed')", (task_id,))
+                if s.get('automation'):
+                    s['automation'].update(active=True, paused_by_user=False, stage='prepare')
+                if enabled(s):
+                    run = snapshot(s)
+                    run['status'] = 'running'
+                    run['inputs']['source_ids'] = list(dict.fromkeys(ids))
+                self.store.enqueue(db, task_id, 'prepare', {'source_ids': list(dict.fromkeys(ids))}, uid('manual-sources:'))
+                s.update(status='preparing', error='', progress=0, message='선택한 영상으로 자료 준비를 이어갑니다')
+                self.store.event(db, task_id, action, {'count': len(set(ids))})
+            return self.public(self.store.change(task_id, continue_with_sources, data.get('revision')))
         if action == 'start-auto':
             def start(s, db):
                 if s.get('automation') and not s.get('top_pick') and s.get('script_candidates'):

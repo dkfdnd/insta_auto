@@ -357,8 +357,14 @@ class Studio(WorkflowMixin):
                 snapshot(s)
             self.store.change(state['id'], record_transcript)
         manifests = sorted(self.settings.source_dir.glob(f"{code}-*/manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        videos, manifest = [], None
-        for candidate in manifests:
+        # User uploads are production assets, not another search request. Keep
+        # their IDs/provenance so selected sources remain selected downstream.
+        chosen_ids = job.get('payload', {}).get('source_ids')
+        supplied = [v for v in state['sources'] if (chosen_ids is None or v['id'] in chosen_ids) and Path(v['path']).is_file()]
+        if chosen_ids is not None and len(supplied) != len(set(chosen_ids)):
+            raise ValueError('선택한 영상 파일이 없습니다. 영상을 다시 업로드하세요.')
+        videos, manifest = [Path(v['path']) for v in supplied], None
+        for candidate in ([] if supplied else manifests):
             try:
                 data = json.loads(candidate.read_text(encoding="utf-8"))
                 data["candidates"] = [c for c in data.get("candidates", []) if c.get("editing_eligible", True) and c.get("source_quality") in {"clean-source", "light-overlay"}]
@@ -382,20 +388,26 @@ class Studio(WorkflowMixin):
         original = "\n".join(s.get("text", "") for s in json.loads(transcript.read_text(encoding="utf-8")).get("speech", []))
         if not original.strip():
             raise ValueError('실제 발화 대본을 확보하지 못했습니다. OCR을 음성 대본으로 대체하지 않습니다.')
+        if supplied:
+            manifest = self.folder(state['id']) / (job['id']+'-user-sources.json')
+            _atomic_json(manifest, {'caption': state['title'], 'user_supplied': True, 'downloaded': len(supplied), 'candidates': [
+                {'title': v.get('original_name', ''), 'file_sha256': v['sha256'],
+                 'original_url': v.get('origin_url', ''), 'rights': v.get('rights', 'unknown'),
+                 'selected_for_zip': True} for v in supplied]})
         if state.get('automation'):
             reference = transcript.parent / 'reference.mp4'
             if not reference.is_file():
                 raise ValueError('대본 재가공에 필요한 기준 영상이 없습니다.')
-            products = json.loads(manifest.read_text(encoding='utf-8')).get('product_evidence', {}).get('products', [])
+            products = json.loads(manifest.read_text(encoding='utf-8')).get('product_evidence', {}).get('products', []) if manifest else []
             product = next((p.get('ko') or p.get('en') for p in products if isinstance(p, dict)), '')
             return {'original_text':original, 'reference_video':str(reference), 'transcript_path':str(transcript),
-                    'product':product or state['title'], 'sources':self._source_records(videos, manifest),
-                    'manifest_path':str(manifest)}
+                    'product':product or state['title'], 'sources':supplied or self._source_records(videos, manifest),
+                    'manifest_path':str(manifest) if manifest else ''}
         existing = sorted((self.settings.data_dir / "productions" / code).glob("scripts-v*/scripts.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         script = json.loads(existing[0].read_text(encoding="utf-8")) if existing else rewrite(
             self.settings, transcript, manifest, self.folder(state["id"]) / "research", lambda *_: None)
         return {"text": script["variants"][0]["text"], "original_text": original,
-                "sources": self._source_records(videos, manifest),
+                "sources": supplied or self._source_records(videos, manifest),
                 "manifest_path": str(manifest)}
 
     def _refresh_sources(self, state, job):
@@ -579,6 +591,13 @@ class Studio(WorkflowMixin):
             state['source_search'] = {'status': 'done', 'message': f'추가 수집 완료 · 신규 {len(added)}개 / 보유 {len(state["sources"])}개', 'progress': 100}
             return
         if kind == "prepare":
+            # Uploads may arrive while preparation is running. Never discard
+            # them when the worker commits its earlier snapshot.
+            incoming = list(result.get('sources', []))
+            identity = lambda v: ('sha256', v['sha256']) if v.get('sha256') else ('path', v['path'])
+            known = {identity(v) for v in incoming}
+            incoming.extend(v for v in state['sources'] if identity(v) not in known)
+            result = {**result, 'sources': incoming}
             state.update({k: v for k, v in result.items() if k != "text"})
             if not state["scripts"] and result.get('text'): self._script(state, result["text"], "recommended")
         elif kind == 'rewrite':

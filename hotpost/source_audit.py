@@ -18,12 +18,14 @@ def summarize(path):
         host = urlparse(row.get('original_url') or row.get('url', '')).netloc
         provider = next((name for name in ('tiktok', 'douyin', 'xiaohongshu', 'bilibili', 'youtube', 'pexels')
                          if name in host), 'youtube' if 'youtu.be' in host else 'other')
+        if data.get('user_supplied'):
+            provider = '직접 업로드'
         counts = platforms.setdefault(provider, {'candidates': 0, 'received': 0, 'selected': 0})
         counts['candidates'] += 1
-        counts['received'] += bool(row.get('downloaded_file'))
+        counts['received'] += bool(row.get('downloaded_file') or data.get('user_supplied'))
         counts['selected'] += bool(row.get('selected_for_zip'))
         usable += bool(row.get('selected_for_zip') and row.get('editing_eligible', True)
-                       and row.get('source_quality') in {'clean-source', 'light-overlay'})
+                       and (data.get('user_supplied') or row.get('source_quality') in {'clean-source', 'light-overlay'}))
         reasons.update(row.get('rejection_reasons') or [])
         if 'download_failed' in (row.get('rejection_reasons') or []):
             error = row.get('error', '').lower()
