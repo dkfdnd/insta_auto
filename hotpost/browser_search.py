@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, quote_plus, unquote, urljoin, urlparse
 
 from .config import Settings
+from .request_pacing import request_pause
 from .browser_profile import BROWSER_LOCK, export_cookies, probe_platform_auth
 from .source_urls import video_url
 from .source_queries import platform_queries, clean_terms, language
@@ -106,7 +107,7 @@ class BrowserSearcher:
         self.progress = lambda _message: None
 
     def _pace(self, provider):
-        seconds = max(0, self.settings.source_browser_search_interval)
+        seconds = max(1, self.settings.source_browser_search_interval)
         if seconds:
             self.progress(f'{provider} · 다음 검색 전 {seconds:g}초 대기')
             time.sleep(seconds)
@@ -222,9 +223,11 @@ class BrowserSearcher:
                 response = page.goto("https://www.google.com/imghp?hl=en", wait_until="domcontentloaded", timeout=60000)
                 if self._check_block(page, 'google-lens', audit, response):
                     break
+                request_pause()
                 page.get_by_role("button", name="Search by image").click()
                 upload = page.locator("input[type=file]")
                 upload.wait_for(state="attached")
+                request_pause()
                 upload.set_input_files(str(frame))
                 page.wait_for_timeout(3500)
                 if self._check_block(page, 'google-lens', audit):
@@ -256,6 +259,7 @@ class BrowserSearcher:
                 response = page.goto("https://yandex.com/images/", wait_until="domcontentloaded", timeout=60000)
                 if self._check_block(page, 'yandex-images', audit, response):
                     break
+                request_pause()
                 page.locator("input[type=file]").set_input_files(str(frame))
                 page.wait_for_timeout(2500)
                 if self._check_block(page, 'yandex-images', audit):
@@ -343,7 +347,7 @@ class BrowserSearcher:
                     if self._check_block(page, provider, audit):
                         break
                     page.mouse.wheel(0, 900)
-                    page.wait_for_timeout(500)
+                    page.wait_for_timeout(1000)
                     found = [*_anchors(page, f"playwright-{provider}", query, "platform-search"),
                              *_embedded_candidates(page, provider, query)]
                     added = 0

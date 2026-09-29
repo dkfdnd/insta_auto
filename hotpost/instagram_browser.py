@@ -5,6 +5,7 @@ import os
 from urllib.parse import urlsplit
 
 from .collectors.base import CollectionBlocked, CollectError
+from .request_pacing import request_pause
 
 
 class InstagramBrowser:
@@ -59,6 +60,7 @@ class InstagramBrowser:
 
     def navigate(self, path):
         from playwright.sync_api import TimeoutError as PlaywrightTimeout, Error
+        request_pause()
         try:
             response = self.page.goto('https://www.instagram.com/' + path.lstrip('/'),
                                       wait_until='domcontentloaded', timeout=45000)

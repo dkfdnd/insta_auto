@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from .base import CollectError, CollectionBlocked
 from .web_graphql import _node_to_post, WebGraphQLCollector
 from ..instagram_browser import InstagramBrowser
+from ..request_pacing import request_pause
 from ..models import Post
 from ..observations import MetricObservation
 
@@ -149,6 +150,7 @@ class BrowserCollector:
                     break
                 if not section and len(links) >= limit and newest_codes and newest_codes.issubset(links):
                     break
+                request_pause()
                 self.browser.page.mouse.wheel(0, 900)
                 self.browser.page.wait_for_timeout(1300)
         if not links:

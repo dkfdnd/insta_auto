@@ -9,6 +9,7 @@ import requests
 
 from .config import Settings
 from .models import Post
+from .request_pacing import request_pause
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
 
@@ -33,6 +34,7 @@ def ensure_thumbnail(settings: Settings, post: Post, session: requests.Session |
     try:
         from PIL import Image
         s = session or requests.Session()
+        request_pause()
         r = s.get(post.thumbnail_url, headers={"User-Agent": _UA, "Referer": "https://www.instagram.com/"}, timeout=20)
         r.raise_for_status()
         img = Image.open(io.BytesIO(r.content)).convert("RGB")

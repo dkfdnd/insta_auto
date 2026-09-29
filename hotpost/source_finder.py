@@ -27,6 +27,7 @@ import requests
 from PIL import Image, ImageOps
 
 from .config import Settings
+from .request_pacing import request_pause, ytdlp_pacing_args
 from .storage import Storage
 from .source_urls import video_url, canonical_video_key
 from .source_queries import product_query_plan, platform_queries, clean_terms, language
@@ -217,6 +218,7 @@ def _download_reference(settings: Settings, post, out: Path) -> Path:
         or host == "fbcdn.net" or host.endswith(".fbcdn.net")
     ):
         raise RuntimeError("Instagram이 허용된 CDN 영상 URL을 반환하지 않았습니다.")
+    request_pause()
     video = requests.get(source_url, stream=True, timeout=60)
     if video.status_code != 200:
         video.close()
@@ -510,7 +512,8 @@ def search_youtube(queries: list[str], limit: int, cookie_file: Path | None = No
         count = min(6, max(1, (limit - len(out) + remaining_queries - 1) // remaining_queries))
         suffix = " shorts" if not re.search(r"[\u3400-\u9fff]", query) else ""
         try:
-            result = _run([ytdlp, *_yt_runtime_args(js_runtime), *_yt_cookie_args(cookie_file), "--flat-playlist", "--dump-single-json",
+            request_pause()
+            result = _run([ytdlp, *ytdlp_pacing_args(), *_yt_runtime_args(js_runtime), *_yt_cookie_args(cookie_file), "--flat-playlist", "--dump-single-json",
                            "--no-warnings", f"ytsearch{count}:{query}{suffix}"], timeout=90)
         except (OSError, subprocess.TimeoutExpired) as exc:
             record.update(status='error', error=type(exc).__name__)
@@ -548,6 +551,7 @@ def search_web(queries: list[str], limit: int, audit: list | None = None) -> lis
         if audit is not None: audit.append(record)
         scoped = f'{query} (site:tiktok.com OR site:douyin.com OR site:xiaohongshu.com OR site:youtube.com/shorts OR site:bilibili.com)'
         try:
+            request_pause()
             r = requests.get("https://html.duckduckgo.com/html/", params={"q": scoped}, headers=headers, timeout=20)
             r.raise_for_status()
         except requests.RequestException as exc:
@@ -578,6 +582,7 @@ def search_bing(queries: list[str], limit: int, audit: list | None = None) -> li
         record = {'provider': 'bing', 'query': query, 'language': language(query), 'status': 'started', 'candidates': 0}
         if audit is not None: audit.append(record)
         try:
+            request_pause()
             r = requests.get("https://www.bing.com/search", params={"q": f'{query} video'}, headers=headers, timeout=20)
             r.raise_for_status()
         except requests.RequestException as exc:
@@ -611,6 +616,7 @@ def search_google_vision(settings: Settings, frames: list[Path], limit: int) -> 
                                   "features": [{"type": "WEB_DETECTION", "maxResults": 15},
                                                {"type": "LABEL_DETECTION", "maxResults": 10}]}]}
         try:
+            request_pause()
             r = requests.post(f"https://vision.googleapis.com/v1/images:annotate?key={key}", json=payload, timeout=30)
             r.raise_for_status()
             response = (r.json().get("responses") or [{}])[0]
@@ -639,6 +645,7 @@ def search_pexels(settings: Settings, queries: list[str], limit: int) -> list[Ca
     out: list[Candidate] = []
     for query in queries[1:2] or queries[:1]:
         try:
+            request_pause()
             r = requests.get("https://api.pexels.com/v1/videos/search", params={"query": query, "orientation": "portrait", "per_page": min(limit, 10)},
                              headers={"Authorization": key}, timeout=30)
             r.raise_for_status()
@@ -711,6 +718,7 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
         target = out_dir / f"{stem}.mp4"
         for attempt in range(3):
             try:
+                request_pause()
                 remaining = deadline - time.monotonic() if deadline is not None else 60
                 if remaining <= 0:
                     raise RuntimeError('다운로드 시간 예산 소진')
@@ -740,7 +748,7 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
         candidate.error = "yt-dlp 실행 파일이 없습니다."
         return None
     template = str(out_dir / f"{stem}_%(id)s.%(ext)s")
-    command = [ytdlp, *_yt_runtime_args(js_runtime), *_yt_cookie_args(cookie_file), "--no-playlist", "--no-progress",
+    command = [ytdlp, *ytdlp_pacing_args(), *_yt_runtime_args(js_runtime), *_yt_cookie_args(cookie_file), "--no-playlist", "--no-progress",
                "--restrict-filenames", "--write-info-json", "--max-filesize", f"{max_mb}M",
                "--socket-timeout", "15", "--retries", "1", "--fragment-retries", "1",
                "--extractor-retries", "1",
@@ -750,6 +758,7 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
     is_bilibili = candidate.provider == "bilibili" or "bilibili.com" in candidate.url
     process_timeout = 90
     for attempt in range(3):
+        request_pause()
         remaining = deadline - time.monotonic() if deadline is not None else process_timeout
         if remaining <= 0:
             candidate.error = '다운로드 시간 예산 소진'

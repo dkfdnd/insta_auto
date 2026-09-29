@@ -62,10 +62,10 @@ def _sleep_after_account(settings: Settings, source: str, username: str,
     if source == "demo" or not has_next:
         return 0.0
     if outcome == "failure":
-        low = max(0.0, settings.sleep_after_error_min)
+        low = max(1.0, settings.sleep_after_error_min)
         high = max(low, settings.sleep_after_error_max)
     else:
-        low = max(0.0, settings.sleep_between_accounts)
+        low = max(1.0, settings.sleep_between_accounts)
         high = max(low, settings.sleep_between_accounts_max)
     delay = random.uniform(low, high)
     _log(f"    다음 계정 전 {delay:.1f}초 대기 ({outcome})")

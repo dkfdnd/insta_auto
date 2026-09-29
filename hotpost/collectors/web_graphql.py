@@ -95,7 +95,8 @@ class WebGraphQLCollector:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.s = requests.Session()
+        from ..request_pacing import PacedSession
+        self.s = PacedSession()
         self.s.headers.update({"User-Agent": UA, "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8", **CLIENT_HINTS})
         self._load_cookies()
         self.docs = _DocCache(settings.data_dir / "graphql_docs.json")

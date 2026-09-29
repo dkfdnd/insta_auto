@@ -17,6 +17,7 @@ from ..config import Settings
 from ..models import Post, Profile
 from ..observations import MetricObservation
 from ..private_file import private_output_path
+from ..request_pacing import request_pause
 from .base import CollectError
 
 _HASHTAG_RE = re.compile(r"#([\w가-힣]+)")
@@ -26,11 +27,18 @@ def session_file(settings: Settings, user: str) -> Path:
     return settings.session_dir / f"session-{user}"
 
 
+class PacedRateController(instaloader.RateController):
+    def wait_before_query(self, query_type):
+        super().wait_before_query(query_type)
+        request_pause()
+
+
 def make_loader(*, quiet: bool = True) -> instaloader.Instaloader:
     return instaloader.Instaloader(
         download_pictures=False, download_videos=False, download_video_thumbnails=False,
         download_geotags=False, download_comments=False, save_metadata=False,
         compress_json=False, quiet=quiet, max_connection_attempts=2,
+        rate_controller=PacedRateController,
         user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
     )
