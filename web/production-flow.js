@@ -12,13 +12,32 @@
     return `<p>표현 참고 사항 ${n?.issues?.length??0}개</p><p>${messages.length?messages.map(esc).join('<br>'):'현재 표현 검사에서 지적된 항목이 없어요.'}</p><small>사실 근거와 관점·전개는 직접 확인하세요. 대본을 자동 수정하지 않습니다.</small>`;
   }
   async function api(path,body){const r=await fetch('/api/studio'+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||'요청 실패');return d;}
+  function progress(t,active){
+    const d=window.StudioBoard.describe(t),live=d.state==='running';
+    const assets=active?.steps||[],keys=['sources','transcript','script','voice','project','export'];
+    const label=i=>assets.find(s=>s.key===keys[i])?.label||d.steps[i].label;
+    const next=d.steps.find((s,i)=>i>d.currentIndex&&s.state!=='done');
+    const nextText=d.complete?'모든 단계가 끝났습니다. 아래에서 완성 영상을 확인하세요.':next?`다음 단계 · ${next.number}. ${label(next.number-1)}`:'다음 · 최종 영상 확인';
+    return `<div class="pf-progress" data-state="${d.state}">
+      <div class="pf-current" role="status" aria-live="polite" aria-atomic="true">
+        <div class="pf-current-title"><span class="pf-activity ${live?'pf-spinner':''}" aria-hidden="true">${live?'':d.complete?'✓':d.attention||d.review?'!':d.state==='paused'?'Ⅱ':'…'}</span><div><span class="pf-phase">${d.complete?'제작 완료':`현재 ${d.currentIndex+1} / 6 단계`} · ${esc(d.label)}</span><strong>${esc(d.complete?'최종 영상 제작 완료':label(d.currentIndex))}</strong></div></div>
+        <p class="pf-current-message">${esc(d.message)}</p><p class="pf-next">${esc(nextText)}</p>
+      </div>
+      <div class="pf-progress-caption"><strong>${d.done} / 6 단계 완료</strong><span>완료 단계 기준 · 소요시간 비율 아님</span></div>
+      <div class="pf-progress-track" role="progressbar" aria-label="자동 제작 완료 단계" aria-valuemin="0" aria-valuemax="6" aria-valuenow="${d.done}" aria-valuetext="${esc(`${d.done} / 6 단계 완료, ${d.complete?'제작 완료':label(d.currentIndex)+' '+d.label}`)}"><div style="width:${d.done/6*100}%"></div></div>
+      <ol class="pf-steps" aria-label="자동 제작 순서">${d.steps.map((s,i)=>{
+        const asset=assets.find(a=>a.key===keys[i]);
+        return `<li class="${s.current?'current '+d.state:s.state==='done'?'completed':'pending'}" ${s.current?'aria-current="step"':''}><span class="pf-step-number" aria-hidden="true">${s.state==='done'?'✓':s.number}</span><div class="pf-step-content"><b>${s.number}. ${esc(label(i))}</b><span class="pf-step-status">${s.current&&live?'<i class="pf-spinner" aria-hidden="true"></i>':''}${s.current?esc(d.label):s.state==='done'?'완료':'예정'}</span>${link(asset?.download_url,'다운로드')}</div>${i<5?'<span class="pf-connector" aria-hidden="true">→</span>':''}</li>`;
+      }).join('')}</ol>
+      <div class="pf-recovery">${t.error?'<p class="pf-error">문제를 해결한 뒤 중단된 단계부터 다시 시도하세요. <button data-pf="retry">중단 단계 재시도</button></p>':''}</div>
+    </div>`;
+  }
   function summary(t,selected){
     const runs=t.pipeline||[], active=runs.find(r=>r.id===t.run_id)||runs.at(-1);
     const display=runs.find(r=>r.id===selected)||runs.find(r=>r.id===t.latest_completed_run_id)||active;
     if(!display)return '';
-    return `<div class="pf-summary"><div class="pf-heading"><h3>자동 제작 진행</h3><span>${esc(t.message)}</span></div>
-      ${t.error?`<p class="pf-error">${esc(t.error)} <button data-pf="retry">중단 단계 재시도</button></p>`:''}
-      <ol class="pf-steps">${(active?.steps||[]).map(s=>`<li class="${s.status}"><b>${esc(s.label)}</b><span>${names[s.status]}</span>${link(s.download_url,'다운로드')}</li>`).join('')}</ol>
+    return `<div class="pf-summary"><div class="pf-heading"><h3>자동 제작 진행</h3></div>
+      ${progress(t,active)}
       <div class="pf-heading"><h4>결과물 · 최신 완료본 우선</h4><select data-pf-version aria-label="제작 결과 버전">${runs.slice().reverse().map(r=>`<option value="${r.id}" ${r.id===display.id?'selected':''}>V${r.number} · ${names[r.status]||r.status}${r.id===t.latest_completed_run_id?' · 최신 완료':''}</option>`).join('')}</select></div>
       ${display.video_url?`<video controls playsinline preload="metadata" src="${esc(display.video_url)}"></video>`:display.preview_url?`<p>리뷰 미리보기 · CapCut 최종 내보내기 전</p><video controls playsinline preload="metadata" src="${esc(display.preview_url)}"></video>`:'<p>완료되는 단계부터 결과물을 다운로드할 수 있습니다.</p>'}
       <div class="pf-links">${display.steps.map(s=>link(s.download_url,s.label)).join('')}${display.steps.some(s=>s.key==='project'&&s.download_url)?`<button data-pf="open-capcut" data-edit-id="${display.artifacts.edit_id}">CapCut에서 직접 열기</button>`:''}</div>
@@ -59,8 +78,18 @@
     const playing=[...root.querySelectorAll('video,audio')].some(v=>!v.paused||v.seeking);
     if(playing||root._dirty||root.contains(document.activeElement)&&document.activeElement.matches('input,textarea,select')){
       const temp=document.createElement('div');temp.innerHTML=summary(t,root._selected);
-      const steps=root.querySelector('.pf-steps'),fresh=temp.querySelector('.pf-steps');if(steps&&fresh&&steps.innerHTML!==fresh.innerHTML)steps.innerHTML=fresh.innerHTML;
-      const note=root.querySelector('.pf-heading span');if(note)note.textContent=t.message;
+      const panel=root.querySelector('.pf-progress'),fresh=temp.querySelector('.pf-progress');
+      if(panel&&fresh){
+        panel.dataset.state=fresh.dataset.state;
+        // Update status independently, preserving media, unsaved inputs and spinners.
+        for(const selector of ['.pf-current','.pf-progress-caption','.pf-progress-track','.pf-steps','.pf-recovery']){
+          const old=panel.querySelector(selector),next=fresh.querySelector(selector);
+          if(old.outerHTML!==next.outerHTML){
+            if(selector==='.pf-current')old.innerHTML=next.innerHTML;
+            else old.replaceWith(next);
+          }
+        }
+      }
       options.onRender?.();return;
     }
     if(root._renderedRevision===t.revision && root._renderedSelected===root._selected && root.querySelector('.production-flow')){options.onRender?.();return;}
@@ -124,7 +153,8 @@
         if(action==='candidate'||action==='proposal')delete local.script;
         if(action==='discard-feedback')for(const k of Object.keys(local))delete local[k];
         if(Object.keys(local).length){localStorage.setItem(storageKey(task),JSON.stringify(local));localStorage.setItem(storageKey(task)+'-revision',String(result.feedback_revision||0));}else{localStorage.removeItem(storageKey(task));localStorage.removeItem(storageKey(task)+'-revision');}root._feedbackBaseRevision=null;
-        root._dirty=false;document.activeElement.blur();options.onUpdate?.(result);mount(root,result,options);message(action==='reproduce'?'재제작 요청 완료':'저장했습니다. 변경사항 반영은 재제작 버튼으로 실행합니다.');
+        root._dirty=false;document.activeElement.blur();options.onUpdate?.(result);mount(root,result,options);
+        message(({retry:'재시도 요청을 접수했습니다. 위 현재 단계에서 실행 상태를 확인하세요.','start-auto':'자동 제작 요청을 접수했습니다.','resume-auto':'자동 진행 재개를 요청했습니다.','pause-auto':'자동 진행 중지를 요청했습니다. 현재 실행 중인 작업은 마무리될 수 있습니다.',reproduce:'재제작 요청 완료'})[action]||'저장했습니다. 변경사항 반영은 재제작 버튼으로 실행합니다.');
       }catch(e){message(e.message);}finally{button.disabled=false;}
     };
     options.onRender?.();
