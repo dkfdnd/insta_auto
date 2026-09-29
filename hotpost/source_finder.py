@@ -158,51 +158,57 @@ def _post(settings: Settings, shortcode: str):
 
 
 def _download_reference(settings: Settings, post, out: Path) -> Path:
-    """저장된 Instagram 세션으로 공개 게시물의 기준 영상을 받는다."""
-    for cached in sorted(settings.source_dir.glob(f'{post.shortcode}-*/reference.mp4'), reverse=True):
+    """로컬 영상을 재사용하고 설정된 인증 방식으로 기준 영상을 받는다."""
+    cached_files = [*settings.source_dir.glob(f'{post.shortcode}-*/reference.mp4'),
+                    *settings.transcript_dir.glob(f'{post.shortcode}-*/reference.mp4')]
+    for cached in sorted(cached_files, key=lambda p: p.stat().st_mtime, reverse=True):
         if cached != out and 0 < cached.stat().st_size <= settings.source_max_file_mb * 1024 * 1024:
             meta = probe_video(cached)
             if (meta.get('duration') or 0) > 0 and meta.get('width'):
                 shutil.copy2(cached, out)
                 return out
-    from .collectors.web_graphql import WebGraphQLCollector
+    if settings.collection_source == 'browser':
+        from .instagram_video import browser_video_url
+        source_url = browser_video_url(settings, post.shortcode)
+    else:
+        from .collectors.web_graphql import WebGraphQLCollector
 
-    if not post.media_id:
-        raise RuntimeError("이 게시물에는 media_id가 없어 기준 영상을 가져올 수 없습니다.")
-    collector = WebGraphQLCollector(settings)
-    source_url = ""
-    try:
-        r = collector.s.get(
-            f"https://www.instagram.com/api/v1/media/{post.media_id}/info/",
-            headers=collector._api_headers(post.url), timeout=30,
-            allow_redirects=False,
-        )
-        if r.status_code == 200:
-            item = ((r.json() or {}).get("items") or [{}])[0]
-            versions = item.get("video_versions") or []
-            if versions:
-                source = max(
-                    versions,
-                    key=lambda v: (
-                        v.get("width", 0) * v.get("height", 0), v.get("type", 0)
-                    ),
-                )
-                source_url = str(source.get("url") or "")
-    except (requests.RequestException, ValueError):
+        if not post.media_id:
+            raise RuntimeError("이 게시물에는 media_id가 없어 기준 영상을 가져올 수 없습니다.")
+        collector = WebGraphQLCollector(settings)
         source_url = ""
+        try:
+            r = collector.s.get(
+                f"https://www.instagram.com/api/v1/media/{post.media_id}/info/",
+                headers=collector._api_headers(post.url), timeout=30,
+                allow_redirects=False,
+            )
+            if r.status_code == 200:
+                item = ((r.json() or {}).get("items") or [{}])[0]
+                versions = item.get("video_versions") or []
+                if versions:
+                    source = max(
+                        versions,
+                        key=lambda v: (
+                            v.get("width", 0) * v.get("height", 0), v.get("type", 0)
+                        ),
+                    )
+                    source_url = str(source.get("url") or "")
+        except (requests.RequestException, ValueError):
+            source_url = ""
 
-    # New web sessions can access GraphQL while the legacy media-info route
-    # redirects to /accounts/login/. Instaloader still exposes the signed CDN
-    # URL embedded in post metadata, so use that as a bounded fallback.
-    if not source_url:
-        import instaloader
-        from .collectors.instaloader_collector import load_session
+        # New web sessions can access GraphQL while the legacy media-info route
+        # redirects to /accounts/login/. Instaloader still exposes the signed CDN
+        # URL embedded in post metadata, so use that as a bounded fallback.
+        if not source_url:
+            import instaloader
+            from .collectors.instaloader_collector import load_session
 
-        loader = load_session(settings)
-        reference = instaloader.Post.from_shortcode(loader.context, post.shortcode)
-        if not reference.is_video:
-            raise RuntimeError("Instagram 게시물이 영상이 아닙니다.")
-        source_url = str(reference.video_url or "")
+            loader = load_session(settings)
+            reference = instaloader.Post.from_shortcode(loader.context, post.shortcode)
+            if not reference.is_video:
+                raise RuntimeError("Instagram 게시물이 영상이 아닙니다.")
+            source_url = str(reference.video_url or "")
 
     parsed = urlparse(source_url)
     host = (parsed.hostname or "").lower()
