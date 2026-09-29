@@ -5,6 +5,8 @@
   const fmt = (value) => Number(value || 0).toLocaleString('ko-KR');
   const date = (timestamp) => timestamp ? new Date(timestamp * 1000).toLocaleDateString('ko-KR') : '수집 전';
   let accounts = [];
+  const report=window.HOTPOST_REPORT||{};
+  const summaries=new Map((report.accounts||[]).map(a=>[a.username,a]));
 
   const theme = $('#accounts-theme');
   function applyTheme(value) {
@@ -31,7 +33,7 @@
     if (!accounts.length) {
       list.innerHTML = '<div class="empty">아직 관리 중인 계정이 없습니다. 위에서 첫 계정을 등록하세요.</div>'; return;
     }
-    list.innerHTML = accounts.map((account) => `<article class="account-row" data-username="${esc(account.username)}">
+    list.innerHTML = accounts.map((account) => {const summary=summaries.get(account.username);const candidates=(report.acquisition_candidates||[]).filter(p=>p.username===account.username);return `<article class="account-row" data-username="${esc(account.username)}">
       <div class="account-avatar">${account.profile_pic_url ? `<img src="${esc(account.profile_pic_url)}" alt="">` : esc(account.username.slice(0, 2).toUpperCase())}</div>
       <div class="account-main">
         <div><a href="https://www.instagram.com/${encodeURIComponent(account.username)}/" target="_blank" rel="noopener">@${esc(account.username)} ↗</a>${account.full_name ? `<span>${esc(account.full_name)}</span>` : ''}</div>
@@ -42,8 +44,10 @@
         <span>최근 조회 성공 <b>${account.recent_success_rate == null ? '데이터 없음' : Math.round(account.recent_success_rate * 100) + '%'}</b></span>
         <span>마지막 성공 조회 <b>${date(account.last_success_observed_at)}</b></span>
         <span>연속 수집 실패 <b>${account.consecutive_failures || 0}회</b></span></div>
+      <div class="account-performance">${summary?`<span>평소 조회수 <b>${fmt(summary.median_views)}</b></span><span>평소 좋아요 <b>${fmt(summary.median_likes)}</b></span><span>평소 댓글 <b>${fmt(summary.median_comments)}</b></span><span>릴스 비중 <b>${Math.round(summary.reel_share*100)}%</b></span><span>7일 핫 <b>${summary.hot_7d}개</b></span><span>최근 ${report.settings?.recent_days||30}일 핫 <b>${summary.hot_recent} / ${summary.posts_recent}개</b></span>`:'<span class="hint">분석 결과 없음 · 수집 후 성과가 표시됩니다.</span>'}<a href="/?account=${encodeURIComponent(account.username)}">이 계정 게시물 보기 →</a></div>
+      ${candidates.length?`<details class="account-candidates"><summary>팔로워 대비 조회수 · 제작 후보 ${candidates.length}개</summary><p class="hint">참고 후보입니다. 자동 제작 선정과는 별개입니다.</p><div class="chips">${candidates.map(p=>`<a class="chip" href="/?post=${encodeURIComponent(p.shortcode)}">${esc(p.shortcode)} · 팔로워 대비 ${Number(p.views_per_follower).toFixed(2)}배 · 조회 ${fmt(p.views)}</a>`).join('')}</div></details>`:''}
       <button class="btn account-delete" data-delete="${esc(account.username)}">삭제</button>
-    </article>`).join('');
+    </article>`;}).join('');
   }
 
   async function loadAccounts() {
@@ -80,20 +84,34 @@
 
   const bytes = (value) => value >= 1024 ** 3 ? (value / 1024 ** 3).toFixed(2) + 'GB' :
     (value / 1024 ** 2).toFixed(1) + 'MB';
+  function toggleNotifications(open){
+    $('#notification-panel').hidden=!open;$('#notification-toggle').setAttribute('aria-expanded',String(open));
+    if(open){loadNotifications();$('#notification-close').focus();}
+  }
+  $('#notification-toggle').onclick=()=>toggleNotifications($('#notification-panel').hidden);
+  $('#notification-close').onclick=()=>{toggleNotifications(false);$('#notification-toggle').focus();};
+  document.addEventListener('click',e=>{if(!e.target.closest('.notification-anchor'))toggleNotifications(false);});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#notification-panel').hidden){toggleNotifications(false);$('#notification-toggle').focus();}});
   async function loadNotifications() {
     try {
-      const data = await (await fetch('/api/notifications')).json();
-      $('#notification-count').textContent = data.unseen || 0;
-      $('#notification-list').innerHTML = data.notifications.length ? data.notifications.map((item) =>
-        `<div class="operational-item"><span>${esc(item.message)}</span><small>${date(item.created_at)} · ${item.seen_at ? '확인됨' : `<button class="btn ghost" data-seen="${item.id}">확인</button>`}</small></div>`).join('') :
-        '<div class="hint">새 알림이 없습니다.</div>';
-    } catch (error) { $('#notification-list').textContent = error.message; }
+      const response=await fetch('/api/notifications',{cache:'no-store'});const data=await response.json();
+      if(!response.ok)throw new Error(data.error||'알림 조회 실패');
+      const badge=$('#notification-count');badge.textContent=data.unseen>99?'99+':data.unseen;badge.hidden=!data.unseen;
+      $('#notification-toggle').setAttribute('aria-label',`알림함 · 읽지 않은 알림 ${data.unseen}개`);
+      $('#notification-list').innerHTML=data.notifications.length?data.notifications.map(item=>
+        `<article class="notification-item ${item.seen_at?'read':'unread'}"><div class="notification-item-head"><strong>${item.seen_at?'읽은 알림':'새 알림'}</strong><time>${date(item.created_at)}</time></div><p>${esc(item.message)}</p>${item.seen_at?'':`<button class="btn ghost" data-seen="${item.id}">읽음으로 표시</button>`}</article>`).join(''):'<p class="notification-empty">알림이 없습니다.</p>';
+    }catch(e){$('#notification-status').textContent=e.message;}
   }
-  $('#notification-list').addEventListener('click', async (event) => {
-    const button = event.target.closest('[data-seen]'); if (!button) return;
-    await fetch(`/api/notifications/${button.dataset.seen}/seen`, { method: 'POST' });
-    loadNotifications();
-  });
+  $('#notification-list').onclick=async e=>{
+    const button=e.target.closest('[data-seen]');if(!button)return;button.disabled=true;
+    try{const r=await fetch(`/api/notifications/${button.dataset.seen}/seen`,{method:'POST'});if(!r.ok)throw new Error('읽음 처리 실패');await loadNotifications();}catch(e){$('#notification-status').textContent=e.message;button.disabled=false;}
+  };
+  $('#notification-clear').onclick=async()=>{
+    const button=$('#notification-clear');button.disabled=true;
+    try{const r=await fetch('/api/notifications/seen',{method:'DELETE'});const data=await r.json();if(!r.ok)throw new Error(data.error||'알림 삭제 실패');$('#notification-status').textContent=`읽은 알림 ${data.deleted}개를 삭제했습니다.`;await loadNotifications();}
+    catch(e){$('#notification-status').textContent=e.message;}finally{button.disabled=false;}
+  };
+  setInterval(loadNotifications,30000);
 
   async function loadJobs() {
     try {

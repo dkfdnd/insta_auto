@@ -318,54 +318,5 @@ def post_terms(posts: list[Post]) -> dict[str, list[str]]:
 
 
 def extract_topics(scored: list[Scored], settings: Settings) -> list[dict]:
-    """핫 게시물의 해시태그/캡션 키워드를 모아 '오늘의 주제'를 만든다.
-
-    - 등급 가중치: 🔥1 · 🔥🔥2 · 🔥🔥🔥3, 일반 게시물 0.15
-    - 같은 계정 안에서 반복되는 상용구(예: '제품은 태그 클릭')가 주제로 올라오지 않도록,
-      캡션 키워드는 계정당 한 번만 가중치를 준다.
-    """
-    weight = Counter()
-    examples: dict[str, list[str]] = defaultdict(list)
-    accounts: dict[str, set[str]] = defaultdict(set)
-    kind: dict[str, str] = {}
-    per_account_seen: dict[tuple[str, str], bool] = {}
-    boiler = _boilerplate_lines([s.post.caption for s in scored])
-    for s in sorted(scored, key=lambda x: x.multiplier, reverse=True):
-        if s.age_hours > settings.recent_days * 24:
-            continue
-        w = {0: 0.15, 1: 1.0, 2: 2.0, 3: 3.0}[s.tier]
-        user = s.post.username
-        for h in dict.fromkeys(s.post.hashtags):
-            if h == user.lower():
-                continue
-            key = "#" + h
-            weight[key] += w
-            kind[key] = "hashtag"
-            examples[key].append(s.post.shortcode)
-            accounts[key].add(user)
-        body = "\n".join(ln for ln in s.post.caption.splitlines() if _norm_line(ln) not in boiler)
-        body = re.sub(r"#\S+|https?://\S+", " ", body)
-        for t in _terms(body):
-            kind.setdefault(t, "keyword")
-            examples[t].append(s.post.shortcode)
-            accounts[t].add(user)
-            if per_account_seen.get((user, t)):
-                weight[t] += w * 0.1   # 같은 계정의 반복 언급은 아주 약하게만
-            else:
-                per_account_seen[(user, t)] = True
-                weight[t] += w * (1.1 if " " in t else 0.8)
-    topics = []
-    for key, w in weight.most_common(settings.top_topics * 4):
-        n_acc = len(accounts[key])
-        if kind[key] == "keyword" and n_acc < 2:
-            continue                      # 키워드는 최소 2개 계정에서 등장해야 '주제'
-        if w < 1.0 and n_acc < 2:
-            continue
-        topics.append({
-            "label": key, "kind": kind[key], "score": round(w, 2),
-            "posts": len(dict.fromkeys(examples[key])), "accounts": n_acc,
-            "examples": list(dict.fromkeys(examples[key]))[:8],
-        })
-        if len(topics) >= settings.top_topics:
-            break
-    return topics
+    from .categories import category_topics
+    return category_topics(scored, settings.top_topics)

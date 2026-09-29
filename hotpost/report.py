@@ -10,6 +10,7 @@ from .analyze import Scored, extract_topics, score_account, post_terms, assessme
 from .config import Settings
 from .storage import Storage
 from .criteria import defaults
+from .categories import post_categories
 from .growth import growth_signal
 from .thumbs import ensure_thumbnail
 
@@ -105,6 +106,7 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
             "assessment": assessment(s, observations_by_code.get(s.post.shortcode, []), now,
                                      settings, active_criteria['values'], post_updated.get(s.post.shortcode)),
             "terms": terms_by_code.get(s.post.shortcode, []),
+            "categories": post_categories(s.post),
         })
         posts_out.append(d)
 

@@ -1,5 +1,5 @@
 /* 오늘의 터진 게시물 - 서버 판정 결과를 표시하고 기준을 저장한다. */
-(function () {
+(async function () {
   'use strict';
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
@@ -15,8 +15,8 @@
       const labels = {none:'실행 전', running:'실행 중', success:'갱신 완료', partial_failure:'갱신 완료 · 일부 계정 실패', failure:'실패', blocked:'중단'};
       const result = run ? ` · 성공 ${run.accounts_ok} / 실패 ${run.accounts_failed} / 건너뜀 ${run.accounts_skipped || 0}` : '';
       const views = c.view_observations || {};
-      el.textContent = `수집 ${labels[c.state] || c.state}${result} · 마지막 실행 ${stamp(run?.started_at)} · 마지막 데이터 갱신 ${stamp(c.newest_post_update)} · 전체 성공 ${stamp(c.last_full_success_at)} · 정확한 조회수 ${views.exact || 0}/${views.total || 0}`;
-      if (run?.notes || run?.stop_reason) el.textContent += ` · ${run.notes || run.stop_reason}`;
+      el.textContent = `수집 ${labels[c.state] || c.state} · 데이터 갱신 ${stamp(c.newest_post_update)}`;
+      const details=document.createElement('a');details.href='accounts.html';details.textContent=' 계정별 수집 상태 →';el.append(details);
       if (c.state !== 'running' && (!c.newest_post_update || Date.now()/1000 - c.newest_post_update > 26*3600)) el.textContent += ' · 최신 수집 데이터가 아닙니다';
       if (c.last_success_at > (R?.generated_at || 0)) {
         el.append(document.createTextNode(' · 현재 목록보다 새로운 수집 데이터가 있습니다. '));
@@ -79,131 +79,8 @@
   // ---------- 판정 기준 ----------
   const S = R.settings;
   const acctMap = Object.fromEntries((R.accounts || []).map((account) => [account.username, account]));
-  const W = R.weights || { video: { views: .5, comments: .3, likes: .2 }, image: { likes: .6, comments: .4 } };
-  const DEFAULT = R.criteria_defaults || {
-    t1: S.hot_multiplier, t2: S.tier2_multiplier, t3: S.tier3_multiplier,
-    wvViews: W.video.views * 100, wvComments: W.video.comments * 100, wvLikes: W.video.likes * 100,
-    wiLikes: W.image.likes * 100, wiComments: W.image.comments * 100,
-    minRatioViews: 0, minRatioComments: 0, minRatioLikes: 0,
-    minViews: 0, minComments: 0, minLikes: 0, minEng: S.min_engagement || 20,
-    followersMin: 0, followersMax: 0, confidence: 'all', maturity: true,
-  };
-  if (!R.criteria) R.criteria = { version: 0, values: DEFAULT };
-  const PRESETS = {
-    default: {},
-    comments: { wvViews: 25, wvComments: 55, wvLikes: 20, wiLikes: 40, wiComments: 60, minRatioComments: 1.5 },
-    views: { wvViews: 70, wvComments: 15, wvLikes: 15, minRatioViews: 1.5 },
-    strict: { t1: 2.5, t2: 4, t3: 7, minEng: 100, confidence: 'medium' },
-    loose: { t1: 1.4, t2: 2.2, t3: 3.5, minEng: 10 },
-  };
-  let C = Object.assign({}, R.criteria.values);
-  const norm3 = (a, b, c) => { const s = a + b + c || 1; return [a / s, b / s, c / s]; };
-  const norm2 = (a, b) => { const s = a + b || 1; return [a / s, b / s]; };
-
-  let POSTS = [];
-  function recompute() { POSTS = R.posts.slice(); }
-  let criteriaRevision = 0;
-  async function saveCriteria(values, revision) {
-    const response = await fetch('/api/criteria', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || '판정 기준 저장 실패');
-    Object.assign(R, data.report);
-    if (revision !== criteriaRevision) return;
-    C = Object.assign({}, data.criteria.values);
-    syncPanel(); renderAll();
-    $('#meta').textContent = `${R.generated_at_kst} 기준 · 판정 v${data.criteria.version} · ${R.summary.accounts}개 계정 · 최근 ${S.recent_days}일 게시물 ${R.posts.length}개 분석`;
-  }
-  let criteriaQueue = Promise.resolve();
-  function applyCriteria() {
-    syncPanel();
-    const values = Object.assign({}, C);
-    const revision = ++criteriaRevision;
-    criteriaQueue = criteriaQueue.catch(() => {}).then(() => saveCriteria(values, revision));
-    criteriaQueue.catch((error) => {
-      if (revision !== criteriaRevision) return;
-      C = Object.assign({}, R.criteria.values); syncPanel();
-      $('#crit-count').textContent = error.message;
-    });
-  }
-
-  // ---------- 기준 패널 UI ----------
-  const critBody = $('#crit-body');
-  const CONTROLS = [
-    ['등급 기준 배수', '평소 대비 종합 배수가 이 값 이상이면 해당 등급', [
-      ['t1', '🔥 이상', 'range', 1.1, 6, 0.1], ['t2', '🔥🔥 이상', 'range', 1.5, 10, 0.1], ['t3', '🔥🔥🔥 이상', 'range', 2, 20, 0.5]]],
-    ['릴스 가중치', '조회수·댓글·좋아요 배수를 어떤 비율로 합칠지', [
-      ['wvViews', '조회수', 'range', 0, 100, 5], ['wvComments', '댓글', 'range', 0, 100, 5], ['wvLikes', '좋아요', 'range', 0, 100, 5], ['__wbar_v']]],
-    ['사진·캐러셀 가중치', '', [
-      ['wiLikes', '좋아요', 'range', 0, 100, 5], ['wiComments', '댓글', 'range', 0, 100, 5], ['__wbar_i']]],
-    ['개별 지표 최소 배수', '0 이면 미적용. 예: 댓글이 평소 2배 이상인 것만', [
-      ['minRatioViews', '조회수 ≥', 'range', 0, 10, 0.5], ['minRatioComments', '댓글 ≥', 'range', 0, 10, 0.5], ['minRatioLikes', '좋아요 ≥', 'range', 0, 10, 0.5]]],
-    ['절대 최소값', '평소 대비가 아니라 실제 수치 기준. 0 이면 미적용', [
-      ['minViews', '최소 조회수', 'number'], ['minComments', '최소 댓글', 'number'], ['minLikes', '최소 좋아요', 'number'],
-      ['minEng', '노이즈 컷', 'number', '좋아요 + 댓글×5 + 조회수/50 이 이 값 미만이면 등급을 주지 않음']]],
-    ['계정·신뢰도', '', [
-      ['followersMin', '팔로워 ≥', 'number'], ['followersMax', '팔로워 ≤', 'number'],
-      ['confidence', '신뢰도', 'select', [['all', '전체'], ['medium', '보통 이상'], ['high', '높음만']]],
-      ['maturity', '신규 게시물 보정', 'check', '게시 72시간 미만은 기준선을 낮춰 비교']]],
-  ];
-  function buildPanel() {
-    critBody.innerHTML = CONTROLS.map(([title, desc, ctls]) => `<div class="cg"><h4>${title}${desc ? `<small>${desc}</small>` : ''}</h4>` + ctls.map((c) => {
-      const [key, label, type, a, b, step] = c;
-      if (key === '__wbar_v') return `<div class="wbar" id="wbar-v"></div><div class="wlegend"><span><i style="background:var(--accent)"></i>조회수</span><span><i style="background:var(--mid)"></i>댓글</span><span><i style="background:var(--flat)"></i>좋아요</span></div>`;
-      if (key === '__wbar_i') return `<div class="wbar" id="wbar-i"></div><div class="wlegend"><span><i style="background:var(--accent)"></i>좋아요</span><span><i style="background:var(--mid)"></i>댓글</span></div>`;
-      if (type === 'range') return `<div class="ctl"><label>${label}</label><input type="range" data-k="${key}" min="${a}" max="${b}" step="${step}"><output data-o="${key}"></output></div>`;
-      if (type === 'number') return `<div class="ctl" title="${a || ''}"><label>${label}</label><input type="number" data-k="${key}" min="0" step="1"><span class="hint">${a ? '설명 보기' : ''}</span></div>`;
-      if (type === 'select') return `<div class="ctl"><label>${label}</label><select data-k="${key}">${a.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select><span></span></div>`;
-      if (type === 'check') return `<label class="toggle" title="${a}"><input type="checkbox" data-k="${key}"> ${label}</label>`;
-      return '';
-    }).join('') + '</div>').join('') +
-      `<div class="crit-foot"><span id="crit-count"></span><button class="btn ghost" id="crit-reset">기본값으로 되돌리기</button></div>`;
-    $$('[data-k]', critBody).forEach((el) => {
-      const k = el.dataset.k;
-      const handler = () => {
-        if (el.type === 'checkbox') C[k] = el.checked;
-        else if (el.tagName === 'SELECT') C[k] = el.value;
-        else C[k] = +el.value || 0;
-        if (k === 't1') { C.t2 = Math.max(C.t1, C.t2); C.t3 = Math.max(C.t2, C.t3); }
-        if (k === 't2') { C.t1 = Math.min(C.t1, C.t2); C.t3 = Math.max(C.t2, C.t3); }
-        if (k === 't3') { C.t2 = Math.min(C.t2, C.t3); C.t1 = Math.min(C.t1, C.t2); }
-        applyCriteria();
-      };
-      el.addEventListener('change', handler);
-    });
-    $('#crit-reset').addEventListener('click', () => { C = Object.assign({}, DEFAULT); applyCriteria(); });
-  }
-  function syncPanel() {
-    $$('[data-k]', critBody).forEach((el) => { const k = el.dataset.k; if (el.type === 'checkbox') el.checked = !!C[k]; else el.value = C[k]; });
-    $$('output[data-o]', critBody).forEach((o) => { const k = o.dataset.o; o.textContent = k.startsWith('w') ? Math.round(C[k]) + '%' : C[k].toFixed(1) + '배'; });
-    const [a, b, c] = norm3(C.wvViews, C.wvComments, C.wvLikes);
-    $('#wbar-v').innerHTML = `<span class="w1" style="width:${a * 100}%"></span><span class="w2" style="width:${b * 100}%"></span><span class="w3" style="width:${c * 100}%"></span>`;
-    const [d, e] = norm2(C.wiLikes, C.wiComments);
-    $('#wbar-i').innerHTML = `<span class="w1" style="width:${d * 100}%"></span><span class="w2" style="width:${e * 100}%"></span>`;
-    const [v1, v2, v3] = [a, b, c].map((x) => Math.round(x * 100));
-    const extras = [];
-    if (C.minRatioViews) extras.push(`조회수 ≥×${C.minRatioViews}`);
-    if (C.minRatioComments) extras.push(`댓글 ≥×${C.minRatioComments}`);
-    if (C.minRatioLikes) extras.push(`좋아요 ≥×${C.minRatioLikes}`);
-    if (C.minViews) extras.push(`조회 ${fmt(C.minViews)}+`);
-    if (C.minComments) extras.push(`댓글 ${fmt(C.minComments)}+`);
-    if (C.minLikes) extras.push(`좋아요 ${fmt(C.minLikes)}+`);
-    if (C.followersMin || C.followersMax) extras.push(`팔로워 ${C.followersMin ? fmt(C.followersMin) : '0'}~${C.followersMax ? fmt(C.followersMax) : '∞'}`);
-    if (C.confidence !== 'all') extras.push(`신뢰도 ${C.confidence === 'high' ? '높음' : '보통+'}`);
-    if (!C.maturity) extras.push('신규 보정 끔');
-    $('#crit-summary').innerHTML = `<b>🔥 ×${C.t1.toFixed(1)}</b> · 🔥🔥 ×${C.t2.toFixed(1)} · 🔥🔥🔥 ×${C.t3.toFixed(1)} · 릴스 조회${v1}/댓글${v2}/좋아요${v3}${extras.length ? ' · ' + extras.join(' · ') : ''}`;
-    const activePreset = Object.keys(PRESETS).find((k) => { const P = Object.assign({}, DEFAULT, PRESETS[k]); return Object.keys(DEFAULT).every((x) => P[x] === C[x]); });
-    $$('#presets button').forEach((btn) => btn.classList.toggle('on', btn.dataset.preset === activePreset));
-  }
-  buildPanel();
-  $('#crit-toggle').addEventListener('click', () => {
-    const open = critBody.hidden; critBody.hidden = !open;
-    $('#crit-toggle').setAttribute('aria-expanded', String(open));
-    $('#crit-toggle').textContent = open ? '⚙️ 판정 기준 닫기' : '⚙️ 판정 기준 조절';
-  });
-  $('#presets').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; C = Object.assign({}, DEFAULT, PRESETS[b.dataset.preset]); applyCriteria(); });
-
+  let POSTS=[];
+  function recompute(){POSTS=R.posts.slice();}
   // ---------- 헤더 / 배너 ----------
   $('#meta').textContent = `${R.generated_at_kst} 기준 · 판정 v${R.criteria.version} · ${R.summary.accounts}개 계정 · 최근 ${S.recent_days}일 게시물 ${R.posts.length}개 분석`;
   const sb = $('#source-badge');
@@ -217,33 +94,20 @@
   }
 
   // ---------- 상태 ----------
-  const state = { detection: 'all', period: 336, kind: 'all', tier: 1, sort: 'rank', assessment: 'all', account: '', q: '', topic: null };
-
-  // ---------- 툴바 ----------
-  $$('.seg').forEach((seg) => seg.addEventListener('click', (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    $$('button', seg).forEach((x) => x.classList.toggle('on', x === b));
-    state[seg.dataset.key] = seg.dataset.key === 'period' ? +b.dataset.v : b.dataset.v;
-    $$('#period button').forEach(x => { x.disabled = state.detection === 'today'; });
-    renderAll();
-  }));
-  $('#tier').addEventListener('change', (e) => { state.tier = +e.target.value; render(); });
-  $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; render(); });
-  $('#assessment').addEventListener('change', (e) => { state.assessment = e.target.value; render(); });
-  const accSel = $('#account');
-  R.accounts.slice().sort((a, b) => a.username.localeCompare(b.username)).forEach((a) => { const o = document.createElement('option'); o.value = a.username; o.textContent = '@' + a.username; accSel.appendChild(o); });
-  accSel.addEventListener('change', (e) => { state.account = e.target.value; renderAll(); });
-  let qt; $('#q').addEventListener('input', (e) => { clearTimeout(qt); qt = setTimeout(() => { state.q = e.target.value.trim().toLowerCase(); renderAll(); }, 150); });
-  $('#reset').addEventListener('click', () => {
-    Object.assign(state, { detection: 'all', period: 336, kind: 'all', tier: 1, sort: 'rank', assessment: 'all', account: '', q: '', topic: null });
-    $$('#detection button').forEach(b => b.classList.toggle('on', b.dataset.v === 'all'));
-    $$('#period button').forEach(b => { b.disabled = false; });
-    $('#assessment').value = 'all';
-    $$('#period button').forEach((b) => b.classList.toggle('on', b.dataset.v === '336'));
-    $$('#kind button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'all'));
-    $('#tier').value = '1'; $('#sort').value = 'rank'; accSel.value = ''; $('#q').value = ''; renderAll();
-  });
-
+  let saved;
+  try {saved=await window.HotpostDisplay.load();} catch(e){saved={...window.HotpostDisplay.defaults};$('#banner').hidden=false;$('#banner').textContent='저장된 화면 설정을 불러오지 못해 기본 조건을 표시합니다.';}
+  const state={...saved,q:'',topic:null};
+  const linkedAccount=new URLSearchParams(location.search).get('account');if(linkedAccount)state.account=linkedAccount;
+  function currentSettings(){
+    const c=R.criteria.values;
+    $('#current-settings').textContent=window.HotpostDisplay.describe(state)+` · 등급 기준 ${c.t1}/${c.t2}/${c.t3}배`;
+  }
+  currentSettings();
+  function showSearch(open){$('#search-box').hidden=!open;$('#search-toggle').setAttribute('aria-expanded',String(open));$('#search-toggle').setAttribute('aria-label',open?'검색창 닫기':'검색창 열기');if(open)$('#q').focus();}
+  $('#search-toggle').onclick=()=>{const open=$('#search-box').hidden;showSearch(open);if(!open){$('#q').value='';state.q='';renderAll();}};
+  $('#q').addEventListener('keydown',e=>{if(e.key==='Escape'){e.stopPropagation();showSearch(false);$('#q').value='';state.q='';renderAll();$('#search-toggle').focus();}});
+  let qt;$('#q').addEventListener('input',e=>{clearTimeout(qt);qt=setTimeout(()=>{state.q=e.target.value.trim().toLowerCase();renderAll();},150);});
+  window.addEventListener('focus',async()=>{try{const active=await (await fetch('/api/criteria',{cache:'no-store'})).json();if(active.version!==R.criteria.version){location.reload();return;}const fresh=await window.HotpostDisplay.load();Object.assign(state,fresh);if(linkedAccount)state.account=linkedAccount;currentSettings();renderAll();}catch(_){}});
   // ---------- 필터 ----------
   function baseFiltered() {   // 기간·유형·계정·검색 (등급/주제 제외) → 주제 계산용
     const q = state.q;
@@ -264,7 +128,7 @@
       if (state.assessment !== 'all' && p.assessment?.status !== state.assessment) return false;
       if (state.topic) {
         const t = state.topic;
-        const hit = t.startsWith('#') ? p.hashtags.includes(t.slice(1).toLowerCase()) : ((p.terms || []).includes(t) || p.caption.toLowerCase().includes(t));
+        const hit = (p.categories || ['생활·기타']).includes(t);
         if (!hit) return false;
       }
       return true;
@@ -276,27 +140,11 @@
 
   // ---------- 주제 (클라이언트 재계산) ----------
   function topics(base) {
-    const TW = { 0: 0.15, 1: 1, 2: 2, 3: 3 };
-    const weight = new Map(), accounts = new Map(), posts = new Map(), kind = new Map(), seenAcc = new Set();
-    const bump = (key, w, p, k) => {
-      weight.set(key, (weight.get(key) || 0) + w);
-      if (!accounts.has(key)) accounts.set(key, new Set());
-      accounts.get(key).add(p.username);
-      posts.set(key, (posts.get(key) || 0) + 1);
-      if (!kind.has(key)) kind.set(key, k);
-    };
-    base.slice().sort((a, b) => b.multiplier - a.multiplier).forEach((p) => {
-      const w = TW[p.tier];
-      new Set(p.hashtags).forEach((h) => { if (h !== p.username.toLowerCase()) bump('#' + h, w, p, 'hashtag'); });
-      (p.terms || []).forEach((t) => {
-        const k = p.username + ' ' + t;
-        if (seenAcc.has(k)) bump(t, w * 0.1, p, 'keyword');
-        else { seenAcc.add(k); bump(t, w * (t.includes(' ') ? 1.1 : 0.8), p, 'keyword'); }
-      });
+    const groups=new Map();
+    base.filter(p=>p.tier>=Math.max(1,state.tier)&&(state.assessment==='all'||p.assessment?.status===state.assessment)).forEach(p=>{
+      for(const label of p.categories||['생활·기타']){if(!groups.has(label))groups.set(label,{label,posts:0,score:0,accounts:new Set()});const g=groups.get(label);g.posts++;g.score+=p.tier;g.accounts.add(p.username);}
     });
-    return Array.from(weight.entries()).sort((a, b) => b[1] - a[1])
-      .filter(([k, w]) => { const n = accounts.get(k).size; return !(kind.get(k) === 'keyword' && n < 2) && !(w < 1 && n < 2); })
-      .slice(0, 24).map(([k, w]) => ({ label: k, kind: kind.get(k), score: w, posts: posts.get(k), accounts: accounts.get(k).size }));
+    return [...groups.values()].sort((a,b)=>(a.label==='생활·기타')-(b.label==='생활·기타')||b.score-a.score).map(g=>({...g,accounts:g.accounts.size}));
   }
   const topicsEl = $('#topics');
   function renderTopics(base) {
@@ -307,7 +155,7 @@
       el.className = 'chip' + (t.kind === 'keyword' ? ' kw' : '') + (state.topic === t.label ? ' on' : '');
       el.innerHTML = `${esc(t.label)} <span class="n">${t.posts}</span>`;
       el.title = `${t.accounts}개 계정 · ${t.posts}개 게시물`;
-      el.addEventListener('click', () => { state.topic = state.topic === t.label ? null : t.label; if (state.topic) { state.tier = 0; $('#tier').value = '0'; } renderAll(); });
+      el.addEventListener('click', () => { state.topic = state.topic === t.label ? null : t.label; renderAll(); });
       topicsEl.appendChild(el);
     });
   }
@@ -432,51 +280,11 @@
     const desc = [state.detection === 'today' ? '오늘 최초 감지 (한국시간)' : state.period <= 24 ? '24시간' : state.period / 24 + '일', state.kind === 'all' ? '' : state.kind === 'video' ? '릴스' : '사진', state.tier ? tierTxt(state.tier) + ' 이상' : '전체', state.account ? '@' + state.account : '', state.topic ? '주제 "' + state.topic + '"' : ''].filter(Boolean).join(' · ');
     $('#result-count').textContent = `${current.length}개 · ${desc}`;
     const hotBase = base.filter((p) => p.tier >= 1).length;
-    $('#crit-count').innerHTML = `현재 기준으로 선택 기간에 <b>🔥 ${hotBase}개</b> / ${base.length}개 · 전체 기간 🔥 ${POSTS.filter((p) => p.tier >= 1).length}개 / ${POSTS.length}개`;
     return base;
   }
-  function renderAll() { recompute(); renderStats(); const base = render(); renderTopics(base); renderTable(); }
+  function renderAll() { recompute(); renderStats(); const base = render(); renderTopics(base); }
 
   // ---------- 플랫폼 로그인 관리 ----------
-  const sessionModal = $('#session-modal');
-  const sessionStart = $('#session-start');
-  const sessionFinish = $('#session-finish');
-  let sessionPoll = null;
-  function closeSessionModal() { sessionModal.hidden = true; if (sessionPoll) clearTimeout(sessionPoll); sessionPoll = null; }
-  $$('[data-session-close]', sessionModal).forEach((el) => el.addEventListener('click', closeSessionModal));
-  $('#platform-login').addEventListener('click', () => { sessionModal.hidden = false; refreshPlatformSession(); });
-  function renderPlatformSession(data) {
-    $('#session-platforms').innerHTML = (data.platforms || []).map((p) =>
-      `<div class="session-platform">${esc(p.label)}<span class="${p.connected ? 'connected' : ''}">${p.connected ? '● 인증 확인' : p.cookie_present ? '◐ 쿠키 있음 · ' + esc(p.auth_status || '미검증') : '○ 로그인 필요'}</span></div>`).join('');
-    const status = $('#session-status');
-    status.classList.toggle('error', Boolean(data.error));
-    status.innerHTML = `<b>${esc(data.error || data.message || '상태 확인 완료')}</b><small>${data.cookie_file_ready ? '다운로드용 쿠키 파일 준비됨' : '로그인 창에서 인증하면 다운로드용 쿠키가 생성됩니다.'}</small>`;
-    sessionStart.hidden = Boolean(data.active);
-    sessionFinish.hidden = !data.active;
-  }
-  async function refreshPlatformSession() {
-    try {
-      const response = await fetch('/api/platform-session'); const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '로그인 상태 확인 실패');
-      renderPlatformSession(data);
-      if (data.active && !sessionModal.hidden) sessionPoll = setTimeout(refreshPlatformSession, 1800);
-    } catch (e) { $('#session-status').classList.add('error'); $('#session-status').textContent = e.message; }
-  }
-  sessionStart.addEventListener('click', async () => {
-    sessionStart.disabled = true;
-    try {
-      const response = await fetch('/api/platform-session', { method: 'POST' }); const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '로그인 창 실행 실패');
-      renderPlatformSession(data); sessionPoll = setTimeout(refreshPlatformSession, 1200);
-    } catch (e) { $('#session-status').classList.add('error'); $('#session-status').textContent = e.message; }
-    finally { sessionStart.disabled = false; }
-  });
-  sessionFinish.addEventListener('click', async () => {
-    sessionFinish.disabled = true;
-    try { await fetch('/api/platform-session/finish', { method: 'POST' }); setTimeout(refreshPlatformSession, 800); }
-    finally { sessionFinish.disabled = false; }
-  });
-
   // ---------- 상세 모달 ----------
   const modal = $('#modal');
   $('#cards').addEventListener('click', (e) => { const c = e.target.closest('.card'); if (c) openDetail(POSTS.find((p) => p.shortcode === c.dataset.code)); });
@@ -524,7 +332,7 @@
           <div>핫 최초 감지일 (한국시간)<b>${window.HotpostDetection.dateKey(p.hot_detected_at) || (p.tier ? '기록 없음' : '미감지')}</b></div>
           <div>팔로워<b>${fmt(a.followers)}</b></div>
           <div>비교 게시물<b>${p.baseline.peers}개</b></div>
-          <div>반응 성숙도<b>${Math.round((C.maturity ? p.maturity : 1) * 100)}%</b></div>
+          <div>반응 성숙도<b>${Math.round((R.criteria.values.maturity ? p.maturity : 1) * 100)}%</b></div>
           <div>신뢰도<b>${confTxt[p.confidence]}</b></div>
           <div>판정 상태<b>${esc(p.assessment?.label || '재분석 필요')}</b></div>
           <div>보정 전 배수<b>${p.assessment ? '×' + p.assessment.unadjusted_multiplier.toFixed(2) : '—'}</b></div>
@@ -545,7 +353,7 @@
         </div>
         ${isVideo(p) ? '<div class="source-status" id="source-status" hidden></div><div class="source-status transcript-status" id="transcript-status" hidden></div>' : ''}
       </div></div>`;
-    $$('.tags span', modal).forEach((s) => s.addEventListener('click', () => { closeDetail(); state.q = '#' + s.dataset.tag; $('#q').value = state.q; state.tier = 0; $('#tier').value = '0'; renderAll(); }));
+    $$('.tags span', modal).forEach((s) => s.addEventListener('click', () => { closeDetail(); state.q = '#' + s.dataset.tag; $('#q').value = state.q; showSearch(true); renderAll(); }));
     const sourceBtn = $('#source-download', modal);
     if (sourceBtn) sourceBtn.addEventListener('click', () => startSourceJob(p.shortcode, sourceBtn));
     const transcriptBtn = $('#transcript-extract', modal);
@@ -626,58 +434,6 @@
     }
   }
 
-  // ---------- 계정 표 ----------
-  const accountSummaryBody = $('#accounts-summary-body');
-  const accountSummaryToggle = $('#accounts-summary-toggle');
-  let accountSummaryCollapsed = store.get('hp-accounts-summary-collapsed', false);
-  function syncAccountSummary() {
-    accountSummaryBody.hidden = accountSummaryCollapsed;
-    accountSummaryToggle.setAttribute('aria-expanded', String(!accountSummaryCollapsed));
-    accountSummaryToggle.textContent = accountSummaryCollapsed ? '펼치기 ▾' : '접기 ▴';
-  }
-  accountSummaryToggle.addEventListener('click', () => {
-    accountSummaryCollapsed = !accountSummaryCollapsed;
-    store.set('hp-accounts-summary-collapsed', accountSummaryCollapsed); syncAccountSummary();
-  });
-  syncAccountSummary();
-
-  const cols = [
-    ['username', '계정', (a) => `<div class="who"><span class="avatar">${initials(a.username)}</span><span class="name">@${esc(a.username)}</span>${a.full_name ? `<span class="fn">${esc(a.full_name)}</span>` : ''}</div>`],
-    ['followers', '팔로워', (a) => fmt(a.followers)],
-    ['median_views', '평소 조회수', (a) => (a.median_views ? fmt(a.median_views) : '–')],
-    ['median_likes', '평소 좋아요', (a) => fmt(a.median_likes)],
-    ['median_comments', '평소 댓글', (a) => fmt(a.median_comments)],
-    ['reel_share', '릴스 비중', (a) => Math.round(a.reel_share * 100) + '%'],
-    ['hot_7d', '🔥 7일', (a) => `<span class="hotn">${a.hot_7d}</span>`],
-    ['hot_recent', `🔥 ${S.recent_days}일`, (a) => `<span class="bar" style="width:${Math.min(60, a.hot_recent * 8)}px"></span>${a.hot_recent} / ${a.posts_recent}`],
-    ['last_post_at', '최근 게시', (a) => ago((R.generated_at - a.last_post_at) / 3600)],
-  ];
-  let sortCol = 'hot_recent', sortDir = -1;
-  function renderTable() {
-    const rows = R.accounts.map((a) => {
-      const mine = POSTS.filter((p) => p.username === a.username);
-      return Object.assign({}, a, { posts_recent: mine.length, hot_recent: mine.filter((p) => p.tier >= 1).length, hot_7d: mine.filter((p) => p.tier >= 1 && p.age_hours <= 168).length });
-    }).sort((a, b) => { const x = a[sortCol], y = b[sortCol]; return (typeof x === 'string' ? x.localeCompare(y) : (x || 0) - (y || 0)) * sortDir; });
-    $('#accounts').innerHTML = `<thead><tr>${cols.map(([k, l]) => `<th data-k="${k}" class="${k === sortCol ? 'on' : ''}">${l}${k === sortCol ? (sortDir < 0 ? ' ↓' : ' ↑') : ''}</th>`).join('')}</tr></thead>` +
-      `<tbody>${rows.map((a) => `<tr class="acc ${state.account === a.username ? 'on' : ''}" data-u="${esc(a.username)}">${cols.map(([, , f]) => `<td>${f(a)}</td>`).join('')}</tr>`).join('')}</tbody>`;
-  }
-  $('#accounts').addEventListener('click', (e) => {
-    const th = e.target.closest('th'); if (th) { if (sortCol === th.dataset.k) sortDir *= -1; else { sortCol = th.dataset.k; sortDir = -1; } renderTable(); return; }
-    const tr = e.target.closest('tr.acc'); if (tr) { state.account = state.account === tr.dataset.u ? '' : tr.dataset.u; accSel.value = state.account; state.tier = 0; $('#tier').value = '0'; renderAll(); $('#cards').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-  });
-
-  // ---------- 방법론 ----------
-  $('#method').innerHTML = `<ul>
-    <li><b>기준은 절대 수치가 아니라 "그 계정의 평소 대비 배수"</b>입니다. 팔로워 규모가 달라도 공정하게 비교하기 위해, 계정마다 최근 ${S.posts_per_account}개 게시물(같은 유형 우선)의 <b>중앙값</b>을 평소 성과로 잡습니다.</li>
-    <li>게시 후 ${S.maturity_hours}시간까지는 반응이 덜 쌓였으므로, 평소 성과를 35%→100% 로 점진 적용해 <b>신규 게시물이 불리하지 않게</b> 보정합니다(판정 기준 패널에서 끌 수 있음).</li>
-    <li>종합 배수 = 각 지표 배수의 가중 기하평균. 가중치와 등급 기준 배수는 <b>⚙️ 판정 기준 조절</b> 패널에서 바꾸면 즉시 재계산되고 브라우저에 저장됩니다.</li>
-    <li>목록 순서는 배수를 기본으로 하되 절대 규모를 약간 반영해, 아주 작은 계정의 우연한 튐이 맨 위를 차지하지 않게 합니다.</li>
-    <li>"댓글 급증"은 댓글이 평소 2.5배 이상일 때 표시합니다. 댓글은 조회수보다 <b>저장·공유·논쟁을 부르는 주제</b>를 잘 드러내므로 별도로 봅니다.</li>
-    <li>"오늘의 핫 주제"는 선택한 기간·유형·계정 안의 게시물에서 해시태그와 캡션 명사(형태소 분석, 상용구 제거)를 등급 가중치(🔥1 · 🔥🔥2 · 🔥🔥🔥3)로 합산한 것입니다. 점선 칩은 캡션 키워드, 실선 칩은 해시태그입니다.</li>
-    <li>수집을 반복하면 스냅샷이 쌓여 <b>시간당 증가 속도</b>가 상세 화면에 표시됩니다(📈 상승 중).</li>
-  </ul>`;
-
-  syncPanel();
   renderAll();
   const linkedPost = new URLSearchParams(location.search).get('post');
   if (linkedPost) openDetail(POSTS.find(p=>p.shortcode===linkedPost));
@@ -686,19 +442,4 @@
     const day = window.HotpostDetection.dateKey(Date.now() / 1000);
     if (day !== detectionDay) { detectionDay = day; renderAll(); }
   }, 60000);
-  const acquisitionPanel = $('#acquisition-candidates');
-  if (acquisitionPanel) {
-    acquisitionPanel.innerHTML = (R.acquisition_candidates || []).slice(0, 30).map(p =>
-      `<a class="chip" href="https://www.instagram.com/reel/${encodeURIComponent(p.shortcode)}/" target="_blank" rel="noopener">@${esc(p.username)} · ${Number(p.views_per_follower).toFixed(2)}배 · 조회 ${fmt(p.views)}</a>`).join('') || '<span class="hint">현재 제작 후보가 없습니다. 새 기준은 다음 수집·리포트 생성에 반영됩니다.</span>';
-  }
-  fetch('/api/criteria').then((response) => response.json()).then((active) => {
-    if (!active.values) return;
-    if (active.version !== R.criteria.version) {
-      C = Object.assign({}, active.values);
-      applyCriteria();
-    } else {
-      C = Object.assign({}, active.values);
-      syncPanel();
-    }
-  }).catch((error) => { $('#crit-count').textContent = `판정 기준 조회 실패: ${error.message}`; });
 })();

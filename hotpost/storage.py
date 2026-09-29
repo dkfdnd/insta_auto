@@ -262,6 +262,14 @@ class Storage:
         self.conn.commit()
         return cursor.rowcount > 0
 
+    def notification_unseen_count(self) -> int:
+        return self.conn.execute('SELECT COUNT(*) FROM notifications WHERE seen_at IS NULL').fetchone()[0]
+
+    def delete_seen_notifications(self) -> int:
+        cursor = self.conn.execute('DELETE FROM notifications WHERE seen_at IS NOT NULL')
+        self.conn.commit()
+        return cursor.rowcount
+
     def create_job(self, job_id: str, kind: str, shortcode: str) -> tuple[dict, bool]:
         self.conn.execute("BEGIN IMMEDIATE")
         active = self.conn.execute(

@@ -22,6 +22,7 @@ from .scheduler import schedule_status
 from .storage import Storage
 from .report import build_report, write_report
 from .criteria import defaults
+from . import display_settings
 from .job_queue import JobQueue
 from .legacy_production import ProductionManager as LegacyProductionManager
 from .studio import Studio
@@ -74,6 +75,20 @@ def make_handler(settings: Settings):
             self.end_headers(); self.wfile.write(body)
 
         def do_PUT(self) -> None:  # noqa: N802
+            if urlparse(self.path).path == '/api/display-settings':
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < length <= 8192:
+                        raise ValueError('잘못된 요청 크기')
+                    data = json.loads(self.rfile.read(length))
+                    store = Storage(settings.db_path)
+                    try:
+                        self._json({'values': display_settings.save(store, data.get('values'))})
+                    finally:
+                        store.close()
+                except (ValueError, AttributeError) as exc:
+                    self._json({'error': str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             if urlparse(self.path).path != "/api/criteria":
                 self.send_error(HTTPStatus.NOT_FOUND); return
             try:
@@ -317,13 +332,21 @@ def make_handler(settings: Settings):
                 finally:
                     store.close()
                 self._json({**active, "defaults": defaults(settings)}); return
+            if path == '/api/display-settings':
+                store = Storage(settings.db_path)
+                try:
+                    self._json({'values': display_settings.read(store), 'defaults': display_settings.DEFAULTS})
+                finally:
+                    store.close()
+                return
             if path == "/api/notifications":
                 store = Storage(settings.db_path)
                 try:
                     items = store.notifications()
+                    unseen = store.notification_unseen_count()
                 finally:
                     store.close()
-                self._json({"notifications": items, "unseen": sum(item["seen_at"] is None for item in items)}); return
+                self._json({"notifications": items, "unseen": unseen}); return
             if path == "/api/jobs":
                 store = Storage(settings.db_path)
                 try:
@@ -422,6 +445,13 @@ def make_handler(settings: Settings):
 
         def do_DELETE(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path == '/api/notifications/seen':
+                store = Storage(settings.db_path)
+                try:
+                    self._json({'deleted': store.delete_seen_notifications()})
+                finally:
+                    store.close()
+                return
             if not path.startswith("/api/accounts/"):
                 self.send_error(HTTPStatus.NOT_FOUND); return
             try:
