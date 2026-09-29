@@ -186,5 +186,16 @@
     } catch (error) { message(error.message, true); button.disabled = false; }
   });
   $('#account-refresh').addEventListener('click', loadAccounts);
+  function openHelp(){
+    const target=document.getElementById(location.hash.slice(1));
+    if(!target)return;const details=target.closest('details');if(details)details.open=true;
+    requestAnimationFrame(()=>target.scrollIntoView({block:'start'}));
+  }
+  window.addEventListener('hashchange',openHelp);openHelp();
+  document.querySelectorAll('[data-copy-command]').forEach(button=>button.onclick=async()=>{
+    const command=button.parentElement.querySelector('code').textContent;
+    try{await navigator.clipboard.writeText(command);$('#help-copy-status').textContent='명령을 복사했습니다. 서버 PC의 터미널에 붙여넣어 실행하세요.';}
+    catch(_){$('#help-copy-status').textContent='복사 권한이 없습니다. 위 명령을 직접 선택해 복사하세요.';}
+  });
   loadAccounts(); loadCollectionStatus(); loadNotifications(); loadJobs(); loadDisk();
 })();

@@ -5,29 +5,16 @@
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
   const R = window.HOTPOST_REPORT;
   async function loadCollectionHealth() {
-    const el = document.querySelector('#collection-health');
-    if (!el) return;
-    const stamp = value => value ? new Date(value * 1000).toLocaleString('ko-KR') : '없음';
-    try {
-      const response = await fetch('/api/collection-status', {cache: 'no-store'});
-      if (!response.ok) throw new Error('status unavailable');
-      const data = await response.json(), c = data.collection, run = c.last_run;
-      const labels = {none:'실행 전', running:'실행 중', success:'갱신 완료', partial_failure:'갱신 완료 · 일부 계정 실패', failure:'실패', blocked:'중단'};
-      const result = run ? ` · 성공 ${run.accounts_ok} / 실패 ${run.accounts_failed} / 건너뜀 ${run.accounts_skipped || 0}` : '';
-      const views = c.view_observations || {};
-      el.textContent = `수집 ${labels[c.state] || c.state} · 데이터 갱신 ${stamp(c.newest_post_update)}`;
-      const details=document.createElement('a');details.href='accounts.html';details.textContent=' 계정별 수집 상태 →';el.append(details);
-      if (c.state !== 'running' && (!c.newest_post_update || Date.now()/1000 - c.newest_post_update > 26*3600)) el.textContent += ' · 최신 수집 데이터가 아닙니다';
-      if (c.last_success_at > (R?.generated_at || 0)) {
-        el.append(document.createTextNode(' · 현재 목록보다 새로운 수집 데이터가 있습니다. '));
-        const refresh = document.createElement('button');
-        refresh.type = 'button';
-        refresh.textContent = '최신 게시물 보기';
-        refresh.addEventListener('click', () => window.location.reload());
-        el.append(refresh);
-      }
-    } catch (_) {
-      el.textContent = '현재 수집 상태를 확인할 수 없습니다. 표시된 게시물의 데이터 기준 시각을 확인하세요.';
+    const el=$('#collection-health');if(!el)return;
+    try{
+      const responses=await Promise.all([fetch('/api/collection-status',{cache:'no-store'}),fetch('/api/accounts',{cache:'no-store'})]);
+      if(responses.some(r=>!r.ok))throw new Error('수집 상태 조회 실패');
+      const [data,accounts]=await Promise.all(responses.map(r=>r.json()));
+      window.HotpostNotices.show(el,window.HotpostNotices.collection(data,accounts.accounts,R||{}));
+    }catch(_){
+      window.HotpostNotices.show(el,{title:'수집 상태를 확인하지 못했습니다.',tone:'warning',
+        solution:'서버 연결을 확인하고 상태를 다시 조회하세요. 계속 실패하면 서버 실행 상태를 확인하세요.',
+        actions:[{label:'상태 다시 확인',run:loadCollectionHealth},{label:'서버 확인 방법',href:'accounts.html#help-server'}]});
     }
   }
   loadCollectionHealth();
@@ -86,37 +73,13 @@
   const sb = $('#source-badge');
   if (R.is_sample) { sb.textContent = '샘플 데이터'; sb.classList.add('sample'); }
   else { sb.textContent = { instaloader: '실데이터 · 세션 수집', web: '실데이터 · 웹 수집', dump: '실데이터 · 브라우저 덤프' }[R.source] || '실데이터'; sb.classList.add('live'); }
-  if (R.is_sample) { const b = $('#banner'); b.hidden = false; b.innerHTML = '⚠️ 지금 보고 있는 것은 <b>생성된 샘플 데이터</b>입니다. 실제 데이터를 보려면 <code>python -m hotpost login --user 아이디 --browser chrome</code> 로 세션을 만든 뒤 <code>python -m hotpost run</code> 을 실행하세요.'; }
-  else if (R.notes && R.notes.length) {
-    // Report notes are historical. A removed monitoring account must not keep
-    // raising an active warning just because no new collection has run yet.
-    const b = $('#banner');
-    try {
-      const response = await fetch('/api/accounts', {cache:'no-store'});
-      if (!response.ok) throw new Error('account list unavailable');
-      const data = await response.json();
-      const managed = new Set(data.accounts.map(a => a.username.toLowerCase()));
-      const notes = R.notes.filter(note => {
-        const match = /^@([a-z0-9_.]+):/i.exec(note);
-        return !match || managed.has(match[1].toLowerCase());
-      });
-      if (notes.length) {
-        b.hidden = false;
-        b.innerHTML = `⚠️ ${esc(R.generated_at_kst)} 수집 기록 · 일부 계정 수집 실패: ` + notes.map(esc).join(' / ');
-      }
-    } catch (_) {
-      b.hidden = false;
-      b.textContent = '현재 계정 목록을 확인하지 못했습니다. 과거 수집 실패 기록은 레퍼런스 계정에서 확인하세요.';
-    }
-  }
-  if (!R.is_sample && R.last_data_update_at && Date.now() / 1000 - R.last_data_update_at > 30 * 3600) {
-    const b = $('#banner'); b.hidden = false;
-    b.innerHTML += `<div>마지막 데이터 갱신: ${esc(dateStr(R.last_data_update_at))}. 재분석 시각과 실제 관측 시각은 다를 수 있습니다.</div>`;
-  }
+  if(R.is_sample)window.HotpostNotices.show($('#banner'),{title:'샘플 게시물이 표시되고 있습니다.',tone:'info',
+    solution:'전용 Instagram 로그인 상태를 확인한 뒤 수집을 실행하면 실제 게시물로 바뀝니다.',
+    actions:[{label:'실제 데이터 수집 방법',href:'accounts.html#help-collect'}]});
 
   // ---------- 상태 ----------
   let saved;
-  try {saved=await window.HotpostDisplay.load();} catch(e){saved={...window.HotpostDisplay.defaults};$('#banner').hidden=false;$('#banner').textContent='저장된 화면 설정을 불러오지 못해 기본 조건을 표시합니다.';}
+  try {saved=await window.HotpostDisplay.load();} catch(e){saved={...window.HotpostDisplay.defaults};window.HotpostNotices.show($('#banner'),{title:'저장된 화면 설정을 불러오지 못해 기본 조건을 표시합니다.',tone:'warning',solution:'설정 페이지에서 서버 연결과 저장된 조건을 확인한 뒤 다시 열어 주세요.',actions:[{label:'설정 확인',href:'settings.html'}]});}
   const state={...saved,q:'',topic:null};
   const linkedAccount=new URLSearchParams(location.search).get('account');if(linkedAccount)state.account=linkedAccount;
   function currentSettings(){

@@ -305,6 +305,19 @@ tr.acc.on td { background: var(--accent-soft); }
 .notification-item .btn { font-size:11px; padding:4px 8px; }
 .notification-empty { text-align:center; color:var(--muted); padding:25px; }
 .notification-panel { background:var(--panel); }
+.notice { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:16px 18px; }
+.notice.info { color:var(--text); background:var(--panel-2); border-color:var(--line); }
+.notice-body { min-width:0; }
+.notice-body p { margin:5px 0; overflow-wrap:anywhere; }
+.notice-solution { font-weight:550; }
+.notice-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.notice-close { width:32px; height:32px; font-size:22px; }
+.help-step { padding:16px 0; border-top:1px solid var(--line); scroll-margin-top:170px; }
+.help-step h3 { font-size:15px; }
+.help-step p { font-size:13px; color:var(--muted); }
+.command-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:10px; margin-top:8px; background:var(--panel-2); border-radius:9px; }
+.command-row code { overflow-wrap:anywhere; min-width:0; }
+#account-list,#collection-help,#collection-health { scroll-margin-top:170px; }
 @media(max-width:700px){
   .top-inner { flex-wrap:wrap; }
   .top-right { width:100%; justify-content:flex-start; }

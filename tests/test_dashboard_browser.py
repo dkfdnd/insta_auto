@@ -29,6 +29,7 @@ def dashboard(tmp_path):
     report=build_report(settings,store,'test',[],['creator']);store.close()
     report['acquisition_candidates']=[dict(shortcode='camp',username='creator',views_per_follower=30,views=30000)]
     state={'display':dict(DEFAULTS),'report':report,
+           'health':{'collection':{'state':'success','newest_post_update':now},'schedule':{},'hot_tracking':{}},
            'notifications':[dict(id=1,message='새로운 게시물이 있습니다',created_at=now,seen_at=None),
                             dict(id=2,message='이전에 읽은 알림',created_at=now,seen_at=now)]}
     with pw.sync_playwright() as p:
@@ -57,7 +58,7 @@ def dashboard(tmp_path):
                 for n in state['notifications']:
                     if n['id']==int(path.split('/')[3]):n['seen_at']=now
                 result={'seen':True}
-            elif path=='/api/collection-status':result={'collection':{'state':'success'},'schedule':{},'hot_tracking':{}}
+            elif path=='/api/collection-status':result=state['health']
             elif path=='/api/studio':result={'tasks':[]}
             elif path=='/api/jobs':result={'jobs':[]}
             elif path.startswith('/api/'):
@@ -124,10 +125,37 @@ def test_removed_account_warning_is_hidden_but_current_failures_remain(dashboard
     assert not page.locator('#banner').is_visible()
     state['report']['notes'].append('@creator: 현재 목록 계정의 수집 실패')
     page.reload();page.wait_for_selector('.card')
-    assert '@creator' in page.locator('#banner').inner_text()
-    assert '@retired_account' not in page.locator('#banner').inner_text()
-    assert '수집 기록' in page.locator('#banner').inner_text()
+    assert '@creator' in page.locator('#collection-health').inner_text()
+    assert '@retired_account' not in page.locator('#collection-health').inner_text()
+    assert '수집 기록' in page.locator('#collection-health').inner_text()
     assert len(state['report']['notes'])==2  # No historical report data is erased.
+
+
+def test_notice_dismissal_persists_and_new_issue_reappears(dashboard):
+    page,state=dashboard
+    page.goto('http://dashboard.test/');page.wait_for_selector('#collection-health .notice-close')
+    page.locator('#collection-health .notice-close').click()
+    assert not page.locator('#collection-health').is_visible()
+    page.reload();page.wait_for_selector('.card')
+    assert not page.locator('#collection-health').is_visible()
+    state['health']['collection'].update(state='blocked',last_run=dict(id=99,started_at=10,finished_at=20,stop_reason='login_required',notes='세션 만료'))
+    page.reload();page.wait_for_selector('#collection-health:not([hidden])')
+    assert '해결 방법:' in page.locator('#collection-health').inner_text()
+    assert '로그인 복구 방법' in page.locator('#collection-health').inner_text()
+    page.locator('#collection-health a').first.click()
+    assert page.locator('#collection-help').get_attribute('open') is not None
+    assert page.locator('#help-login').is_visible()
+
+
+def test_report_warning_can_be_closed_without_hiding_other_notices(dashboard):
+    page,state=dashboard
+    state['report']['is_sample']=True
+    page.goto('http://dashboard.test/');page.wait_for_selector('#banner .notice-close')
+    page.locator('#banner .notice-close').click()
+    assert not page.locator('#banner').is_visible()
+    assert page.locator('#collection-health').is_visible()
+    page.reload();page.wait_for_selector('.card')
+    assert not page.locator('#banner').is_visible()
 
 
 def test_account_summary_candidates_and_notification_actions(dashboard):

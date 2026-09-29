@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>오늘의 터진 게시물</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-<link rel="stylesheet" href="style.css?v=8">
+<link rel="stylesheet" href="style.css?v=9">
 </head>
 <body>
 <header class="top">
@@ -27,7 +27,7 @@
 <main class="wrap" id="app">
   <div id="studio-selection" style="position:sticky;top:8px;z-index:20;background:#245f50;color:#fff;border-radius:10px;padding:12px 18px;display:flex;align-items:center;gap:14px;margin-bottom:12px" hidden><b id="studio-selected-count">0개 선택</b><span style="flex:1">선택한 소재를 준비하고 대본부터 검토합니다</span><button class="btn" id="studio-add-selected">제작실에 추가 →</button></div>
   <div id="banner" class="banner" hidden></div>
-  <div id="collection-health" class="banner" role="status">수집 상태 확인 중…</div>
+  <div id="collection-health" class="banner" role="status" hidden></div>
 
   <section class="stats" id="stats"></section>
   <section class="section">
@@ -63,6 +63,7 @@
 <link rel="stylesheet" href="production-flow.css?v=2">
 <script src="production-flow.js?v=2"></script>
 <script src="display-settings.js?v=1"></script>
-<script src="app.js?v=13-current-warnings"></script>
+<script src="notices.js?v=1"></script>
+<script src="app.js?v=14-notices"></script>
 </body>
 </html>
