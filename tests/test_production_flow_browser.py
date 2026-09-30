@@ -50,7 +50,7 @@ def flow_page():
         page.goto('http://studio.test/')
         web = Path(__file__).parents[1]/'web'
         page.add_style_tag(path=str(web/'production-flow.css'))
-        for name in ['studio-board.js', 'production-flow.js']:
+        for name in ['studio-board.js', 'caption-editor.js', 'production-flow.js']:
             page.add_script_tag(path=str(web/name))
         page.evaluate('''() => {
             window.task = {id:'work-test', revision:1, run_id:'v2', latest_completed_run_id:'v1',
@@ -269,7 +269,8 @@ def test_evidence_separation_stale_voice_and_result_review_survive_poll(flow_pag
     }''')
     assert '수정사항 반영 전 음성' in page.locator('.pf-audio-card').inner_text()
     assert page.locator('[data-pf-section=original]').is_visible()
-    assert page.locator('.pf-original').evaluate('(e)=>e.open')
+    assert not page.locator('.pf-original').evaluate('(e)=>e.open')
+    page.locator('.pf-original > summary').click()
     assert page.locator('[data-field=original]').input_value()=='교정한 원본 발화'
     assert '화면 속 글자 · 발화와 별도 자료' in page.locator('.pf-original').inner_text()
     page.locator('[data-review-check=speech]').check()
@@ -321,7 +322,7 @@ def test_used_sources_stay_separate_from_uploads_and_pending_selection(flow_page
 def test_caption_sync_controls_validate_bounds_preserve_draft_and_loop(flow_page):
     page=flow_page;setup_editor(page)
     page.evaluate('''()=>{
-      task.edit_id='e1';task.edits=[{id:'e1',duration:10,preview_url:'/preview.mp4',plan:{
+      task.jobs=[];task.caption_editor_supported=true;task.edit_id='e1';task.edits=[{id:'e1',duration:10,preview_url:'/preview.mp4',clean_preview_url:'/clean.mp4',plan:{
         cues:[{id:'c1',text:'한 문장',start:.2,end:1.2}],shots:[{id:'s1',video_url:'/s.mp4',start:0,end:2}],
         beats:[{id:'b1',cue_id:'c1',start:0,end:2,text:'한 문장',selected_shot_id:'s1',options:[{shot_id:'s1',reason:'대응 장면'}]}]}}];
       task.revision++;draw();
@@ -335,10 +336,11 @@ def test_caption_sync_controls_validate_bounds_preserve_draft_and_loop(flow_page
     page.locator('[data-sync=loop]').click()
     assert page.locator('[data-sync=loop]').get_attribute('aria-pressed')=='true'
     page.evaluate("const v=document.querySelector('[data-edit-preview]');v.currentTime=1.5;v.dispatchEvent(new Event('timeupdate'))")
-    assert page.locator('[data-edit-preview]').evaluate('(v)=>v.currentTime')==.1
+    assert page.locator('[data-edit-preview]').evaluate('(v)=>v.currentTime')==0
     page.locator('[data-sync=loop]').click()
     assert page.locator('[data-sync=loop]').get_attribute('aria-pressed')=='false'
     page.locator('[data-edit-preview]').evaluate('(v)=>v.currentTime=.6')
+    page.locator('.ce-cue details > summary').click()
     page.locator('[data-sync=start]').click()
     assert float(page.locator('[data-field="start:b1"]').input_value())==.6
     assert '0.60–1.10초' in page.locator('[data-sync-range]').inner_text()
@@ -346,7 +348,7 @@ def test_caption_sync_controls_validate_bounds_preserve_draft_and_loop(flow_page
     page.locator('[data-sync=end]').click()
     assert float(page.locator('[data-field="end:b1"]').input_value())==1.1
     assert '끝은 시작보다 뒤' in page.locator('.pf-sync-feedback').inner_text()
-    page.locator('[data-pf=save-beat]').click()
+    page.locator('[data-pf=save-captions]').click()
     page.wait_for_function('requests.length===1')
     change=page.evaluate('requests[0].body.changes[0]')
     assert change['start']==.6 and change['end']==1.1 and change['text']=='한 문장'
@@ -355,3 +357,35 @@ def test_caption_sync_controls_validate_bounds_preserve_draft_and_loop(flow_page
       const root=document.querySelector('#root');root.innerHTML='';root._dirty=false;root._renderedRevision=null;draw();
     }''')
     assert page.locator('[data-sync-times]').inner_text()=='0.40–1.50초'
+
+
+def test_live_caption_shift_paints_without_render_and_exports_last_input(flow_page):
+    page=flow_page;setup_editor(page)
+    page.evaluate('''()=>{
+      task.jobs=[];task.caption_editor_supported=true;task.edit_id='e1';
+      task.edits=[{id:'e1',duration:3,clean_preview_url:'/base.mp4',plan:{
+        cues:[{id:'c1',text:'실시간 자막',start:.2,end:1.2}],
+        beats:[{id:'b1',cue_id:'c1',emphasis:0}]}}];task.revision++;draw();
+      const v=document.querySelector('[data-edit-preview]');
+      Object.defineProperty(v,'duration',{get:()=>3});Object.defineProperty(v,'readyState',{get:()=>4});
+      v.currentTime=.25;v.dispatchEvent(new Event('seeked'));
+    }''')
+    canvas=page.locator('[data-caption-canvas]')
+    assert canvas.get_attribute('data-active-cue')=='b1'
+    assert canvas.evaluate('(c)=>c.getContext("2d").getImageData(0,0,1080,1920).data.some(v=>v>0)')
+    page.locator('[data-sync=later]').click()
+    assert canvas.get_attribute('data-active-cue')==''
+    assert page.evaluate('requests.length')==0
+    page.locator('[data-caption-undo]').click()
+    assert canvas.get_attribute('data-active-cue')=='b1'
+    page.locator('[data-field="caption:b1"]').fill('내보낼 최종 문구')
+    page.locator('[data-sync=later]').click()
+    page.evaluate('window.hold=true')
+    page.locator('[data-pf=export-edit]').click()
+    page.wait_for_function('requests.length===1')
+    assert page.evaluate('requests[0].url.endsWith("/export-edit")')
+    assert page.evaluate('requests[0].body.changes[0]')=={'beat_id':'b1','text':'내보낼 최종 문구','start':.3,'end':1.3}
+    page.locator('[data-field="caption:b1"]').fill('다음 내보내기에 쓸 문구')
+    page.evaluate('release()')
+    page.wait_for_function('!document.querySelector("#root")._saving')
+    assert page.locator('[data-field="caption:b1"]').input_value()=='다음 내보내기에 쓸 문구'

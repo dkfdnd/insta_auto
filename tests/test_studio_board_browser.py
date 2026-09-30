@@ -126,7 +126,7 @@ def test_feedback_survives_poll_tab_close_switch_and_save(studio_page):
     assert page.evaluate('keptEditor===document.querySelector("[data-field=script]")')
     assert editor.input_value()=='저장하기 전 직접 고친 문장'
     assert page.locator('#detail-tabs [data-detail-tab="script"]').get_attribute('aria-pressed')=='true'
-    page.locator('#detail-tabs [data-detail-tab="voice"]').click()
+    page.locator('#detail-tabs [data-detail-tab="script"]').click()
     page.locator('#detail-tabs [data-detail-tab="script"]').click()
     assert editor.input_value()=='저장하기 전 직접 고친 문장'
     page.locator('#close-work').click()
@@ -143,7 +143,7 @@ def test_feedback_survives_poll_tab_close_switch_and_save(studio_page):
 def test_results_version_and_keyboard_drawer(studio_page):
     page,_=studio_page
     page.locator('[data-work="voice"]').click()
-    page.locator('#detail-tabs [data-detail-tab="results"]').click()
+    page.locator('#detail-tabs [data-detail-tab="edit"]').click()
     assert page.locator('.pf-summary > video').get_attribute('src')=='/old.mp4'
     page.locator('[data-pf-version]').select_option('v2')
     assert page.locator('.pf-summary > video').count()==0
@@ -171,7 +171,7 @@ def test_manual_approval_and_tab_input_preservation(studio_page):
     page.locator('#detail-tabs [data-detail-tab="script"]').click()
     assert page.locator('#script-request').input_value()=='도입부를 더 짧게'
     page.locator('[data-action="approve-script"]').click()
-    page.wait_for_function('document.querySelector("#detail-tabs [data-detail-tab=voice]").getAttribute("aria-pressed")==="true"')
+    page.wait_for_function('document.querySelector("#detail-tabs [data-detail-tab=script]").getAttribute("aria-pressed")==="true"')
     assert tasks[1]['approved_script_id']=='s1'
 
 
@@ -276,9 +276,10 @@ def test_mobile_progress_expansion_and_stage_navigation(studio_page):
     page.wait_for_function('document.querySelector("#work-list").scrollLeft>0')
     page.locator('[data-work="voice"]').click()
     assert page.locator('#journey-panel').get_attribute('open') is None
-    assert page.locator('#detail-tabs button').count()==6
-    assert page.locator('#detail-tabs [data-detail-tab=voice]').get_attribute('aria-current')=='step'
-    page.locator('#detail-tabs [data-detail-tab=original]').click()
+    assert page.locator('#detail-tabs button').count()==3
+    assert page.locator('#detail-tabs [data-detail-tab=script]').get_attribute('aria-current')=='step'
+    page.locator('#detail-tabs [data-detail-tab=script]').click()
+    page.locator('.pf-original').evaluate('(e)=>e.open=true')
     assert page.locator('[data-field=original]').is_visible()
     assert page.locator('#work-drawer').bounding_box()['width']<=390
 
@@ -409,16 +410,19 @@ def test_real_video_upload_http_and_resume_in_isolated_studio(tmp_path,monkeypat
 def test_original_and_script_are_separate_and_drafts_survive_navigation(studio_page):
     page,_=studio_page
     page.locator('[data-work="voice"]').click()
-    page.locator('#detail-tabs [data-detail-tab=original]').click()
-    page.locator('[data-field=original]').fill('확인 중인 원본 발화')
-    assert not page.locator('.pf-actionbar').is_visible()
     page.locator('#detail-tabs [data-detail-tab=script]').click()
+    page.locator('.pf-original').evaluate('(e)=>e.open=true')
+    page.locator('[data-field=original]').fill('확인 중인 원본 발화')
+    assert page.locator('.pf-actionbar').is_visible()
+    page.locator('#detail-tabs [data-detail-tab=script]').click()
+    page.locator('.pf-original > summary').click()
     assert not page.locator('[data-field=original]').is_visible()
     page.locator('[data-field=script]').fill('새로운 제작 대본 초안')
-    page.locator('#detail-tabs [data-detail-tab=original]').click()
+    page.locator('#detail-tabs [data-detail-tab=script]').click()
+    page.locator('.pf-original').evaluate('(e)=>e.open=true')
     assert page.locator('[data-field=original]').input_value()=='확인 중인 원본 발화'
     page.evaluate('refreshStudio()')
     page.locator('#detail-tabs [data-detail-tab=script]').click()
     assert page.locator('[data-field=script]').input_value()=='새로운 제작 대본 초안'
-    assert page.locator('#detail-tabs [aria-current=step]').get_attribute('data-detail-tab')=='voice'
+    assert page.locator('#detail-tabs [aria-current=step]').get_attribute('data-detail-tab')=='script'
     assert page.locator('#detail-tabs [aria-pressed=true]').get_attribute('data-detail-tab')=='script'

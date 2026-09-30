@@ -62,6 +62,47 @@ def test_export_is_completion_boundary_and_all_assets_download(prepared):
     with pytest.raises(ValueError): studio.download(task,'../../other','script')
 
 
+def test_caption_export_is_atomic_reuses_voice_and_skips_native_registration(prepared):
+    studio,task=prepared;complete(studio,task)
+    before=studio.store.get(task);edit=next(e for e in before['edits'] if e['id']==before['edit_id'])
+    plan={'duration':3,'cues':[{'id':'c','text':'자막','start':.2,'end':1.2}],
+          'beats':[{'id':'b','cue_id':'c','options':[]}],'shots':[]}
+    Path(edit['plan_path']).write_text(json.dumps(plan),encoding='utf-8')
+    change={'beat_id':'b','text':'수정 자막','start':.3,'end':1.3}
+    saved=studio.action(task,'save-captions',{'edit_id':edit['id'],'changes':[change],'feedback_revision':0})
+    assert saved['edit_id']==edit['id'] and not [j for j in saved['jobs'] if j['status']=='queued']
+    with pytest.raises(Conflict):
+        studio.action(task,'export-edit',{'edit_id':edit['id'],'changes':[change],'feedback_revision':0})
+    exported=studio.action(task,'export-edit',{'edit_id':edit['id'],'changes':[change],'feedback_revision':saved['feedback_revision']})
+    job=studio.store.claim();assert job['kind']=='revision' and job['payload']['caption_only']
+    assert job['payload']['changes']==[change]
+    # Subsequent user input must never mutate the in-flight output snapshot.
+    studio.action(task,'save-captions',{'edit_id':edit['id'],'changes':[{**change,'text':'다음 편집'}]})
+    assert job['payload']['changes'][0]['text']=='수정 자막'
+    with pytest.raises(Conflict):studio.action(task,'export-edit',{'edit_id':edit['id'],'changes':[change]})
+    result={**edit,'id':job['id'],'export_kind':'web_captions','export_verified':True}
+    result.pop('draft_path',None);result.pop('draft_name',None)
+    studio.store.finish(job,result,lambda s,db,r:studio._accept(s,job,r,db))
+    after=studio.store.get(task)
+    assert after['status']=='completed'
+    assert after['voice_id']==before['voice_id'] and after['script_id']==before['script_id']
+    assert after['feedback']['changes'][0]['text']=='다음 편집'
+    assert not [j for j in studio.store.jobs(task) if j['status']=='queued']
+    with pytest.raises(Conflict):studio.action(task,'save-captions',{'edit_id':edit['id'],'changes':[change]})
+    with pytest.raises(Conflict):studio.action(task,'save-captions',{'edit_id':after['edit_id'],'changes':[change]})
+    studio.action(task,'discard-edit-feedback',{})
+    assert not studio.store.get(task)['feedback']
+
+
+def test_caption_export_rejects_scene_changes_and_keeps_pending_script(prepared):
+    studio,task=prepared;complete(studio,task);s=studio.store.get(task)
+    studio.action(task,'save-script',{'text':'새 대본'})
+    with pytest.raises(Conflict):studio.action(task,'export-edit',{'edit_id':s['edit_id'],'changes':[]})
+    assert studio.store.get(task)['feedback']['script_text']=='새 대본'
+    studio.action(task,'discard-feedback',{})
+    with pytest.raises(ValueError):studio.action(task,'export-edit',{'edit_id':s['edit_id'],'changes':[{'beat_id':'b','shot_id':'new'}]})
+
+
 def test_feedback_does_not_mutate_active_script_and_reproduction_waits(prepared):
     studio,task=prepared;job=studio.store.claim();before=studio.store.get(task)
     studio.action(task,'save-script',{'text':'사용자가 새로 고친 대본이에요.'})

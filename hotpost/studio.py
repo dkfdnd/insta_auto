@@ -100,6 +100,26 @@ class Studio(WorkflowMixin):
         return revision
 
     def action(self, task_id, action, data):
+        if action == 'prepare-caption-preview':
+            state = self.store.get(task_id)
+            edit = next((e for e in state['edits'] if e['id']==data.get('edit_id')), None)
+            if not edit or edit['id'] != state.get('edit_id'):
+                raise Conflict('새 편집 영상이 준비되었습니다. 새로고침해 주세요.')
+            if edit.get('clean_preview_path') and Path(edit['clean_preview_path']).is_file():
+                return self.public(state)
+            folder = self.folder(task_id)/('caption-preview-'+edit['id']); folder.mkdir(exist_ok=True)
+            request, result = folder/'request.json', folder/'result.json'
+            _atomic_json(request, {'action':'caption-preview','output_dir':str(folder),
+                                  'plan':json.loads(Path(edit['plan_path']).read_text(encoding='utf-8'))})
+            process = subprocess.run([str(self.settings.auto_capcut_python),'-X','utf8','-m','auto_capcut.studio_runner',
+                                      '--request',str(request),'--result',str(result)],cwd=self.settings.auto_capcut_root,
+                                     capture_output=True,timeout=120,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            output = json.loads(result.read_text(encoding='utf-8')) if result.is_file() else {}
+            if process.returncode or output.get('status') != 'completed':
+                raise ValueError(output.get('error','편집 미리보기를 준비하지 못했습니다. 다시 시도하거나 CapCut에서 편집하세요.'))
+            def accept(s, db):
+                next(e for e in s['edits'] if e['id']==edit['id'])['clean_preview_path']=output['clean_preview_path']
+            return self.public(self.store.change(task_id,accept))
         if action == 'check-script':
             # A read-only request; never hold the task DB lock across HTTP or
             # save/approve text merely because the user asked to inspect it.
@@ -270,13 +290,14 @@ class Studio(WorkflowMixin):
     def public(self, state):
         state = copy.deepcopy(state)
         state['source_search_retry_supported'] = True
+        state['caption_editor_supported'] = True
         if state.get("manifest_path"):
             state["sources"] = self._source_records([s["path"] for s in state["sources"]], state["manifest_path"], state["sources"])
             from .source_audit import summarize
             state['source_audit'] = summarize(state.get('source_search_manifest_path') or state['manifest_path'])
         for collection in ("scripts", "voices", "edits"):
             for item in state[collection]:
-                for field in ("path", "preview_path", "cover_path"):
+                for field in ("path", "preview_path", "cover_path", "clean_preview_path", "export_path"):
                     if item.get(field):
                         item[field.replace("_path", "") + "_url"] = self.media_url(state["id"], item[field])
                 if collection == "edits" and item.get("plan_path"):
@@ -589,7 +610,8 @@ class Studio(WorkflowMixin):
     def _revision(self, state, job):
         edit = next(e for e in state["edits"] if e["id"] == job["payload"]["edit_id"])
         plan = json.loads(Path(edit["plan_path"]).read_text(encoding="utf-8"))
-        result = self._process(state, job, "revise", {"plan": plan, "changes": job["payload"]["changes"]})
+        action = 'caption-export' if job['payload'].get('caption_only') else 'revise'
+        result = self._process(state, job, action, {"plan": plan, "changes": job["payload"]["changes"]})
         return {"id": job["id"], "script_id": edit["script_id"], "voice_id": edit["voice_id"],
                 "parent_id": edit["id"], "created": time.time(), **result}
 
@@ -627,6 +649,7 @@ class Studio(WorkflowMixin):
             feedback = state.setdefault('feedback', {})
             feedback['base_edit_id'] = result['base_edit_id']
             changes = [{k:v for k,v in c.items() if k in {'beat_id','emphasis'}} for c in result['changes'] if 'emphasis' in c]
+            if changes: feedback.pop('caption_only', None)
             by_id = {c['beat_id']:c for c in feedback.get('changes', [])}
             for c in changes: by_id.setdefault(c['beat_id'], {}).update(c)
             if by_id: feedback['changes'] = list(by_id.values())

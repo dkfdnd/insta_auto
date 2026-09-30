@@ -13,6 +13,7 @@
   const panels=new Map(), memories=new Map();
   let selecting=false;
   const description=t=>window.StudioBoard.describe(t);
+  const workspaceTab=value=>['original','script','voice'].includes(value)?'script':['edit','results','export'].includes(value)?'edit':value;
   function updateDrawerHeader(){
     const t=current();if(!t)return;
     $('#drawer-title').textContent=window.StudioBoard.title(t);
@@ -26,28 +27,29 @@
     const empty=d.stage==='sources'&&!t.sources.length;
     const title=d.complete?'완성 영상을 확인하세요':empty?'영상만 넣으면, 다음 단계로':d.stage==='sources'?'준비된 영상으로 이어가세요':d.stage==='script'?'우리만의 대본을 다듬을 차례':d.stage==='voice'?'목소리와 발음을 확인할 차례':d.stage==='edit'?'장면과 자막을 완성할 차례':d.stage==='export'?'완성 영상을 준비하고 있어요':'원본 내용을 확인하고 있어요';
     const action=empty?'＋ 직접 영상 넣기':d.complete?'완성 영상 보기 →':d.stage==='sources'?'영상 선택하고 이어가기 →':'현재 단계 작업하기 →';
-    const html=`<div class="hero-stage-ring" style="--stage-angle:${d.done/6*360}deg" aria-label="6단계 중 ${d.done}단계 완료"><span><strong>${d.complete?6:d.currentIndex+1}</strong><small>/ 6 단계</small></span></div><div class="hero-copy"><div class="hero-state"><span class="hero-status ${d.state}">${d.state==='running'?'<i class="activity-dot" aria-hidden="true"></i>':''}${esc(d.label)}</span><span>${esc(d.stageName)}</span></div><h3>${title}</h3><p role="status">${esc(d.message)}</p><div class="hero-actions"><button class="primary" data-focus-current>${action}</button>${t.error&&!empty?'<button class="secondary" data-action="retry">다시 시도</button>':''}<span class="hero-next">${next?'다음 → '+esc(next.label):'마지막 단계 · 완성본 확인'}</span></div></div><details class="hero-controls"><summary aria-label="제작 제어">⋯</summary>${t.automation&&t.status!=='completed'?`<button class="secondary" data-action="${t.automation.active?'pause-auto':'resume-auto'}">${t.automation.active?'자동 진행 중지':'자동 진행 재개'}</button>`:'<span>제작 완료</span>'}</details>`;
+    const html=`<div class="hero-stage-ring" style="--stage-angle:${d.done/6*360}deg" aria-label="6단계 중 ${d.done}단계 완료"><span><strong>${d.complete?'✓':{sources:1,script:2,edit:3}[workspaceTab(d.tab)]}</strong><small>${d.complete?'제작 완료':'/ 3 작업'}</small></span></div><div class="hero-copy"><div class="hero-state"><span class="hero-status ${d.state}">${d.state==='running'?'<i class="activity-dot" aria-hidden="true"></i>':''}${esc(d.label)}</span><span>${esc(d.stageName)}</span></div><h3>${title}</h3><p role="status">${esc(d.message)}</p><div class="hero-actions"><button class="primary" data-focus-current>${action}</button>${t.error&&!empty?'<button class="secondary" data-action="retry">다시 시도</button>':''}<span class="hero-next">${next?'다음 → '+esc(next.label):'마지막 단계 · 완성본 확인'}</span></div></div><details class="hero-controls"><summary aria-label="제작 제어">⋯</summary>${t.automation&&t.status!=='completed'?`<button class="secondary" data-action="${t.automation.active?'pause-auto':'resume-auto'}">${t.automation.active?'자동 진행 중지':'자동 진행 재개'}</button>`:'<span>제작 완료</span>'}</details>`;
     const hero=$('#work-hero');
     if(hero._markup!==html){const open=hero.querySelector('.hero-controls')?.open;hero.innerHTML=html;hero._markup=html;if(open)hero.querySelector('.hero-controls').open=true;}
   }
   function applyDetailTab(panel=$('#detail')){
     if(panel!==$('#detail'))return;
+    tab=workspaceTab(tab);
     const stage=description(current());
     $('#detail-tabs').querySelectorAll('button').forEach((b,i)=>{
       b.setAttribute('aria-pressed',String(b.dataset.detailTab===tab));
-      b.dataset.state=stage.steps[i].state;
-      b.dataset.activity=stage.steps[i].current?stage.state:'';
-      if(stage.steps[i].current)b.setAttribute('aria-current','step');else b.removeAttribute('aria-current');
-      const status=b.querySelector('.glass-step-status');if(status){status.textContent=stage.steps[i].current?stage.label:stage.steps[i].state==='done'?'완료':'예정';}
+      const steps=stage.steps.filter(s=>workspaceTab(s.tab)===b.dataset.detailTab),active=steps.some(s=>s.current),done=steps.every(s=>s.state==='done');
+      b.dataset.state=active?'current':done?'done':'pending';b.dataset.activity=active?stage.state:'';
+      if(active)b.setAttribute('aria-current','step');else b.removeAttribute('aria-current');
+      const status=b.querySelector('.glass-step-status');if(status)status.textContent=active?stage.label:done?'완료':'예정';
     });
     $('#work-drawer').dataset.view=tab;
-    panel.querySelectorAll('[data-pf-section], [data-legacy-section]').forEach(el=>{el.hidden=(el.dataset.pfSection||el.dataset.legacySection)!==tab;});
+    panel.querySelectorAll('[data-pf-section], [data-legacy-section]').forEach(el=>{el.hidden=workspaceTab(el.dataset.pfSection||el.dataset.legacySection)!==tab;});
     if(current()?.automation?.protocol===2){
       const summary=panel.querySelector('.pf-summary'), editor=panel.querySelector('.pf-editor');
-      if(summary)summary.hidden=tab!=='results';if(editor)editor.hidden=tab==='results';
-      const actionbar=panel.querySelector('.pf-actionbar');if(actionbar)actionbar.hidden=tab==='original'||tab==='sources'&&['sources','transcript'].includes(description(current()).stage);
+      if(summary)summary.hidden=tab!=='edit';if(editor)editor.hidden=false;
+      const actionbar=panel.querySelector('.pf-actionbar');if(actionbar)actionbar.hidden=tab==='edit'||tab==='sources'&&['sources','transcript'].includes(description(current()).stage);
     }
-    const flow=panel.querySelector('#legacy-flow');if(flow)flow.hidden=tab!=='results';
+    const flow=panel.querySelector('#legacy-flow');if(flow)flow.hidden=tab!=='edit';
     panel.querySelectorAll('video,audio').forEach(m=>{if(m.closest('[hidden]'))m.pause();});
   }
   function rememberPanel(){

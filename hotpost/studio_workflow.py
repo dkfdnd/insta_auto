@@ -175,18 +175,49 @@ class WorkflowMixin:
         if not enabled(state):
             return None
         actions = {'save-feedback', 'save-script', 'restore-script', 'apply-proposal', 'regenerate-voice',
-                   'revise-edit', 'request-edit', 'reproduce', 'discard-feedback', 'select-candidate', 'discard-edit-feedback'}
+                   'revise-edit', 'request-edit', 'reproduce', 'discard-feedback', 'select-candidate', 'discard-edit-feedback',
+                   'save-captions', 'export-edit'}
         if action not in actions:
             return None
         def change(s, db):
             if data.get('feedback_revision') is not None and data['feedback_revision'] != s.get('feedback_revision',0):
                 raise Conflict('다른 화면에서 피드백이 변경되었습니다. 최신 내용을 확인한 뒤 다시 저장하세요.')
             feedback = s.setdefault('feedback', {})
+            if action in {'save-captions','export-edit'}:
+                edit = next((e for e in s['edits'] if e['id']==data.get('edit_id')), None)
+                if not edit or edit['id'] != s.get('edit_id'):
+                    raise Conflict('새 편집 영상이 준비되었습니다. 이전 영상의 수정 내용을 보관한 뒤 새 영상을 확인하세요.')
+                if set(feedback)-{'changes','base_edit_id','caption_only'}:
+                    raise Conflict('소스·대본·음성의 저장된 변경사항을 먼저 반영하거나 초기화한 뒤 자막을 편집하세요.')
+                if feedback.get('base_edit_id',edit['id']) != edit['id']:
+                    raise Conflict('이전 버전에 저장한 자막 수정이 있습니다. 보관 내용을 확인하고 구간 수정을 초기화한 뒤 새 영상을 편집하세요.')
+                if any(set(c)-{'beat_id','text','start','end'} for c in feedback.get('changes',[])):
+                    raise Conflict('저장된 장면·강조 수정이 있습니다. 먼저 반영하거나 구간 수정을 초기화하세요.')
+                changes = data.get('changes')
+                if not isinstance(changes,list) or any(not isinstance(c,dict) or not isinstance(c.get('beat_id'),str) or set(c)-{'beat_id','text','start','end'} for c in changes):
+                    raise ValueError('자막 문구와 시간만 수정할 수 있습니다.')
+                if len({c['beat_id'] for c in changes}) != len(changes): raise ValueError('중복된 자막 구간입니다.')
+                validate_edit_feedback(edit,changes)
+                plan=json.loads(Path(edit['plan_path']).read_text(encoding='utf-8'))
+                cues={c['id']:c for c in plan['cues']}; beats={b['id']:b for b in plan['beats']}
+                changes=[c for c in changes if any(c[k]!=cues[beats[c['beat_id']]['cue_id']][k] for k in ('text','start','end') if k in c)]
+                if action=='export-edit':
+                    if db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status IN ('queued','running') AND kind NOT IN ('refresh_sources','proposal','suggest_edit')",(task_id,)).fetchone():
+                        raise Conflict('현재 제작 또는 내보내기가 끝나면 다시 내보낼 수 있습니다.')
+                    if not changes and not edit.get('export_path'):
+                        changes=[{'beat_id':b['id'],**{k:cues[b['cue_id']][k] for k in ('text','start','end')}} for b in plan['beats']]
+                for k in ('changes','base_edit_id','caption_only'): feedback.pop(k,None)
+                if changes: feedback.update(changes=copy.deepcopy(changes),base_edit_id=edit['id'],caption_only=True)
+                if action=='save-captions' or not changes:
+                    s['feedback_revision']=s.get('feedback_revision',0)+1
+                    self.store.event(db,task_id,action,{})
+                    return
             if action == 'discard-feedback':
                 s['feedback'] = {}
             elif action == 'discard-edit-feedback':
                 feedback.pop('changes', None)
                 feedback.pop('base_edit_id', None)
+                feedback.pop('caption_only', None)
             elif action in {'save-script', 'restore-script', 'apply-proposal', 'select-candidate'}:
                 if action == 'save-script': text = str(data.get('text', '')).strip()
                 elif action == 'restore-script': text = next(v['text'] for v in s['scripts'] if v['id'] == data['script_id'])
@@ -220,6 +251,7 @@ class WorkflowMixin:
                     feedback['source_ids'] = list(dict.fromkeys(ids))
                 if action == 'regenerate-voice': feedback['regenerate_voice'] = True
             elif action == 'revise-edit':
+                feedback.pop('caption_only', None)
                 edit = next(e for e in s['edits'] if e['id'] == data['edit_id'])
                 if s.get('edit_id') and edit['id'] != s['edit_id']:
                     raise Conflict('새 편집 영상이 준비되었습니다. 입력 내용을 보관한 뒤 새로고침하여 새 영상의 구간을 확인하세요.')
@@ -239,7 +271,7 @@ class WorkflowMixin:
                 request = str(data.get('request', '')).strip()
                 if not request: raise ValueError('수정 요청을 입력하세요.')
                 self.store.enqueue(db, task_id, 'suggest_edit', {**data, 'feedback_hash': self.feedback_hash(feedback)}, uid('suggest:'))
-            elif action == 'reproduce':
+            if action in {'reproduce','export-edit'}:
                 if s.get('pending_reproduction'): raise Conflict('이미 재제작이 대기 중입니다.')
                 if not feedback: raise ValueError('반영할 변경사항을 먼저 저장하세요.')
                 if feedback.get('changes') and any(k in feedback for k in ('script_text', 'speed', 'pronunciations', 'regenerate_voice', 'source_ids')):
@@ -290,8 +322,8 @@ class WorkflowMixin:
         if feedback.get('changes') and not any(k in feedback for k in ('script_text','pronunciations','speed','regenerate_voice','source_ids')):
             edit = next(e for e in s['edits'] if e['id'] == feedback['base_edit_id'])
             self.store.enqueue(db, s['id'], 'revision', {'edit_id':edit['id'], 'script_id':edit['script_id'],
-                'voice_id':edit['voice_id'], 'changes':feedback['changes']}, 'revision:'+run['id'])
-            s.update(status='editing', message='저장한 장면·자막 수정으로 새 버전 제작 중')
+                'voice_id':edit['voice_id'], 'changes':feedback['changes'], 'caption_only':bool(feedback.get('caption_only'))}, 'revision:'+run['id'])
+            s.update(status='editing', message='수정한 자막으로 MP4 내보내기 중' if feedback.get('caption_only') else '저장한 장면·자막 수정으로 새 버전 제작 중')
         else:
             self._advance_auto(s, db)
 
@@ -323,7 +355,7 @@ class WorkflowMixin:
             s['automation']['voice_selection'] = {'mode':'automatic','voice_id':voice['id']}
             payload = dict(script_id=script['id'], voice_id=voice['id'], source_ids=run['inputs'].get('source_ids'),
                            changes=run['inputs'].get('changes',[]), base_edit_id=run['inputs'].get('base_edit_id'))
-        elif not edit.get('draft_path'):
+        elif not edit.get('draft_path') and not edit.get('export_verified'):
             stage, status, message, payload = 'register', 'registering', 'CapCut 프로젝트 등록 중', {'edit_id':edit['id'], 'launch':False}
         elif not edit.get('export_path'):
             stage, status, message, payload = 'export', 'exporting', 'CapCut 최종 MP4 내보내기 중', {'edit_id':edit['id']}
@@ -331,7 +363,7 @@ class WorkflowMixin:
             run.update(status='completed', completed=time.time())
             s['latest_completed_run_id'] = run['id']
             s['automation'].update(stage='completed', completed_at=time.time())
-            s.update(status='completed', message='CapCut 최종 영상 내보내기 완료', progress=100, error='')
+            s.update(status='completed', message='수정한 자막으로 MP4 내보내기 완료' if edit.get('export_kind')=='web_captions' else 'CapCut 최종 영상 내보내기 완료', progress=100, error='')
             return
         self.store.enqueue(db, s['id'], stage, payload, stage+':'+key)
         if s['automation'].get('stage') != stage:
