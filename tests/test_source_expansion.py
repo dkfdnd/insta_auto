@@ -120,6 +120,7 @@ def test_prepare_transcribes_before_source_search(tmp_path, monkeypatch):
     calls = []
     def transcribe(*_):
         calls.append('transcript')
+        (tmp_path / 'transcript.json').write_text(json.dumps({'speech': [{'text': '실제 원본 발화'}]}), encoding='utf-8')
         return {'json_path': str(tmp_path / 'transcript.json')}
     def find(*_):
         calls.append('sources')

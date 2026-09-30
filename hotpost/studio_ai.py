@@ -35,6 +35,10 @@ def propose_script(settings, state, text, request):
             "experience, faithful user instructions and natural Korean. The current script is NOT evidence. "
             "Source narrator claims are also unverified; reformulate them as suggestions when necessary. "
             "Reject new time/cost savings, comparative claims, ingredients or quantities not supported by supplied research. "
+            "Distinguish factual claims from rhetorical questions, ordinary framing and suggestions: "
+            "phrases such as 저녁 준비 or 조리 공간부터 살펴보세요 do not assert a product benefit. "
+            "Removing an unsupported claim or product name requires no research evidence. "
+            "An empty research object is not itself a reason to reject a proposal containing only questions or suggestions. "
             "Return {passed:boolean,issues:[string]}.",
             {**evidence, "proposal": result})
         if review.get("passed") is True and review.get("issues") == []:

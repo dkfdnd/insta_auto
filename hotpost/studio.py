@@ -284,6 +284,7 @@ class Studio(WorkflowMixin):
             try:
                 transcript = json.loads(Path(state['transcript_path']).read_text(encoding='utf-8'))
                 state['original_evidence'] = {key: transcript.get(key, []) for key in ('speech', 'screen_text')}
+                state['original_evidence']['speech_unavailable'] = transcript.get('methods', {}).get('speech') == 'unavailable'
             except (OSError, ValueError):
                 pass
         reference = Path(state.get('reference_video') or '')
@@ -387,12 +388,14 @@ class Studio(WorkflowMixin):
                 continue
         if transcript is None:
             transcript = Path(extract_transcript(self.settings, code, progress)["json_path"])
-        if enabled(state):
-            original = '\n'.join(v.get('text', '') for v in json.loads(transcript.read_text(encoding='utf-8')).get('speech', []))
-            def record_transcript(s, db):
-                s.update(original_text=original, transcript_path=str(transcript))
+        original = '\n'.join(v.get('text', '') for v in json.loads(transcript.read_text(encoding='utf-8')).get('speech', []))
+        def record_transcript(s, db):
+            s.update(original_text=original, transcript_path=str(transcript), reference_video=str(transcript.parent / 'reference.mp4'))
+            if enabled(s):
                 snapshot(s)
-            self.store.change(state['id'], record_transcript)
+        self.store.change(state['id'], record_transcript)
+        if not original.strip():
+            raise ValueError('원본 발화를 추출하지 못했습니다. 원본 영상의 음성과 전사 도구 설치 상태를 확인한 뒤 중단 단계를 재시도하세요. 화면 글자는 음성 대본으로 사용하지 않습니다.')
         manifests = sorted(self.settings.source_dir.glob(f"{code}-*/manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         # User uploads are production assets, not another search request. Keep
         # their IDs/provenance so selected sources remain selected downstream.

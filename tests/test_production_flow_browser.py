@@ -173,6 +173,19 @@ def test_ai_uses_visible_unsaved_script_and_proposal_arrives_without_losing_it(f
     assert page.locator('[data-field=script]').input_value()=='AI가 고친 대본'
 
 
+def test_ai_status_updates_while_unsaved_input_survives(flow_page):
+    page=flow_page;setup_editor(page)
+    page.locator('[data-field=script]').fill('보존해야 할 사용자 입력')
+    page.evaluate("""()=>{task.jobs.unshift({id:'ai1',kind:'proposal',status:'running'});task.revision++;draw();}""")
+    status=page.locator('[data-ai-status=proposal]')
+    assert '준비하고 있어요' in status.inner_text()
+    assert page.locator('[data-pf=propose-script]').is_disabled()
+    page.evaluate("""()=>{task.jobs[0].status='failed';task.jobs[0].error='요청을 구체화하세요';task.revision++;draw();}""")
+    assert '요청을 구체화하세요' in status.inner_text()
+    assert not page.locator('[data-pf=propose-script]').is_disabled()
+    assert page.locator('[data-field=script]').input_value()=='보존해야 할 사용자 입력'
+
+
 def test_typing_during_save_keeps_new_input_and_other_sections(flow_page):
     page=flow_page;setup_editor(page)
     page.locator('[data-field=script]').fill('첫 번째 저장 요청')

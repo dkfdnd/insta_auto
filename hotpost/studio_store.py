@@ -167,6 +167,15 @@ class StudioStore:
             if row is None:
                 return None
             db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (time.time(), row["id"]))
+            state = self.get(row['task_id'], db)
+            stages = {'prepare':('preparing','자료 준비'), 'rewrite':('rewriting','대본 재가공'),
+                      'voice':('voice_generating','음성 제작'), 'edit':('editing','장면·자막 편집'),
+                      'revision':('editing','구간 수정'), 'register':('registering','프로젝트 등록'),
+                      'export':('exporting','최종 영상 내보내기')}
+            if state['status'] in {'retry_wait','waiting_capcut'} and row['kind'] in stages:
+                status, label = stages[row['kind']]
+                state.update(status=status, error='', message=label+' 다시 진행 중')
+                self.save(db, state)
             result = dict(row)
             result["payload"] = json.loads(result["payload"])
             result["checkpoint"] = json.loads(result["checkpoint"])

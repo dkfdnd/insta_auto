@@ -188,6 +188,35 @@ def test_capcut_wait_does_not_consume_retry_and_survives_recovery(prepared):
     assert studio.store.get(task)['status']=='retry_wait'
 
 
+def test_claim_retry_restores_running_task_state(prepared):
+    studio,task=prepared
+    job=studio.store.claim()
+    studio.store.defer(job,'connection timeout',0)
+    assert studio.store.get(task)['status']=='retry_wait'
+    reclaimed=studio.store.claim()
+    assert reclaimed['id']==job['id']
+    assert studio.store.get(task)['status']=='voice_generating'
+    assert '다시 진행 중' in studio.store.get(task)['message']
+
+
+def test_failed_transcription_keeps_reference_and_stops_before_source_search(tmp_path,monkeypatch):
+    studio=Studio(Settings(data_dir=tmp_path),workers=False)
+    state,_=studio.store.create('speech-failure','발화 추출 실패',{'protocol':2,'active':True,'stage':'prepare'})
+    folder=studio.settings.transcript_dir/'speech-failure-cache';folder.mkdir(parents=True)
+    transcript=folder/'transcript.json';reference=folder/'reference.mp4';reference.write_bytes(b'video')
+    transcript.write_text(json.dumps({'speech':[],'screen_text':[{'text':'화면 글자'}],'methods':{'speech':'unavailable'}}),encoding='utf-8')
+    monkeypatch.setattr('hotpost.transcript.extract_transcript',lambda *a:{'json_path':str(transcript)})
+    def forbidden(*args,**kwargs):raise AssertionError('Do not search sources when speech extraction failed')
+    monkeypatch.setattr('hotpost.source_finder.find_sources',forbidden)
+    with pytest.raises(ValueError,match='전사 도구 설치'):
+        studio._prepare(state,studio.store.claim())
+    actual=studio.public(studio.store.get(state['id']))
+    assert actual['original_text']==''
+    assert actual['reference_url']
+    assert actual['original_evidence']['speech_unavailable']
+    assert actual['original_evidence']['screen_text']==[{'text':'화면 글자'}]
+
+
 def test_error_classification():
     assert transient(TimeoutError()) and transient(RuntimeError('HTTP 503'))
     assert not transient(ValueError('대본 검증 실패'))
