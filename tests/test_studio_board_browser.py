@@ -248,7 +248,7 @@ def test_attention_actions_and_reduced_motion(studio_page):
     assert page.locator('[data-work-card="voice"] .activity-dot').evaluate('(e)=>getComputedStyle(e).animationName')=='none'
 
 
-def test_numbered_progress_and_vertical_journey(studio_page):
+def test_numbered_progress_and_six_stage_navigation(studio_page):
     page,tasks=studio_page
     card=page.locator('[data-work-card="voice"]')
     assert card.locator('.card-phase').inner_text()=='4 / 6 단계'
@@ -259,7 +259,7 @@ def test_numbered_progress_and_vertical_journey(studio_page):
     card.locator('h3').click()
     assert page.locator('#journey-current').inner_text()=='4 / 6 단계'
     assert page.locator('[data-journey="voice"]').get_attribute('aria-current')=='step'
-    page.locator('[data-journey="script"] button').click()
+    page.locator('#detail-tabs [data-detail-tab=script]').click()
     assert page.locator('[data-field="script"]').is_visible()
     tasks[2].update(status='editing',revision=2)
     page.evaluate('refreshStudio()')
@@ -276,8 +276,10 @@ def test_mobile_progress_expansion_and_stage_navigation(studio_page):
     page.wait_for_function('document.querySelector("#work-list").scrollLeft>0')
     page.locator('[data-work="voice"]').click()
     assert page.locator('#journey-panel').get_attribute('open') is None
-    page.locator('#journey-panel > summary').click()
-    assert page.locator('[data-journey="voice"]').is_visible()
+    assert page.locator('#detail-tabs button').count()==6
+    assert page.locator('#detail-tabs [data-detail-tab=voice]').get_attribute('aria-current')=='step'
+    page.locator('#detail-tabs [data-detail-tab=original]').click()
+    assert page.locator('[data-field=original]').is_visible()
     assert page.locator('#work-drawer').bounding_box()['width']<=390
 
 
@@ -349,7 +351,7 @@ def test_mobile_source_hero_clear_actions_and_no_internal_identifiers(studio_pag
     assert box['y']+box['height']<=844
     assert page.locator('.pf-actionbar').is_hidden()
     assert page.locator('#work-drawer').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
-    assert page.locator('#work-hero').evaluate('(el)=>getComputedStyle(el).getPropertyValue("--accent").trim()')=='#e8552d'
+    assert page.locator('[data-upload-open]').bounding_box()['height']>=44
 
 
 def test_real_video_upload_http_and_resume_in_isolated_studio(tmp_path,monkeypatch):
@@ -402,3 +404,21 @@ def test_real_video_upload_http_and_resume_in_isolated_studio(tmp_path,monkeypat
                 assert [j['kind'] for j in studio.store.jobs(state['id']) if j['status']=='queued']==['prepare']
             finally:browser.close()
     finally:server.shutdown();server.server_close()
+
+
+def test_original_and_script_are_separate_and_drafts_survive_navigation(studio_page):
+    page,_=studio_page
+    page.locator('[data-work="voice"]').click()
+    page.locator('#detail-tabs [data-detail-tab=original]').click()
+    page.locator('[data-field=original]').fill('확인 중인 원본 발화')
+    assert not page.locator('.pf-actionbar').is_visible()
+    page.locator('#detail-tabs [data-detail-tab=script]').click()
+    assert not page.locator('[data-field=original]').is_visible()
+    page.locator('[data-field=script]').fill('새로운 제작 대본 초안')
+    page.locator('#detail-tabs [data-detail-tab=original]').click()
+    assert page.locator('[data-field=original]').input_value()=='확인 중인 원본 발화'
+    page.evaluate('refreshStudio()')
+    page.locator('#detail-tabs [data-detail-tab=script]').click()
+    assert page.locator('[data-field=script]').input_value()=='새로운 제작 대본 초안'
+    assert page.locator('#detail-tabs [aria-current=step]').get_attribute('data-detail-tab')=='voice'
+    assert page.locator('#detail-tabs [aria-pressed=true]').get_attribute('data-detail-tab')=='script'

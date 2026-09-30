@@ -209,7 +209,8 @@ def test_evidence_separation_stale_voice_and_result_review_survive_poll(flow_pag
         task.pipeline[0].video_url='/completed.mp4';task.revision++;draw();
     }''')
     assert '수정사항 반영 전 음성' in page.locator('.pf-audio-card').inner_text()
-    page.locator('.pf-original>summary').click()
+    assert page.locator('[data-pf-section=original]').is_visible()
+    assert page.locator('.pf-original').evaluate('(e)=>e.open')
     assert page.locator('[data-field=original]').input_value()=='교정한 원본 발화'
     assert '화면 속 글자 · 발화와 별도 자료' in page.locator('.pf-original').inner_text()
     page.locator('[data-review-check=speech]').check()

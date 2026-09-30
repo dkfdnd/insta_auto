@@ -19,7 +19,7 @@
     $('#drawer-code').textContent='터진게시물 → 우리 영상 제작';
     const d=description(t);
     $('#drawer-status').textContent=`${d.phase} · ${d.stageName} · ${d.label}`;
-    updateJourney(t);$('#journey-current').textContent=d.phase;renderHero(t,d);
+    updateJourney(t);applyDetailTab();$('#journey-current').textContent=d.phase;renderHero(t,d);
   }
   function renderHero(t,d){
     const next=d.steps.find((s,i)=>i>d.currentIndex&&s.state!=='done');
@@ -32,12 +32,20 @@
   }
   function applyDetailTab(panel=$('#detail')){
     if(panel!==$('#detail'))return;
-    $('#detail-tabs').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.detailTab===tab)));
+    const stage=description(current());
+    $('#detail-tabs').querySelectorAll('button').forEach((b,i)=>{
+      b.setAttribute('aria-pressed',String(b.dataset.detailTab===tab));
+      b.dataset.state=stage.steps[i].state;
+      b.dataset.activity=stage.steps[i].current?stage.state:'';
+      if(stage.steps[i].current)b.setAttribute('aria-current','step');else b.removeAttribute('aria-current');
+      const status=b.querySelector('.glass-step-status');if(status){status.textContent=stage.steps[i].current?stage.label:stage.steps[i].state==='done'?'완료':'예정';}
+    });
+    $('#work-drawer').dataset.view=tab;
     panel.querySelectorAll('[data-pf-section], [data-legacy-section]').forEach(el=>{el.hidden=(el.dataset.pfSection||el.dataset.legacySection)!==tab;});
     if(current()?.automation?.protocol===2){
       const summary=panel.querySelector('.pf-summary'), editor=panel.querySelector('.pf-editor');
       if(summary)summary.hidden=tab!=='results';if(editor)editor.hidden=tab==='results';
-      const actionbar=panel.querySelector('.pf-actionbar');if(actionbar)actionbar.hidden=tab==='sources'&&['sources','transcript'].includes(description(current()).stage);
+      const actionbar=panel.querySelector('.pf-actionbar');if(actionbar)actionbar.hidden=tab==='original'||tab==='sources'&&['sources','transcript'].includes(description(current()).stage);
     }
     const flow=panel.querySelector('#legacy-flow');if(flow)flow.hidden=tab!=='results';
     panel.querySelectorAll('video,audio').forEach(m=>{if(m.closest('[hidden]'))m.pause();});
@@ -104,7 +112,7 @@
   }
   function renderDetail(){
     const t=current();const panel=$('#detail');panel.hidden=!t;if(!t)return;
-    if(t.automation?.protocol===2){lastRevision=t.revision;window.ProductionFlow.mount(panel,t,{editor:true,onUpdate:updateTask,onRender:()=>applyDetailTab(panel),onTab:next=>{tab=next;applyDetailTab(panel);}});applyDetailTab(panel);return;}
+    if(t.automation?.protocol===2){lastRevision=t.revision;window.ProductionFlow.mount(panel,t,{editor:true,onUpdate:updateTask,onRender:()=>applyDetailTab(panel),onTab:next=>{tab=next;applyDetailTab(panel);$('#drawer-scroll').scrollTop=0;}});applyDetailTab(panel);return;}
     panel._legacyEditing=false;
     const openDetails=Array.from(panel.querySelectorAll('details[open]')).map(d=>d.querySelector('summary')?.textContent);
     lastRevision=t.revision;
@@ -114,7 +122,7 @@
     ${t.error?`<div class="notice error">${esc(window.StudioBoard.message(t.error))} <button class="quiet" data-action="retry">중단 단계부터 재시도</button></div>`:''}
     <div id="legacy-flow"></div><div data-legacy-section="results">${automationPanel(t)}</div>
     <div data-legacy-section="sources"><div class="panel"><h3>직접 영상 넣기</h3><div data-upload-widget></div><button class="primary" data-action="use-sources" ${t.sources.length&&['sources','transcript'].includes(description(t).stage)?'':'disabled'}>보유 영상으로 제작 이어가기 →</button></div>${sourceSearchPanel(t)}<div class="panel"><h3>확보한 소스 ${t.sources.length}개</h3><div class="source-strip">${t.sources.map(src=>`<video src="${esc(src.url)}" controls preload="none"></video>`).join('')}</div></div></div>
-    <div data-legacy-section="script">${scriptPanel(t)}</div><div data-legacy-section="voice">${voicePanel(t)}</div><div data-legacy-section="edit">${editPanel(t,selectedEdit)}</div>`;
+    <div data-legacy-section="original" class="panel">${window.ProductionFlow.originalPanel(t,true).replace('data-pf="save-original"','data-action="save-original"')}</div><div data-legacy-section="script">${scriptPanel(t)}</div><div data-legacy-section="voice">${voicePanel(t)}</div><div data-legacy-section="edit">${editPanel(t,selectedEdit)}</div>`;
     window.ProductionFlow.mount($('#legacy-flow'),t,{onUpdate:updateTask});
     window.SourceUpload.bind(panel,t,result=>{updateTask(result);},()=>{panel._legacyEditing=false;renderDetail();});
     panel.querySelectorAll('details').forEach(d=>{if(openDetails.includes(d.querySelector('summary')?.textContent))d.open=true;});
@@ -139,7 +147,7 @@
     const s=revision(t,'scripts',t.script_id);
     if(!s)return `<div class="panel pending"><span class="spinner"></span><h3>자료와 추천 대본을 준비하고 있어요</h3>자료 확보가 완료되면 여기에서 대본을 검토할 수 있습니다.</div>`;
     const proposals=t.proposals.filter(p=>p.script_id===s.id);
-    return `<div class="detail-grid"><div class="panel"><h3>원본과 참고 자료</h3><p class="muted">원본의 매력을 참고하되 새로운 문장으로 구성합니다.</p>${window.ProductionFlow.originalPanel(t).replace('data-pf="save-original"','data-action="save-original"')}<div class="source-strip">${t.sources.map((src,i)=>`<video src="${esc(src.url)}#t=1" controls preload="metadata" title="소스 ${i+1}"></video>`).join('')}</div><a class="muted" href="https://www.instagram.com/p/${encodeURIComponent(t.shortcode)}/" target="_blank" rel="noopener">원본 게시물 보기 ↗</a><div class="subsection"><h3>대본 버전</h3><div class="version-list">${t.scripts.slice().reverse().map((v,i)=>`<div class="version-item"><div>버전 ${t.scripts.length-i} ${v.id===s.id?'<span class="pill draft_review">현재</span>':''}<br><small>${date(v.created)} · ${{manual:'직접 수정',recommended:'AI 추천',automatic_script_auto:'자동 선택 대본',ai_proposal:'AI 수정',restored:'이전 버전 복원'}[v.origin]||v.origin}</small></div><button data-restore="${v.id}" ${v.id===s.id?'disabled':''}>복원</button></div>`).join('')}</div></div></div>
+    return `<div class="detail-grid"><div class="panel"><h3>원본과 참고 자료</h3><p class="muted">원본의 매력을 참고하되 새로운 문장으로 구성합니다.</p><p>원본 발화는 2단계에서 확인하고 교정할 수 있어요.</p><div class="source-strip">${t.sources.map((src,i)=>`<video src="${esc(src.url)}#t=1" controls preload="metadata" title="소스 ${i+1}"></video>`).join('')}</div><a class="muted" href="https://www.instagram.com/p/${encodeURIComponent(t.shortcode)}/" target="_blank" rel="noopener">원본 게시물 보기 ↗</a><div class="subsection"><h3>대본 버전</h3><div class="version-list">${t.scripts.slice().reverse().map((v,i)=>`<div class="version-item"><div>버전 ${t.scripts.length-i} ${v.id===s.id?'<span class="pill draft_review">현재</span>':''}<br><small>${date(v.created)} · ${{manual:'직접 수정',recommended:'AI 추천',automatic_script_auto:'자동 선택 대본',ai_proposal:'AI 수정',restored:'이전 버전 복원'}[v.origin]||v.origin}</small></div><button data-restore="${v.id}" ${v.id===s.id?'disabled':''}>복원</button></div>`).join('')}</div></div></div>
     <div class="panel"><div class="row"><h3>추천 대본</h3><span class="pill ${t.approved_script_id===s.id?'draft_review':'script_review'}">${t.approved_script_id===s.id?(t.automation?.script_selection?.script_id===s.id?'자동 선택':'승인 완료'):'검토 대기'}</span></div><p class="muted">대본을 수정하면 음성과 편집을 다시 만들어야 합니다. 이전 대본은 버전 목록에 보존됩니다.</p><textarea id="script-editor" aria-label="대본 편집">${esc(s.text)}</textarea><div class="editor-footer"><small id="save-status">저장됨 · ${s.text.length}자</small><button class="quiet" data-action="save-script">저장</button><button class="primary" data-action="approve-script" ${t.approved_script_id===s.id?'disabled':''}>대본 승인 · 음성 생성 →</button></div>
     <button class="quiet" data-action="check-script">현재 문장 검사</button><div id="script-review" aria-live="polite"></div>
     <div class="subsection"><h3>AI와 함께 다듬기</h3><p class="muted">수정안을 비교한 뒤 적용합니다. 직접 고친 대본은 보존됩니다.</p><textarea class="request" id="script-request" placeholder="예: 첫 문장을 더 궁금하게, 설명은 자연스러운 말투로 바꿔줘" aria-label="대본 AI 수정 요청"></textarea><div class="editor-footer"><small>${t.jobs.some(j=>j.kind==='proposal'&&['queued','running'].includes(j.status))?'AI가 수정안을 준비 중입니다…':''}</small><button class="secondary" data-action="propose-script">수정안 만들기</button></div></div>
@@ -176,7 +184,7 @@
     if(el.id==='close-work'){await closeWork();return;}
     if(el.id==='expand-work'){$('#work-drawer').classList.toggle('expanded');const full=$('#work-drawer').classList.contains('expanded');el.textContent=full?'패널로 축소':'전체화면';el.setAttribute('aria-pressed',String(full));syncDrawerMode();return;}
     if(el.dataset.filter){filter=el.dataset.filter;$('#filters').querySelectorAll('button').forEach(b=>b.classList.toggle('selected',b===el));renderList();return;}
-    if(el.dataset.detailTab||el.dataset.tab){if(dirty)await saveScript();tab=el.dataset.detailTab||el.dataset.tab;applyDetailTab();return;}
+    if(el.dataset.detailTab||el.dataset.tab){if(dirty)await saveScript();tab=el.dataset.detailTab||el.dataset.tab;applyDetailTab();$('#drawer-scroll').scrollTop=0;return;}
     if(el.dataset.referenceSeek){const video=$('[data-reference-preview]');if(video)video.currentTime=Number(el.dataset.referenceSeek);return;}
     if(el.dataset.seek){$('#preview-video').currentTime=Math.ceil(Number(el.dataset.seek)*30)/30+.001;}
     if(el.dataset.candidates)showCandidates(el.dataset.candidates);

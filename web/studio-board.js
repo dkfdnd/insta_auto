@@ -11,7 +11,7 @@
   ];
   const shortNames = ['소스','원문','대본','음성','편집','출력'];
   const assetKeys = ['sources','transcript','script','voice','project','export'];
-  const tabs = ['sources','script','script','voice','edit','results'];
+  const tabs = ['sources','original','script','voice','edit','results'];
   const stageOfKind = {prepare:'sources', rewrite:'script', voice:'voice', edit:'edit', revision:'edit', revise:'edit', edit_request:'edit', register:'edit', export:'export'};
   const stageOfStatus = {preparing:'sources', rewriting:'script', script_review:'script', voice_generating:'voice', voice_review:'voice', editing:'edit', draft_review:'edit', registering:'edit', exporting:'export', completed:'export'};
   const activityNames = {prepare:'자료 준비', rewrite:'대본 재가공', voice:'음성 생성', edit:'영상 편집', revision:'편집 수정', revise:'편집 수정', edit_request:'편집 수정', register:'프로젝트 등록', export:'MP4 내보내기', refresh_sources:'소스 추가 수집', proposal:'대본 수정안 생성', suggest_edit:'편집 수정안 생성'};

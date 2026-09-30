@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>제작실 · Hotpost</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"><link rel="stylesheet" href="studio.css?v=3"><link rel="stylesheet" href="studio-board.css?v=3"></head>
-<body>
+<body class="studio-glass">
 <aside class="rail"><a class="brand" href="index.html"><span>h</span> hotpost</a><div class="workspace">터진게시물에서 이어서</div>
 <nav><a href="index.html">◈ <span>터진게시물</span></a><a class="active" href="studio.html">▣ <span>제작실</span><i id="rail-count">0</i></a><a href="accounts.html">◎ <span>모니터링 계정</span></a></nav>
 <button id="theme-toggle" class="studio-theme" aria-label="화면 테마 전환">☀️</button><div class="rail-note"><span class="live-dot"></span> 나의 쇼츠 작업 공간<p>검토는 차례로,<br>제작은 끊김 없이.</p></div></aside>
@@ -16,15 +16,16 @@
 <div id="toast" role="status" hidden></div>
 <aside id="work-drawer" class="work-drawer" aria-labelledby="drawer-title" hidden>
 <header class="drawer-head"><div><p id="drawer-code" class="eyebrow"></p><h2 id="drawer-title" tabindex="-1"></h2><p id="drawer-status"></p></div><div class="drawer-controls"><button id="expand-work" class="secondary" aria-pressed="false">전체화면</button><button id="close-work" class="icon" aria-label="작업 상세 닫기">×</button></div></header>
-<div class="drawer-layout"><details id="journey-panel" class="journey-panel" open><summary>제작 진행 상황 <span id="journey-current"></span></summary><div id="drawer-journey"></div></details><div class="drawer-workspace"><section id="work-hero" class="work-hero" aria-label="현재 작업과 다음 행동"></section><nav id="detail-tabs" class="detail-tabs" aria-label="상세 작업 종류"><button data-detail-tab="sources">소스</button><button data-detail-tab="script">대본</button><button data-detail-tab="voice">음성</button><button data-detail-tab="edit">편집</button><button data-detail-tab="results">결과·이력</button></nav>
+<div class="drawer-layout"><details id="journey-panel" class="journey-panel" open><summary>제작 진행 상황 <span id="journey-current"></span></summary><div id="drawer-journey"></div></details><div class="drawer-workspace"><section id="work-hero" class="work-hero" aria-label="현재 작업과 다음 행동"></section><nav id="detail-tabs" class="detail-tabs" aria-label="제작 6단계"><button data-detail-tab="sources"><span class="glass-step-number">01</span><span><strong>소스 영상</strong><small>사용할 영상</small></span><i class="glass-step-status"></i></button><button data-detail-tab="original"><span class="glass-step-number">02</span><span><strong>원본 발화</strong><small>듣고 확인</small></span><i class="glass-step-status"></i></button><button data-detail-tab="script"><span class="glass-step-number">03</span><span><strong>제작 대본</strong><small>우리 이야기</small></span><i class="glass-step-status"></i></button><button data-detail-tab="voice"><span class="glass-step-number">04</span><span><strong>음성</strong><small>속도와 발음</small></span><i class="glass-step-status"></i></button><button data-detail-tab="edit"><span class="glass-step-number">05</span><span><strong>장면 · 자막</strong><small>영상 다듬기</small></span><i class="glass-step-status"></i></button><button data-detail-tab="results"><span class="glass-step-number">06</span><span><strong>완성 · 다운로드</strong><small>검토하고 저장</small></span><i class="glass-step-status"></i></button></nav>
 <div id="drawer-scroll" class="drawer-scroll"><section id="detail" aria-label="작업 상세"></section></div></div></div>
 </aside>
 <dialog id="candidate-dialog"><div class="dialog-head"><div><div class="eyebrow">장면 고르기</div><h2>이 대사에 맞는 장면</h2></div><button id="close-candidates" class="icon" aria-label="닫기">×</button></div><p id="candidate-caption"></p><div id="candidates" class="candidates"></div></dialog>
 <dialog id="script-dialog"><div class="dialog-head"><div><div class="eyebrow">대본 비교</div><h2>변경 전후를 비교해 주세요</h2></div><button id="close-script-dialog" class="icon" aria-label="비교 닫기">×</button></div><div id="script-comparison"></div></dialog>
 <link rel="stylesheet" href="production-flow.css?v=6-downloads">
 <script src="display-settings.js?v=1"></script>
-<script src="studio-board.js?v=4"></script>
+<script src="studio-board.js?v=5"></script>
 <script src="source-upload.js?v=2"></script>
-<script src="production-flow.js?v=9-downloads"></script>
+<script src="production-flow.js?v=10-glass"></script>
 <link rel="stylesheet" href="studio-experience.css?v=2">
-<script src="studio.js?v=10-evidence"></script></body></html>
+<link rel="stylesheet" href="studio-glass.css?v=1">
+<script src="studio.js?v=11-glass"></script></body></html>
