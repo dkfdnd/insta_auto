@@ -233,3 +233,66 @@ def test_reload_keeps_old_scene_draft_separate_from_new_edit(flow_page):
     page.locator('[data-pf=discard-local-edit]').click()
     assert page.locator('[data-field=script]').input_value()=='보관할 대본'
     assert page.evaluate("JSON.parse(localStorage.getItem('production-feedback-work-test'))") == {'script':'보관할 대본'}
+
+def test_used_sources_stay_separate_from_uploads_and_pending_selection(flow_page):
+    page=flow_page;setup_editor(page)
+    page.evaluate('''()=>{
+      task.status='completed';task.automation.stage='completed';task.latest_completed_run_id='v2';task.jobs=[];
+      task.sources=[{id:'used',url:'/used.mp4',original_name:'used.mp4'},
+        {id:'new',url:'/new.mp4',original_name:'new.mp4',rights:'user_supplied'},
+        {id:'found',url:'/found.mp4',title:'검색 영상'}];
+      task.pipeline[1].inputs={source_ids:['used']};task.pipeline[1].artifacts.sources=[{id:'used'}];
+      task.revision++;draw();
+    }''')
+    assert page.locator('[data-source-group=used] [data-field="source:used"]').is_checked()
+    assert not page.locator('[data-source-group=added] [data-field="source:new"]').is_checked()
+    assert page.locator('[data-source-group=other] [data-field="source:found"]').count()==1
+    page.locator('[data-field="source:used"]').uncheck()
+    page.locator('[data-field="source:new"]').check()
+    page.evaluate('task.revision++;draw()')
+    assert not page.locator('[data-source-group=used] [data-field="source:used"]').is_checked()
+    assert page.locator('[data-source-group=added] [data-field="source:new"]').is_checked()
+    assert page.locator('[data-field="source:new"]').evaluate('(e)=>e===document.activeElement')
+    page.locator('[data-pf=save-sources]').click()
+    page.wait_for_function('requests.length===1')
+    assert page.evaluate('requests[0].body.source_ids')==['new']
+    assert page.locator('[data-source-group=used] [data-field="source:used"]').count()==1
+
+
+def test_caption_sync_controls_validate_bounds_preserve_draft_and_loop(flow_page):
+    page=flow_page;setup_editor(page)
+    page.evaluate('''()=>{
+      task.edit_id='e1';task.edits=[{id:'e1',duration:10,preview_url:'/preview.mp4',plan:{
+        cues:[{id:'c1',text:'한 문장',start:.2,end:1.2}],shots:[{id:'s1',video_url:'/s.mp4',start:0,end:2}],
+        beats:[{id:'b1',cue_id:'c1',start:0,end:2,text:'한 문장',selected_shot_id:'s1',options:[{shot_id:'s1',reason:'대응 장면'}]}]}}];
+      task.revision++;draw();
+      const v=document.querySelector('[data-edit-preview]');
+      Object.defineProperty(v,'duration',{get:()=>10});Object.defineProperty(v,'readyState',{get:()=>4});
+      Object.defineProperty(v,'paused',{get:()=>false});v.play=()=>Promise.resolve();
+    }''')
+    page.locator('[data-sync=earlier]').click()
+    assert float(page.locator('[data-field="start:b1"]').input_value())==.1
+    assert float(page.locator('[data-field="end:b1"]').input_value())==1.1
+    page.locator('[data-sync=loop]').click()
+    assert page.locator('[data-sync=loop]').get_attribute('aria-pressed')=='true'
+    page.evaluate("const v=document.querySelector('[data-edit-preview]');v.currentTime=1.5;v.dispatchEvent(new Event('timeupdate'))")
+    assert page.locator('[data-edit-preview]').evaluate('(v)=>v.currentTime')==.1
+    page.locator('[data-sync=loop]').click()
+    assert page.locator('[data-sync=loop]').get_attribute('aria-pressed')=='false'
+    page.locator('[data-edit-preview]').evaluate('(v)=>v.currentTime=.6')
+    page.locator('[data-sync=start]').click()
+    assert float(page.locator('[data-field="start:b1"]').input_value())==.6
+    assert '0.60–1.10초' in page.locator('[data-sync-range]').inner_text()
+    page.locator('[data-edit-preview]').evaluate('(v)=>v.currentTime=.4')
+    page.locator('[data-sync=end]').click()
+    assert float(page.locator('[data-field="end:b1"]').input_value())==1.1
+    assert '끝은 시작보다 뒤' in page.locator('.pf-sync-feedback').inner_text()
+    page.locator('[data-pf=save-beat]').click()
+    page.wait_for_function('requests.length===1')
+    change=page.evaluate('requests[0].body.changes[0]')
+    assert change['start']==.6 and change['end']==1.1 and change['text']=='한 문장'
+    page.evaluate('''()=>{
+      localStorage.setItem('production-feedback-work-test',JSON.stringify({'start:b1':'.4','end:b1':'1.5'}));
+      const root=document.querySelector('#root');root.innerHTML='';root._dirty=false;root._renderedRevision=null;draw();
+    }''')
+    assert page.locator('[data-sync-times]').inner_text()=='0.40–1.50초'

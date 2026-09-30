@@ -90,22 +90,32 @@
   }
   function sourceLibrary(t){
     const f=t.feedback||{},run=t.pipeline?.find(r=>r.id===t.run_id);
-    const selected=f.source_ids||run?.inputs?.source_ids||t.sources.map(v=>v.id);
+    const delivered=t.pipeline?.find(r=>r.id===t.latest_completed_run_id);
+    // A saved selection is a future edit, not evidence of what the completed video used.
+    const baseline=delivered||run;
+    const usedIds=baseline?.artifacts?.sources?.map(v=>v.id)??baseline?.inputs?.source_ids??[];
+    const selected=f.source_ids??run?.inputs?.source_ids??(usedIds.length?usedIds:t.sources.map(v=>v.id));
     const local=JSON.parse(localStorage.getItem(storageKey(t))||'{}');
     const checked=v=>('source:'+v.id) in local?local['source:'+v.id]:selected.includes(v.id);
     const count=t.sources.filter(checked).length;
     const preparing=['sources','transcript'].includes(window.StudioBoard.describe(t).stage);
     const busy=(t.jobs||[]).some(j=>j.status==='running'&&!['proposal','suggest_edit'].includes(j.kind));
-    return `<div class="pf-source-library"><div class="pf-section-title"><h4>사용할 영상</h4><span class="pf-count">${t.sources.length}개 보유 · <b data-selected-count>${count}</b>개 선택</span></div>
-      ${t.sources.length?`<div class="pf-source-tools"><button type="button" data-pf="select-all-sources">전체 선택</button><button type="button" data-pf="clear-sources">선택 해제</button></div><div class="pf-sources">${t.sources.map((v,i)=>`<div class="pf-source-card"><video controls preload="metadata" src="${esc(v.url)}"></video><label><input type="checkbox" data-field="source:${v.id}" ${checked(v)?'checked':''}> ${esc(v.original_name||'소스 영상 '+(i+1))}</label>${link(v.url,'영상 다운로드')}</div>`).join('')}</div>`:'<div class="pf-empty"><b>아직 사용할 영상이 없어요</b><p>위에 영상을 넣으면 여기에 미리보기와 선택 항목이 나타납니다.</p></div>'}
-      ${preparing?`<button class="pf-primary-next" data-pf="use-sources" ${!count||busy?'disabled':''}>선택한 영상으로 제작 이어가기 →</button><p class="pf-help">${busy?'현재 자료 작업이 끝나면 업로드한 영상으로 이어갈 수 있어요.':'선택한 영상을 사용하고, 원본 대본 확인부터 이어서 진행합니다.'}</p>`:`<button data-pf="save-sources" ${!count?'disabled':''}>소스 선택 저장</button><p class="pf-help">저장 후 아래 ‘변경사항 반영해 재제작’을 누르면 선택한 영상으로 편집합니다.</p>`}</div>`;
+    const used=t.sources.filter(v=>usedIds.includes(v.id));
+    const added=t.sources.filter(v=>!usedIds.includes(v.id)&&(v.rights==='user_supplied'||v.original_name));
+    const other=t.sources.filter(v=>!usedIds.includes(v.id)&&!added.includes(v));
+    const cards=items=>`<div class="pf-sources">${items.map(v=>`<div class="pf-source-card"><video controls preload="metadata" src="${esc(v.url)}"></video><label><input type="checkbox" data-field="source:${v.id}" ${checked(v)?'checked':''}> ${esc(v.original_name||v.title||'소스 영상 '+(t.sources.indexOf(v)+1))}</label><small class="pf-source-usage">${usedIds.includes(v.id)?'현재 제작본에 사용됨':'아직 제작본에 사용하지 않음'}</small>${link(v.url,'영상 다운로드')}</div>`).join('')}</div>`;
+    return `<div class="pf-source-library"><div class="pf-source-selection"><span class="pf-count">${t.sources.length}개 보유 · 다음 제작에 <b data-selected-count>${count}</b>개 선택</span>${t.sources.length?'<div class="pf-source-tools"><button type="button" data-pf="select-all-sources">전체 선택</button><button type="button" data-pf="clear-sources">선택 해제</button></div>':''}</div>
+      <section class="pf-source-group pf-source-used" data-source-group="used"><div class="pf-section-title"><h4>현재 사용 중인 영상 <span>${used.length}</span></h4><span class="pf-count">${delivered?'완성본 V'+esc(delivered.number)+' 기준':used.length?'현재 제작 기준':'첫 제작 준비'}</span></div><p class="pf-help">체크를 해제하면 다음 제작에서 제외합니다. 현재 영상과 원본 파일은 유지됩니다.</p>${used.length?cards(used):'<p class="pf-empty">아직 제작본에 사용한 영상이 없습니다. 아래에서 영상을 추가하고 선택하세요.</p>'}</section><div class="pf-source-upload"><h4>새 영상 추가</h4><div data-upload-widget></div></div>
+      <section class="pf-source-group pf-source-added" data-source-group="added"><div class="pf-section-title"><h4>추가 업로드 영상 <span>${added.length}</span></h4><span class="pf-count">사용 여부 선택</span></div><p class="pf-help">추가한 파일은 현재 사용 중인 영상과 구분해 보관합니다. 체크한 영상만 다음 제작에 포함됩니다.</p>${added.length?cards(added):'<p class="pf-empty">새로 업로드한 영상이 여기에 표시됩니다.</p>'}</section>
+      ${other.length?`<details class="pf-source-other" data-source-group="other"><summary>보관 중인 다른 영상 · ${other.length}개</summary>${cards(other)}</details>`:''}
+      <div class="pf-source-save">${preparing?`<button class="pf-primary-next" data-pf="use-sources" ${!count||busy?'disabled':''}>선택한 영상으로 제작 이어가기 →</button><p class="pf-help">${busy?'현재 자료 작업이 끝나면 업로드한 영상으로 이어갈 수 있어요.':'선택한 영상을 사용하고, 원본 대본 확인부터 이어서 진행합니다.'}</p>`:`<button data-pf="save-sources" ${!count?'disabled':''}>소스 선택 저장</button><p class="pf-help">저장 후 ‘변경사항 반영해 재제작’을 누르면 선택한 영상으로 새 버전을 만듭니다.</p>`}</div></div>`;
   }
   function editor(t){
     const f=t.feedback||{},run=t.pipeline.find(r=>r.id===t.run_id),inputs=run?.inputs||{};
     const s=item(t,'scripts',t.script_id),e=item(t,'edits',t.edit_id),voice=item(t,'voices',t.voice_id);
     const currentText=f.script_text??s?.text??'';
     return `<div class="pf-editor">
-      <details open data-pf-section="sources"><summary>영상 소스 준비</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">↥</span><div><h3>${t.sources.length?'새 영상을 더 넣거나 사용할 영상을 고르세요':'영상부터 넣고 시작해 볼까요?'}</h3><p>직접 찾은 영상 여러 개를 한 번에 추가하고 제작을 이어가세요.</p></div></div><div data-upload-widget></div>${sourceLibrary(t)}
+      <details open data-pf-section="sources"><summary>영상 소스 준비</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">↥</span><div><h3>${t.sources.length?'지금 쓰는 영상부터 확인하세요':'영상부터 넣고 시작해 볼까요?'}</h3><p>현재 영상을 빼거나 유지하고, 새 영상을 추가해 다음 제작 구성을 정하세요.</p></div></div>${sourceLibrary(t)}
       <details class="pf-advanced"><summary>직접 찾기 어려우면 · 자동 소스 검색</summary><label>찾을 장면이나 제품<textarea data-field="search" placeholder="예: 캠핑 수납 가방을 사용하는 장면"></textarea></label><button data-pf="search">소스 검색 시작</button><p>${esc(window.StudioBoard.message(t.source_search?.message,''))}</p>${audit(t.source_audit)}</details></details>
       <details open data-pf-section="original"><summary>원본 발화 확인</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">${fileIcon("voice")}</span><div><h3>듣고 확인하는 원본의 이야기</h3><p>실제 발화를 교정하고, 제작 대본을 위한 참고 자료로 보관하세요.</p></div></div>${originalPanel(t,true)}</details><details open data-pf-section="script"><summary>대본 다듬기</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">✎</span><div><h3>우리 영상의 이야기를 완성하세요</h3><p>직접 고치거나 AI에게 수정할 방향을 알려주세요. 원본과 후보 대본은 아래에서 비교할 수 있어요.</p></div></div>
       <div class="glass-script-grid"><div class="glass-writing"><div class="pf-script-state"><span class="pf-count">${f.script_text!==undefined?'수정 대본 · 반영 대기':'현재 제작 대본'}</span><p>저장 → 변경사항 반영해 재제작 순서로 진행합니다. 기존 음성과 완성본은 새 버전이 준비될 때까지 보존됩니다.</p></div><label>제작에 사용할 대본<textarea maxlength="3000" data-field="script" placeholder="제작할 대본을 입력하세요">${esc(currentText)}</textarea></label><div class="pf-button-row"><button data-pf="save-script">대본 저장</button><button class="pf-secondary" data-pf="check-script">문장 검사</button></div><details class="pf-advanced"><summary>문장 검사 결과</summary><div data-script-review aria-live="polite">${scriptReview((t.script_candidates||[]).find(c=>c.text===currentText))}</div></details>
@@ -114,9 +124,9 @@
       </div><details class="pf-advanced"><summary>이전 제작 대본 복원</summary>${t.scripts.slice().reverse().map((v,i)=>`<details><summary>대본 ${t.scripts.length-i}${v.id===t.script_id?' · 현재 제작 기준':''}</summary><p class="pf-text">${esc(v.text)}</p><button data-pf="restore-script" data-script-id="${v.id}">이 대본을 수정본으로 가져오기</button></details>`).join('')}</details><details class="pf-advanced"><summary>원본 · 후보 대본 비교</summary><h4>원본 발화</h4><p class="pf-text">${esc(t.original_text||'원본 영상의 대본을 준비하고 있어요.')}</p><p>${esc(t.selection_reason||'')}</p>
       ${(t.script_candidates||[]).map((c,i)=>`<details><summary>후보 ${i+1}${i===t.selected_candidate?' · 추천':''}</summary><p>${esc(c.text)}</p><button data-pf="candidate" data-index="${i}">이 대본 선택</button></details>`).join('')}</details></details>
       <details open data-pf-section="voice"><summary>목소리와 읽는 속도</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">♫</span><div><h3>들어보고 자연스럽게 다듬으세요</h3><p>속도와 발음을 조절하고 저장하면 다음 음성 제작에 적용됩니다.</p></div></div>${voice?`<div class="pf-audio-card"><b>현재 제작 음성 · ${Number(voice.speed||1).toFixed(2)}배 · ${Number(voice.duration||0).toFixed(1)}초</b>${['script_text','speed','pronunciations','regenerate_voice'].some(k=>k in f)?'<p class="pf-version-note">수정사항 반영 전 음성입니다. 재제작 후 새 음성을 확인하세요.</p>':''}<details><summary>이 음성이 읽는 대본</summary><p class="pf-text">${esc(voice.spoken_text||item(t,'scripts',voice.script_id)?.text||'기록된 대본이 없습니다.')}</p></details><audio controls src="${esc(voice.path_url)}"></audio></div>`:'<div class="pf-empty"><b>음성을 아직 만들지 않았어요</b><p>소스와 대본을 준비하면 음성 제작으로 이어집니다.</p><button data-pf-tab="script">대본 확인하기 →</button></div>'}<div class="pf-tool-card"><label>읽는 속도 <input data-field="speed" type="number" min="0.8" max="1.25" step="0.05" value="${f.speed??inputs.speed??1}"> 배</label><details class="pf-advanced"><summary>발음 교정 · 어려운 단어가 있을 때</summary><label>한 줄에 ‘원문=읽을 발음’<textarea data-field="pronunciation" placeholder="USB=유에스비">${esc((f.pronunciations??inputs.pronunciations??[]).map(p=>p.from+'='+p.to).join('\n'))}</textarea></label><p class="pf-help">자막은 그대로 두고 읽는 발음만 바꿉니다.</p></details><button data-pf="save-voice">음성 설정 저장</button><button class="pf-secondary" data-pf="regenerate-voice" ${voice?'':'disabled'}>음성 다시 만들기 예약</button></div></details>
-      <details open data-pf-section="edit"><summary>장면과 자막 편집</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">▣</span><div><h3>장면을 고르고 자막을 맞추세요</h3><p>시간 구간별로 장면·자막·강조를 바꾼 뒤 저장하세요. 자막을 고쳐도 음성은 바뀌지 않습니다. 말하는 내용은 대본 단계에서 수정하세요.</p></div></div>${e?.plan?`<div class="pf-edit-layout"><aside class="pf-edit-preview">${e.preview_url?`<video data-edit-preview controls playsinline preload="metadata" src="${esc(e.preview_url)}"></video>`:'<p>미리보기 준비 중</p>'}<p>현재 미리보기 · 저장한 수정은 재제작 후 보입니다.</p><button data-pf="open-capcut" data-edit-id="${e.id}">CapCut에서 직접 편집 ↗</button></aside><div class="pf-edit-timeline"><details class="pf-advanced"><summary>AI에게 구간 수정 요청</summary><label>구간 수정 요청<textarea data-field="edit-request" placeholder="예: 첫 장면을 교체하고 마지막 자막을 강조해줘"></textarea></label><label>시작 초 <input data-field="edit-start" type="number" value="0" min="0" step="0.01"></label><label>끝 초 <input data-field="edit-end" type="number" value="${e.duration}" min="0" step="0.01"></label><button data-pf="request-edit">수정안 준비</button><div class="pf-ai-status" data-ai-status="suggest_edit" role="status">${aiStatus(t,'suggest_edit')}</div></details>
-      ${e.plan.beats.map(b=>{const c=e.plan.cues.find(v=>v.id===b.cue_id),draft=f.changes?.find(v=>v.beat_id===b.id)||{};return `<div class="pf-beat"><button class="pf-secondary pf-time" data-pf-seek="${b.start}">▷ ${b.start.toFixed(2)}–${b.end.toFixed(2)}초</button>${b.needs_review||t.candidate_requests?.includes(b.id)?'<span class="pf-count">장면 확인 필요</span>':''}<details class="pf-advanced"><summary>장면 선택 이유</summary><p>${esc(b.reason)}</p></details><p class="pf-narration"><b>이 구간의 대사</b> ${esc(b.text)}</p><label>장면 <select data-field="shot:${b.id}">${b.options.map((o,i)=>`<option value="${o.shot_id}" ${(draft.shot_id||b.selected_shot_id)===o.shot_id?'selected':''}>${esc('장면 '+(i+1)+' · '+o.reason)}</option>`).join('')}</select></label><details><summary>장면 후보 영상 보기</summary><div class="pf-sources">${b.options.map(o=>{const shot=e.plan.shots.find(s=>s.id===o.shot_id);return `<div><video controls preload="none" src="${esc(shot.video_url)}#t=${shot.start},${shot.end}"></video><small>${esc(shot.observation)}</small></div>`;}).join('')}</div></details>
-      <label>자막 <input data-field="caption:${b.id}" value="${esc(draft.text??c.text)}"></label><details class="pf-advanced"><summary>자막 타이밍 · 강조 설정</summary><label>시작 <input type="number" step="0.01" data-field="start:${b.id}" value="${draft.start??c.start}"></label><label>끝 <input type="number" step="0.01" data-field="end:${b.id}" value="${draft.end??c.end}"></label><label>강조 <select data-field="emphasis:${b.id}">${[0,1,2].map(n=>`<option value="${n}" ${(draft.emphasis??b.emphasis)===n?'selected':''}>${['없음','분명하게','강하게'][n]}</option>`).join('')}</select></label></details><button data-pf="save-beat" data-beat="${b.id}">이 구간 피드백 저장</button></div>`;}).join('')}</div></div>`:'<div class="pf-empty"><b>편집할 영상이 아직 없어요</b><p>음성 제작이 끝나면 장면과 자막을 준비합니다.</p><button data-pf-tab="voice">음성 준비 상태 보기 →</button></div>'}</details><div class="pf-actionbar"><div data-change-status>${changeStatus(t)}</div><p class="pf-impact">${impact(f)}</p><button data-pf="discard-feedback">변경사항 초기화</button><button data-pf="reproduce" ${t.pending_reproduction||!Object.keys(f).length?'disabled':''}>${t.pending_reproduction?'현재 단계 종료 후 재제작 대기':'변경사항 반영해 재제작 →'}</button></div></div>`;
+      <details open data-pf-section="edit"><summary>장면과 자막 편집</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">▣</span><div><h3>장면을 고르고 자막을 맞추세요</h3><p>여기서는 장면 교체와 자막 문구·타이밍을 간단히 고칩니다. 정밀 편집은 CapCut에서 진행하세요. 저장한 수정은 재제작 후 영상에 반영됩니다.</p></div></div>${e?.plan?`<div class="pf-edit-layout"><aside class="pf-edit-preview">${e.preview_url?`<video data-edit-preview controls playsinline preload="metadata" src="${esc(e.preview_url)}"></video>`:'<p>미리보기 준비 중</p>'}<p>현재 미리보기 · 저장한 수정은 재제작 후 보입니다.</p><button class="pf-capcut-launch" data-pf="open-capcut" data-edit-id="${e.id}"><span aria-hidden="true">↗</span> CapCut에서 직접 편집</button><p class="pf-capcut-help">타임라인 · 파형 · 프레임 단위 정밀 편집</p><div class="pf-sync-preview"><small>싱크 확인용 대사</small><strong data-sync-caption>오른쪽에서 구간 반복 듣기를 누르세요.</strong><span data-sync-range></span></div></aside><div class="pf-edit-timeline"><details class="pf-advanced"><summary>AI에게 구간 수정 요청</summary><label>구간 수정 요청<textarea data-field="edit-request" placeholder="예: 첫 장면을 교체하고 마지막 자막을 강조해줘"></textarea></label><label>시작 초 <input data-field="edit-start" type="number" value="0" min="0" step="0.01"></label><label>끝 초 <input data-field="edit-end" type="number" value="${e.duration}" min="0" step="0.01"></label><button data-pf="request-edit">수정안 준비</button><div class="pf-ai-status" data-ai-status="suggest_edit" role="status">${aiStatus(t,'suggest_edit')}</div></details>
+      ${e.plan.beats.map(b=>{const c=e.plan.cues.find(v=>v.id===b.cue_id),draft=f.changes?.find(v=>v.beat_id===b.id)||{};return `<div class="pf-beat" data-sync-beat="${esc(b.id)}"><button class="pf-secondary pf-time" data-pf-seek="${b.start}">▷ ${b.start.toFixed(2)}–${b.end.toFixed(2)}초</button>${b.needs_review||t.candidate_requests?.includes(b.id)?'<span class="pf-count">장면 확인 필요</span>':''}<details class="pf-advanced"><summary>장면 선택 이유</summary><p>${esc(b.reason)}</p></details><p class="pf-narration"><b>이 구간의 대사</b> ${esc(b.text)}</p><label>장면 <select data-field="shot:${b.id}">${b.options.map((o,i)=>`<option value="${o.shot_id}" ${(draft.shot_id||b.selected_shot_id)===o.shot_id?'selected':''}>${esc('장면 '+(i+1)+' · '+o.reason)}</option>`).join('')}</select></label><details><summary>장면 후보 영상 보기</summary><div class="pf-sources">${b.options.map(o=>{const shot=e.plan.shots.find(s=>s.id===o.shot_id);return `<div><video controls preload="none" src="${esc(shot.video_url)}#t=${shot.start},${shot.end}"></video><small>${esc(shot.observation)}</small></div>`;}).join('')}</div></details>
+      <label>자막 <input data-field="caption:${b.id}" value="${esc(draft.text??c.text)}"></label><div class="pf-sync-tools"><div class="pf-sync-main"><button type="button" data-sync="loop" data-beat="${b.id}" aria-pressed="false">▷ 이 구간 반복 듣기</button><span class="pf-help">듣고 시작·끝을 맞춰보세요</span></div><div class="pf-sync-marks"><button type="button" data-sync="start" data-beat="${b.id}">현재 위치를 시작으로</button><button type="button" data-sync="end" data-beat="${b.id}">현재 위치를 끝으로</button></div><div class="pf-sync-shift"><span>자막 전체 이동</span><button type="button" data-sync="earlier" data-beat="${b.id}" aria-label="이 자막을 0.1초 앞당기기">−0.1초</button><button type="button" data-sync="later" data-beat="${b.id}" aria-label="이 자막을 0.1초 늦추기">＋0.1초</button><output data-sync-times>${Number(draft.start??c.start).toFixed(2)}–${Number(draft.end??c.end).toFixed(2)}초</output></div><p class="pf-sync-feedback" role="status"></p></div><details class="pf-advanced"><summary>정밀 시간 입력 · 강조 설정</summary><label>시작 <input type="number" step="0.01" data-field="start:${b.id}" value="${draft.start??c.start}"></label><label>끝 <input type="number" step="0.01" data-field="end:${b.id}" value="${draft.end??c.end}"></label><label>강조 <select data-field="emphasis:${b.id}">${[0,1,2].map(n=>`<option value="${n}" ${(draft.emphasis??b.emphasis)===n?'selected':''}>${['없음','분명하게','강하게'][n]}</option>`).join('')}</select></label></details><button data-pf="save-beat" data-beat="${b.id}">이 구간 피드백 저장</button></div>`;}).join('')}</div></div>`:'<div class="pf-empty"><b>편집할 영상이 아직 없어요</b><p>음성 제작이 끝나면 장면과 자막을 준비합니다.</p><button data-pf-tab="voice">음성 준비 상태 보기 →</button></div>'}</details><div class="pf-actionbar"><div data-change-status>${changeStatus(t)}</div><p class="pf-impact">${impact(f)}</p><button data-pf="discard-feedback">변경사항 초기화</button><button data-pf="reproduce" ${t.pending_reproduction||!Object.keys(f).length?'disabled':''}>${t.pending_reproduction?'현재 단계 종료 후 재제작 대기':'변경사항 반영해 재제작 →'}</button></div></div>`;
   }
   function aiStatus(t,kind){
     const job=(t.jobs||[]).find(j=>j.kind===kind);if(!job)return '';
@@ -132,6 +142,61 @@
   function runtime(t){
     const action=t.error?'<button data-pf="retry">중단 단계 재시도</button>':t.automation?.active&&t.status!=='completed'?'<button data-pf="pause-auto">자동 진행 중지</button>':!t.automation?.active&&t.status!=='completed'?'<button data-pf="resume-auto">자동 진행 재개</button>':'';
     return `<div class="pf-runtime">${action}<p>${esc(window.StudioBoard.message(t.error||t.message))}</p></div>`;
+  }
+  function syncFields(root,id){
+    const fields=[...root.querySelectorAll('[data-field]')];
+    const find=name=>fields.find(e=>e.dataset.field===name+':'+id);
+    return {start:find('start'),end:find('end'),caption:find('caption'),card:[...root.querySelectorAll('[data-sync-beat]')].find(e=>e.dataset.syncBeat===id)};
+  }
+  function syncReadout(root,id){
+    const f=syncFields(root,id);if(!f.start||!f.end)return;
+    const range=Number(f.start.value).toFixed(2)+'–'+Number(f.end.value).toFixed(2)+'초';
+    const output=f.card?.querySelector('[data-sync-times]');if(output)output.textContent=range;
+    if(root._syncSelected===id){root.querySelector('[data-sync-caption]').textContent=f.caption.value;root.querySelector('[data-sync-range]').textContent=range+' · 기존 영상 자막은 재제작 후 바뀝니다';}
+  }
+  function stopSync(root){
+    root._syncLoop=null;
+    root.querySelectorAll('[data-sync="loop"]').forEach(b=>{b.textContent='▷ 이 구간 반복 듣기';b.setAttribute('aria-pressed','false');});
+  }
+  function bindSyncPreview(root){
+    stopSync(root);root._syncSelected=null;root.querySelectorAll('[data-sync-beat]').forEach(card=>syncReadout(root,card.dataset.syncBeat));const video=root.querySelector('[data-edit-preview]');if(!video)return;
+    video.ontimeupdate=()=>{
+      if(!root._syncLoop||video.paused)return;
+      const f=syncFields(root,root._syncLoop),start=Number(f.start?.value),end=Number(f.end?.value);
+      if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>video.duration){video.pause();return;}
+      if(video.currentTime>=end||video.currentTime<start-.05)video.currentTime=start;
+    };
+    video.onpause=()=>{if(!video.ended)stopSync(root);};
+    video.onended=()=>{
+      if(!root._syncLoop)return;
+      const f=syncFields(root,root._syncLoop);video.currentTime=Number(f.start.value);
+      video.play().catch(()=>stopSync(root));
+    };
+  }
+  function adjustSync(root,button){
+    const id=button.dataset.beat,f=syncFields(root,id),video=root.querySelector('[data-edit-preview]');
+    if(!video||!f.start||!f.end)return;
+    const note=f.card.querySelector('.pf-sync-feedback');
+    const old=localStorage.getItem(storageKey(root._task)+'-edit');
+    if(old&&old!==root._renderedEditId){note.textContent='이전 편집본의 입력이 보관되어 있어요. 내용을 확인하고 이전 구간 입력을 비운 뒤 수정하세요.';return;}
+    if(button.dataset.sync==='loop'&&root._syncLoop===id){video.pause();stopSync(root);return;}
+    let start=Number(f.start.value),end=Number(f.end.value);
+    const action=button.dataset.sync;
+    if(video.readyState<1||!Number.isFinite(video.duration)){note.textContent='미리보기 영상을 불러온 뒤 다시 눌러주세요.';return;}
+    if(action==='start')start=Math.round(video.currentTime*100)/100;
+    if(action==='end')end=Math.round(video.currentTime*100)/100;
+    if(action==='earlier'||action==='later'){const shift=action==='earlier'?-.1:.1;start=Math.round((start+shift)*100)/100;end=Math.round((end+shift)*100)/100;}
+    if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>video.duration){note.textContent='시작은 0초 이상, 끝은 시작보다 뒤여야 해요. 영상 길이 '+video.duration.toFixed(2)+'초 안에서 지정하세요.';return;}
+    root._syncSelected=id;
+    if(action==='loop'){
+      stopSync(root);root._syncLoop=id;button.textContent='Ⅱ 반복 듣기 중지';button.setAttribute('aria-pressed','true');syncReadout(root,id);
+      video.currentTime=start;
+      video.play().catch(()=>{stopSync(root);note.textContent='영상의 재생 버튼을 눌러 재생 상태를 확인하세요.';});
+      note.textContent='이 구간을 반복 재생합니다. 수정 자막의 최종 영상 반영은 저장 후 재제작으로 진행하세요.';
+    }else{
+      for(const [field,value] of [[f.start,start],[f.end,end]]){if(Number(field.value)!==value){field.value=value.toFixed(2);field.dispatchEvent(new Event('input',{bubbles:true}));}}
+      syncReadout(root,id);note.textContent='타이밍 수정됨 · 이 구간 피드백 저장을 눌러주세요.';
+    }
   }
   function mount(root,t,options={}){
     root._task=t;root._options=options;
@@ -164,7 +229,15 @@
       const library=root.querySelector('.pf-source-library');
       if(library&&![...library.querySelectorAll('video')].some(v=>!v.paused)){
         const tmp=document.createElement('div');tmp.innerHTML=sourceLibrary(t);
-        if(library.innerHTML!==tmp.firstElementChild.innerHTML)library.innerHTML=tmp.firstElementChild.innerHTML;
+        const focusedField=library.contains(document.activeElement)?document.activeElement.dataset.field:null;
+        // Update source groups around the stable upload widget; preserve its queue and file picker.
+        for(const selector of ['.pf-source-selection','.pf-source-used','.pf-source-added','.pf-source-other','.pf-source-save']){
+          const before=library.querySelector(selector),after=tmp.querySelector(selector);
+          if(before&&after){if(before.innerHTML!==after.innerHTML)before.innerHTML=after.innerHTML;}
+          else if(before)before.remove();
+          else if(after)library.insertBefore(after,library.querySelector('.pf-source-save'));
+        }
+        if(focusedField&&!library.contains(document.activeElement))[...library.querySelectorAll('[data-field]')].find(e=>e.dataset.field===focusedField)?.focus({preventScroll:true});
       }
       bindUploads();
       options.onRender?.();return;
@@ -184,7 +257,8 @@
     if(options.editor&&local&&Object.keys(local).length){for(const field of root.querySelectorAll('[data-field]'))if(field.dataset.field in local){if(/^(shot|caption|start|end|emphasis):/.test(field.dataset.field)&&localStorage.getItem(storageKey(t)+'-edit')&&localStorage.getItem(storageKey(t)+'-edit')!==t.edit_id)continue;if(field.type==='checkbox')field.checked=local[field.dataset.field];else field.value=local[field.dataset.field];}root._dirty=true;root._feedbackBaseRevision=Number(localStorage.getItem(storageKey(t)+'-revision')??t.feedback_revision??0);}
     if(local&&'script' in local){const review=root.querySelector('[data-script-review]');if(review)review.textContent='불러온 편집 내용을 다시 검사해 주세요.';}
     root.querySelectorAll('[data-review-check]').forEach(e=>{e.checked=!!root._reviewChecks?.[e.closest('[data-review-run]').dataset.reviewRun]?.[e.dataset.reviewCheck];});
-    root.oninput=event=>{const e=event.target;if(e.dataset.reviewCheck){const id=e.closest('[data-review-run]').dataset.reviewRun;root._reviewChecks??={};root._reviewChecks[id]??={};root._reviewChecks[id][e.dataset.reviewCheck]=e.checked;return;}if(!e.dataset.field)return;if(e.dataset.field==='script'){const review=root.querySelector('[data-script-review]');if(review)review.textContent='대본이 바뀌었어요. 다시 검사해 주세요.';}if(!root._dirty){root._feedbackBaseRevision=root._task.feedback_revision||0;localStorage.setItem(storageKey(root._task)+'-revision',String(root._feedbackBaseRevision));}root._dirty=true;const draft=JSON.parse(localStorage.getItem(storageKey(root._task))||'{}');draft[e.dataset.field]=e.type==='checkbox'?e.checked:e.value;if(/^(shot|caption|start|end|emphasis):/.test(e.dataset.field)&&!localStorage.getItem(storageKey(root._task)+'-edit'))localStorage.setItem(storageKey(root._task)+'-edit',root._renderedEditId||'');localStorage.setItem(storageKey(root._task),JSON.stringify(draft));const status=root.querySelector('[data-change-status]');if(status)status.innerHTML=changeStatus(root._task);if(e.dataset.field.startsWith('source:')){const n=root.querySelectorAll('[data-field^="source:"]:checked').length;root.querySelector('[data-selected-count]').textContent=n;for(const button of root.querySelectorAll('[data-pf="use-sources"],[data-pf="save-sources"]'))button.disabled=!n||button.dataset.pf==='use-sources'&&(root._uploading||(root._task.jobs||[]).some(j=>j.status==='running'&&!['proposal','suggest_edit'].includes(j.kind)));}};
+    root.oninput=event=>{const e=event.target;if(e.dataset.reviewCheck){const id=e.closest('[data-review-run]').dataset.reviewRun;root._reviewChecks??={};root._reviewChecks[id]??={};root._reviewChecks[id][e.dataset.reviewCheck]=e.checked;return;}if(!e.dataset.field)return;if(/^(caption|start|end):/.test(e.dataset.field))syncReadout(root,e.dataset.field.split(':')[1]);if(e.dataset.field==='script'){const review=root.querySelector('[data-script-review]');if(review)review.textContent='대본이 바뀌었어요. 다시 검사해 주세요.';}if(!root._dirty){root._feedbackBaseRevision=root._task.feedback_revision||0;localStorage.setItem(storageKey(root._task)+'-revision',String(root._feedbackBaseRevision));}root._dirty=true;const draft=JSON.parse(localStorage.getItem(storageKey(root._task))||'{}');draft[e.dataset.field]=e.type==='checkbox'?e.checked:e.value;if(/^(shot|caption|start|end|emphasis):/.test(e.dataset.field)&&!localStorage.getItem(storageKey(root._task)+'-edit'))localStorage.setItem(storageKey(root._task)+'-edit',root._renderedEditId||'');localStorage.setItem(storageKey(root._task),JSON.stringify(draft));const status=root.querySelector('[data-change-status]');if(status)status.innerHTML=changeStatus(root._task);if(e.dataset.field.startsWith('source:')){const n=root.querySelectorAll('[data-field^="source:"]:checked').length;root.querySelector('[data-selected-count]').textContent=n;for(const button of root.querySelectorAll('[data-pf="use-sources"],[data-pf="save-sources"]'))button.disabled=!n||button.dataset.pf==='use-sources'&&(root._uploading||(root._task.jobs||[]).some(j=>j.status==='running'&&!['proposal','suggest_edit'].includes(j.kind)));}};
+    bindSyncPreview(root);
     root.onchange=async event=>{
       if(event.target.matches('[data-pf-version]')){
         root._selected=event.target.value;root._dirty=false;
@@ -197,6 +271,7 @@
     const field=name=>[...root.querySelectorAll('[data-field]')].find(e=>e.dataset.field===name);
     const value=name=>field(name)?.value||'';
     root.onclick=async event=>{
+      const sync=event.target.closest('[data-sync]');if(sync){adjustSync(root,sync);return;}
       const ref=event.target.closest('[data-reference-seek]');if(ref){const video=root.querySelector('[data-reference-preview]');if(video)video.currentTime=Number(ref.dataset.referenceSeek);return;}
       const seek=event.target.closest('[data-pf-seek]');if(seek){const video=root.querySelector('[data-edit-preview]');if(video)video.currentTime=Number(seek.dataset.pfSeek);return;}
       const tab=event.target.closest('[data-pf-tab]');if(tab){options.onTab?.(tab.dataset.pfTab);return;}

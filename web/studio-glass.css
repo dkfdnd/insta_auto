@@ -149,3 +149,21 @@
 @media(max-width:750px){.studio-glass .hero-actions{display:flex;margin-top:6px}.studio-glass .hero-actions button{min-height:44px}.studio-glass .work-drawer .pf-sources{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .studio-glass :is(textarea,input)::placeholder{color:var(--secondary);opacity:1}
+.studio-glass .pf-source-group{border:1px solid var(--line);border-radius:20px;padding:20px;background:var(--surface)}
+.studio-glass .pf-source-used{background:linear-gradient(120deg,#bcd5ff18,transparent),var(--surface)}
+.studio-glass .pf-source-group .pf-section-title{margin:0 0 10px}.studio-glass .pf-source-group h4 span{color:var(--accent);margin-left:6px}
+.studio-glass .pf-source-used .pf-sources{grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
+.studio-glass .pf-source-usage{font-size:11px;color:var(--secondary);margin:7px 0}
+.studio-glass .pf-source-upload>h4{font-size:16px;margin:0 0 14px}
+.studio-glass .work-drawer .production-flow button.pf-capcut-launch{background:linear-gradient(150deg,#8934bd,#5925a8);border:1px solid #8e4acb;color:#fff;font-size:14px;font-weight:750;min-height:56px;box-shadow:inset 0 1px 1px #ffffff70,0 6px 18px #7134b840}
+.studio-glass .pf-capcut-launch span{font-size:22px;margin-right:6px}.studio-glass .pf-edit-preview .pf-capcut-help{color:var(--secondary);text-align:center;margin-top:9px}
+.studio-glass .pf-sync-preview{background:var(--accent-soft);border-color:var(--line)}.studio-glass .pf-sync-preview small{color:var(--accent);font-size:11px}.studio-glass .pf-sync-preview span{color:var(--secondary)}
+.studio-glass .pf-sync-tools{background:var(--surface);border-color:var(--line);padding:14px}
+.studio-glass .work-drawer .production-flow [data-sync]:not([data-sync=loop]){background:var(--glass-raised);color:var(--ink);border-color:var(--line);box-shadow:inset 0 1px 1px #fff8,0 3px 8px #30496a0a;font-size:12px;padding:9px 12px}
+.studio-glass .pf-sync-tools output{color:var(--accent);font-variant-numeric:tabular-nums}.studio-glass .pf-sync-feedback{color:var(--secondary)}
+@media(max-width:750px){.studio-glass .pf-source-group{padding:14px}.studio-glass .pf-source-used .pf-sources{grid-template-columns:repeat(2,minmax(0,1fr))}.studio-glass .pf-source-selection{align-items:flex-start;flex-direction:column}.studio-glass .pf-sync-marks button{flex:1}.studio-glass .pf-sync-main .pf-help{width:100%}}
+.studio-glass .pf-source-used .pf-sources{grid-template-columns:repeat(2,minmax(0,1fr))}
+.studio-glass .work-drawer .pf-source-used .pf-source-card{display:grid;grid-template-columns:140px minmax(0,1fr);gap:4px 16px;align-items:center}
+.studio-glass .work-drawer .pf-source-used .pf-source-card video{grid-column:1;grid-row:1/4;height:140px}
+.studio-glass .work-drawer .pf-source-used .pf-source-card label{margin:0}.studio-glass .pf-source-used .pf-source-usage{margin:0}
+@media(max-width:750px){.studio-glass .pf-source-used .pf-sources{grid-template-columns:1fr}.studio-glass .work-drawer .pf-source-used .pf-source-card{grid-template-columns:100px minmax(0,1fr);gap:6px 10px}.studio-glass .work-drawer .pf-source-used .pf-source-card video{height:125px}}
