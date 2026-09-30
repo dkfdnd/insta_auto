@@ -51,6 +51,26 @@
       <div class="pf-recovery">${t.error?'<p class="pf-error">문제를 해결한 뒤 중단된 단계부터 다시 시도하세요. <button data-pf="retry">중단 단계 재시도</button></p>':''}</div>
     </div>`;
   }
+  function fileIcon(kind){
+    const paths={download:'<path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4"/>',video:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4Z"/>',sources:'<rect x="7" y="7" width="14" height="14" rx="3"/><path d="M17 7V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h3m5-6 5 3-5 3Z"/>',text:'<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Zm0 0v6h6M8 13h8m-8 4h5"/>',voice:'<path d="M4 10v4m4-8v12m4-15v18m4-15v12m4-8v4"/>',project:'<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18M9 9v12m4-8h4m-4 4h4"/>'};
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[kind]||paths.text}</svg>`;
+  }
+  function downloads(t,run){
+    const url=key=>(run.steps||[]).find(s=>s.key===key)?.download_url;
+    const files=[
+      ['reference','원본 영상','벤치마킹 원본','MP4',t.reference_url,'video'],
+      ['sources','소스 영상','제작에 사용한 영상 묶음','ZIP',url('sources'),'sources'],
+      ['transcript','원본 대본','원본에서 추출한 발화','TXT',url('transcript'),'text'],
+      ['script','제작 대본','이 버전에 사용한 대본','TXT',url('script'),'text'],
+      ['voice','TTS 음성','이 버전의 내레이션','WAV',url('voice'),'voice'],
+      ['project','CapCut 프로젝트','다시 편집할 수 있는 파일','ZIP',url('project'),'project']
+    ];
+    const final=url('export');
+    return `<section class="pf-downloads" aria-label="다운로드"><header class="pf-download-heading"><div><span class="pf-download-mark">${fileIcon('download')}</span><div><h4>다운로드</h4><p>완성 영상과 제작 자료를 받아보세요</p></div></div><span class="pf-download-version">V${esc(run.number)} 자료</span></header>
+      ${final?`<a class="pf-download-final" href="${esc(final)}" download aria-label="완성 영상 MP4 다운로드"><span class="pf-file-icon">${fileIcon('video')}</span><span class="pf-file-copy"><strong>완성 영상</strong><small>편집이 끝난 최종 영상 · MP4</small></span><span class="pf-final-cta">영상 저장 ${fileIcon('download')}</span></a>`:'<div class="pf-download-pending"><span class="pf-file-icon">'+fileIcon('video')+'</span><span><strong>완성 영상이 아직 없어요</strong><small>내보내기가 완료되면 받을 수 있어요</small></span></div>'}
+      <div class="pf-download-grid">${files.map(([key,title,description,format,href,icon])=>{const content=`<span class="pf-file-icon">${fileIcon(icon)}</span><span class="pf-file-copy"><strong>${title}</strong><small>${description}</small><span class="pf-file-format">${href?format:'아직 없음'}</span></span><span class="pf-file-save">${href?fileIcon('download'):''}</span>`;return href?`<a class="pf-file-card" data-download-asset="${key}" href="${esc(href)}" download aria-label="${title} ${format} 다운로드">${content}</a>`:`<div class="pf-file-card is-unavailable" data-download-asset="${key}" aria-disabled="true">${content}</div>`;}).join('')}</div>
+      ${url('project')?`<footer class="pf-download-edit"><span>장면이나 자막을 더 다듬고 싶다면</span><button data-pf="open-capcut" data-edit-id="${esc(run.artifacts.edit_id)}">CapCut에서 편집하기 <span aria-hidden="true">↗</span></button></footer>`:''}</section>`;
+  }
   function summary(t,selected){
     const runs=t.pipeline||[], active=runs.find(r=>r.id===t.run_id)||runs.at(-1);
     const display=runs.find(r=>r.id===selected)||runs.find(r=>r.id===t.latest_completed_run_id)||active;
@@ -59,7 +79,7 @@
       ${progress(t,active)}
       <div class="pf-heading"><h4>결과물 · 최신 완료본 우선</h4><select data-pf-version aria-label="제작 결과 버전">${runs.slice().reverse().map(r=>`<option value="${r.id}" ${r.id===display.id?'selected':''}>V${r.number} · ${names[r.status]||'상태 확인'}${r.id===t.latest_completed_run_id?' · 최신 완료':''}</option>`).join('')}</select></div>
       ${Object.keys(t.feedback||{}).length||t.pending_reproduction?'<p class="pf-version-note">저장한 변경사항은 이 결과물에 아직 반영되지 않았어요. 새 버전이 완성되면 비교해 주세요.</p>':''}${display.id!==t.run_id?'<p class="pf-version-note">이전 제작 버전을 보고 있어요. 진행 중인 수정은 이 영상에 반영되지 않았습니다.</p>':''}${display.video_url?`<video controls playsinline preload="metadata" src="${esc(display.video_url)}"></video>`:display.preview_url?`<p>리뷰 미리보기 · CapCut 최종 내보내기 전</p><video controls playsinline preload="metadata" src="${esc(display.preview_url)}"></video>`:'<p>완료되는 단계부터 결과물을 다운로드할 수 있습니다.</p>'}
-      ${resultReview(t,display)}<div class="pf-links">${display.steps.map(s=>link(s.download_url,s.label)).join('')}${display.steps.some(s=>s.key==='project'&&s.download_url)?`<button data-pf="open-capcut" data-edit-id="${display.artifacts.edit_id}">CapCut에서 직접 열기</button>`:''}</div>
+      ${resultReview(t,display)}${downloads(t,display)}
       <div class="pf-heading"><a href="studio.html?work=${encodeURIComponent(t.id)}">제작실에서 피드백·재제작 →</a>${t.automation?.protocol!==2?'<button data-pf="start-auto">자동 제작 이어서 시작</button>':t.automation?.active&&t.status!=='completed'?'<button data-pf="pause-auto">자동 진행 중지</button>':t.automation?.active?'':'<button data-pf="resume-auto">자동 진행 재개</button>'}</div></div>`;
   }
   function audit(a){
