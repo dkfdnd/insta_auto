@@ -1,0 +1,62 @@
+/* Novice workflow: readable surfaces, three destinations, one production action. */
+.studio-glass{font-size:16px}
+.studio-glass .kanban-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));overflow:visible;gap:20px}
+.studio-glass .kanban-column{width:auto;min-width:0}
+.studio-glass .overview{grid-template-columns:repeat(3,minmax(0,1fr))}
+.studio-glass .board-stages{display:none}
+.studio-glass .work-card h3{font-size:16px;line-height:1.6}
+.studio-glass .work-card :is(p,button,.board-status,.card-version,.card-previous,.card-mode),.studio-glass .column-head p{font-size:14px;line-height:1.6}
+.studio-glass .card-open{min-height:48px}
+.studio-glass :is(.tabs button,.search input,.column-head h2,.metric span){font-size:14px}
+.studio-glass .detail-tabs i.glass-step-status{font-size:13px}
+.studio-glass [data-view=script] .hero-actions .primary,.studio-glass [data-view=sources] .hero-actions .primary{background:var(--surface,#fff);color:#2454be;box-shadow:none}
+.studio-glass .card-progress-details{margin:12px 0}.card-progress-details summary{cursor:pointer;font-size:14px}
+.studio-glass .work-drawer :is(button,input,select,textarea){font-size:16px}
+.studio-glass .work-drawer :is(button,select){min-height:44px}
+.studio-glass .work-drawer :is(p,label,summary,.pf-help,.pf-count,.ce-time-readout,.ce-list-heading span,.ce-cue-heading output,.ce-shift-help,.ce-shift-label,.pf-message){font-size:14px;line-height:1.6}
+.studio-glass .work-drawer textarea{line-height:1.75}
+.studio-glass .detail-tabs i.glass-step-status{font-size:13px}.studio-glass .detail-tabs small{font-size:14px}.studio-glass .detail-tabs strong{font-size:16px}
+.studio-glass .ce-toolbar .pf-capcut-launch{width:auto;margin:0;flex:1 1 190px}
+.studio-glass .glass-assistant [data-pf=propose-script]{background:var(--surface,#fff);color:#2454be;box-shadow:none}
+.studio-glass .drawer-head{padding:14px 24px}.studio-glass .drawer-head h2{font-size:20px}
+.studio-glass #drawer-code,.studio-glass #drawer-status{display:none}
+.studio-glass .work-hero{padding:14px 20px;gap:16px}.studio-glass .hero-stage-ring{width:64px;height:64px;min-width:64px}
+.studio-glass .hero-copy h3{font-size:20px;margin:4px 0}.studio-glass .hero-copy>p{margin:4px 0}
+.studio-glass .hero-actions{margin-top:8px}.studio-glass .hero-next{font-size:14px}
+.studio-glass .detail-tabs{padding:10px 18px;gap:8px}.studio-glass .detail-tabs button{padding:10px}
+.studio-glass .work-drawer .pf-editor>[data-pf-section]{padding:20px}
+.studio-glass .pf-section-intro{margin-bottom:16px}.studio-glass .pf-section-intro h3{font-size:22px}
+.studio-glass .pf-section-icon{display:none}
+.studio-glass .pf-actionbar{position:sticky;bottom:0;z-index:5;padding:14px 18px;background:var(--surface,#fff);border:1px solid var(--border,#cbd7ea);box-shadow:0 -6px 24px #23395712;border-radius:18px}
+.studio-glass .pf-actionbar [data-pf=make-video]{background:#2454be;color:white;min-height:50px;font-size:17px}
+.studio-glass .pf-actionbar [data-pf=discard-feedback]{background:var(--surface,#fff);color:var(--ink,#253550);box-shadow:none}
+.studio-glass .pf-actionbar .pf-impact{display:block;flex-basis:100%;order:3}
+.studio-glass .pf-actionbar [data-action-notice]{flex-basis:100%;order:4}
+.studio-glass .work-drawer .pf-actionbar{bottom:0}
+.studio-glass .ce-shift-options button[aria-pressed=false]:not(:disabled){background:var(--glass-raised)!important;color:var(--ink)!important;box-shadow:none!important}
+.studio-glass .ce-toolbar [data-pf=save-captions]{background:var(--glass-raised);color:var(--ink);box-shadow:none}
+.studio-glass [data-change-status] .pf-change-status{padding:0;border:0;background:none}.studio-glass .pf-actionbar p{margin:5px 0}
+.studio-glass .pf-script-state{padding:12px}.studio-glass .glass-script-grid{gap:20px}
+.studio-glass .pf-editor>[data-pf-section=original]{margin-top:18px}
+.ce-cue-picker{display:none}.ce-cue-picker select{min-width:0;width:100%}
+.studio-glass .ce-editor [data-caption-state]{font-size:14px}.studio-glass .ce-cue label{font-size:14px}
+.studio-glass button:focus-visible,.studio-glass select:focus-visible,.studio-glass summary:focus-visible{outline:3px solid #286be2;outline-offset:3px}
+@media(max-width:1100px){.studio-glass .kanban-board{grid-template-columns:1fr}.studio-glass .column-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}}
+@media(max-width:750px){
+ .studio-glass .column-cards{display:block}.studio-glass .overview{gap:8px}.studio-glass .metric{padding:12px}
+ .studio-glass .drawer-head{padding:10px 12px}.studio-glass .drawer-head h2{font-size:17px}
+ .studio-glass .work-hero{padding:10px 14px}.studio-glass .hero-stage-ring,.studio-glass .hero-state,.studio-glass .hero-next,.studio-glass .hero-copy>p{display:none}
+ .studio-glass .hero-copy h3{font-size:17px}.studio-glass .hero-actions{margin:4px 0 0}.studio-glass .hero-actions button{min-height:40px}
+ .studio-glass .detail-tabs{padding:6px}.studio-glass .detail-tabs button{padding:6px;gap:4px}.studio-glass .detail-tabs strong{font-size:14px}.studio-glass .detail-tabs small,.studio-glass .glass-step-number{display:none}
+ .studio-glass .work-drawer .pf-editor>[data-pf-section]{padding:12px}.studio-glass .work-drawer .pf-actionbar{position:sticky;bottom:0;padding:10px;gap:8px}
+ .studio-glass .pf-actionbar [data-change-status],.studio-glass .pf-actionbar .pf-impact{display:none}.studio-glass .pf-actionbar button{flex:1;font-size:14px!important}
+ .studio-glass .ce-editor>.ce-toolbar{position:static;margin-bottom:12px;padding:8px}
+ .studio-glass .ce-layout{display:block}.studio-glass .ce-monitor{position:sticky;top:0;z-index:4;max-width:none;background:var(--surface,#fff);padding:6px 0;border-bottom:1px solid var(--border,#cbd7ea)}
+ .studio-glass .ce-frame{height:190px;max-width:100%;width:100%;aspect-ratio:auto;border-radius:12px}.studio-glass .ce-frame video{object-fit:contain}
+ .studio-glass .ce-frame canvas{width:106.875px;height:190px;left:50%;transform:translateX(-50%)}
+ .studio-glass .ce-monitor .pf-capcut-help{display:none}.studio-glass .ce-monitor .pf-capcut-launch{margin:6px 0;min-height:40px;font-size:14px}
+ .studio-glass .ce-time-readout:empty{display:none}.studio-glass .ce-time-readout{font-size:13px}
+ .ce-cue-picker{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px;margin:12px 0}.ce-cue-picker button{padding:6px!important;font-size:14px!important}
+ .ce-cue:not(.ce-selected){display:none}.studio-glass .ce-cue{padding:10px}.ce-list-heading{display:none}
+}
+@media(max-height:650px) and (max-width:750px){.studio-glass .ce-monitor{position:static}}

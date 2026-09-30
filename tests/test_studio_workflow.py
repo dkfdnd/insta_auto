@@ -62,6 +62,30 @@ def test_export_is_completion_boundary_and_all_assets_download(prepared):
     with pytest.raises(ValueError): studio.download(task,'../../other','script')
 
 
+def test_make_video_atomically_saves_and_starts_once(prepared):
+    studio,task=prepared;complete(studio,task)
+    before=studio.store.get(task)
+    result=studio.action(task,'make-video',{'text':'직접 고친 대본입니다.','speed':1.1,
+        'pronunciations':[{'from':'USB','to':'유에스비'}],'source_ids':['source1'],'feedback_revision':0})
+    state=studio.store.get(task)
+    assert state['run_id']!=before['run_id']
+    assert state['scripts'][-1]['text']=='직접 고친 대본입니다.'
+    assert state['runs'][-1]['inputs']['speed']==1.1
+    assert state['runs'][0]['status']=='completed'
+    assert not result['feedback']
+    assert len([j for j in result['jobs'] if j['status']=='queued'])==1
+    with pytest.raises(Conflict):studio.action(task,'make-video',{'text':'중복 클릭','feedback_revision':0})
+
+
+@pytest.mark.parametrize('invalid',[{'speed':2},{'source_ids':[]},{'pronunciations':[{'from':'','to':'말'}]}])
+def test_make_video_invalid_setting_rolls_back_script_and_queue(prepared,invalid):
+    studio,task=prepared;complete(studio,task);before=studio.store.get(task)
+    with pytest.raises(ValueError):studio.action(task,'make-video',{'text':'저장되면 안 되는 대본',**invalid})
+    after=studio.store.get(task)
+    assert after==before
+    assert not [j for j in studio.store.jobs(task) if j['status']=='queued']
+
+
 def test_caption_export_is_atomic_reuses_voice_and_skips_native_registration(prepared):
     studio,task=prepared;complete(studio,task)
     before=studio.store.get(task);edit=next(e for e in before['edits'] if e['id']==before['edit_id'])

@@ -65,6 +65,16 @@
     const box=root.querySelector('[data-caption-edit]');if(!box)return;
     if(box._bound){refresh(root,t);return;}box._bound=true;
     const video=box.querySelector('video'),canvas=box.querySelector('canvas'),ctx=canvas.getContext('2d');
+    // Keep the external editor discoverable without covering mobile caption controls.
+    box.querySelector('.ce-toolbar').append(box.querySelector('[data-pf="open-capcut"]'));
+    const help=box.querySelector('.pf-capcut-help');box.querySelector('.ce-layout').before(help);
+    const chooser=document.createElement('nav');chooser.className='ce-cue-picker';chooser.setAttribute('aria-label','수정할 자막 선택');
+    const cards=fields(root);let selected=0;
+    chooser.innerHTML='<button type="button" data-cue-prev aria-label="이전 자막">← 이전</button><select aria-label="수정할 자막">'+cards.map((c,i)=>`<option value="${i}">${i+1}. ${esc(input(c,'caption').value)}</option>`).join('')+'</select><button type="button" data-cue-next aria-label="다음 자막">다음 →</button>';
+    const choose=(n,seek=false)=>{selected=Math.max(0,Math.min(cards.length-1,n));cards.forEach((c,i)=>c.classList.toggle('ce-selected',i===selected));chooser.querySelector('select').value=selected;chooser.querySelector('[data-cue-prev]').disabled=selected===0;chooser.querySelector('[data-cue-next]').disabled=selected===cards.length-1;if(seek&&cards[selected]&&video.readyState>=1){video.pause();root._syncLoop=null;video.currentTime=Number(input(cards[selected],'start').value);}};
+    chooser.querySelector('select').onchange=e=>choose(Number(e.target.value),true);
+    chooser.querySelector('[data-cue-prev]').onclick=()=>choose(selected-1,true);chooser.querySelector('[data-cue-next]').onclick=()=>choose(selected+1,true);
+    box.querySelector('.ce-captions').prepend(chooser);choose(0);
     const paint=time=>{
       ctx.clearRect(0,0,1080,1920);
       if(!ready(root,root._task))return;

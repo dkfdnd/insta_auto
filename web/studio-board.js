@@ -62,15 +62,15 @@
     const nextAction=complete?'완성 영상 보기':review?{script:'대본 검토하기',voice:'음성 들어보기',edit:'초안 검토하기'}[stage]:state==='error'?'문제 확인하기':`${columns[currentIndex][1]} 작업 열기`;
     return {stage,state,label:state==='running'&&task.automation?.paused_by_user?'진행 중 · 중지 예약':stateNames[state],running:runningJobs.length>0,primaryRunning,review,complete,steps,done,
       currentIndex,phase,total:6,stageName:columns[currentIndex][1],attention:state==='error'||sourceError,
-      versions:run?`제작 V${run.number}`:`대본 ${task.scripts?.length||0}개`,
-      previous:previous&&previous.id!==run?.id?`V${previous.number} 완료본 보유`:'',
+      versions:run?`${run.number}번째 영상`:`대본 ${task.scripts?.length||0}개`,
+      previous:previous&&previous.id!==run?.id?`${previous.number}번째 완성본 보관 중`:'',
       activity:runningJobs.map(j=>activityNames[j.kind]||'추가 작업').join(' · '),message:note,nextAction,
       tab:tabs[currentIndex]};
   }
   function matches(task, filter, query) {
     const d=describe(task),q=(query||'').trim().toLowerCase();
     return (!q||`${task.title} ${task.shortcode}`.toLowerCase().includes(q))&&
-      (filter==='all'||filter==='running'&&d.running||filter==='review'&&d.review||filter==='attention'&&d.attention||filter==='completed'&&d.complete);
+      (filter==='all'||filter==='running'&&['running','queued','retry'].includes(d.state)||filter==='review'&&d.review||filter==='attention'&&d.attention||filter==='completed'&&d.complete);
   }
   function text(node,value){if(node.textContent!==String(value))node.textContent=value;}
   function createProgress(){
@@ -85,20 +85,21 @@
     el.classList.toggle('is-live',d.primaryRunning);
     for(const step of d.steps){const li=el.querySelector(`[data-step="${step.id}"]`);li.dataset.stepState=step.state;text(li.querySelector('.step-node'),step.state==='done'?'✓':step.number);}
   }
+  const bucket=d=>d.complete?'finished':d.attention||d.review||['paused','waiting','unknown'].includes(d.state)?'attention':'working';
   function mount(container,overview){
     const nodes=new Map(),lanes=new Map();
-    for(const [i,[id,title,hint]] of columns.entries()){
+    for(const [i,[id,title,hint]] of [['attention','내가 확인할 영상','자료 준비·검토·문제 해결'],['working','제작 중','자동으로 만들고 있어요'],['finished','완성 영상','보고 내려받으세요']].entries()){
       const lane=document.createElement('section');lane.className='kanban-column';lane.dataset.stage=id;
       lane.setAttribute('aria-labelledby','lane-'+id);
       lane.innerHTML=`<header class="column-head"><span class="column-number">${String(i+1).padStart(2,'0')}</span><div><h2 id="lane-${id}">${title}<span class="column-count">0</span></h2><p>${hint}</p></div></header><div class="column-cards"></div><p class="column-empty">아직 이 단계의 영상이 없어요</p>`;
       container.append(lane);lanes.set(id,lane);
     }
-    const metrics=[['review','검토할 영상'],['running','제작 중'],['attention','확인 필요'],['completed','제작 완료']];
+    const metrics=[['attention','내가 확인할 영상'],['working','제작 중'],['finished','완성 영상']];
     overview.innerHTML=metrics.map(([id,title])=>`<div class="metric" data-metric="${id}"><span>${title}</span><strong>0<small>편</small></strong></div>`).join('');
     function render(tasks,{selectedId,filter='all',query=''}={}){
       const views=new Map(tasks.map(t=>[t.id,describe(t)]));
-      const counts={review:0,running:0,attention:0,completed:0};
-      for(const d of views.values()){for(const k of ['review','running','attention'])if(d[k])counts[k]++;if(d.complete)counts.completed++;}
+      const counts={attention:0,working:0,finished:0};
+      for(const d of views.values())counts[bucket(d)]++;
       for(const [id] of metrics)overview.querySelector(`[data-metric="${id}"] strong`).firstChild.nodeValue=String(counts[id]);
       const visible=tasks.filter(t=>matches(t,filter,query)).sort((a,b)=>(a.created||0)-(b.created||0)||a.id.localeCompare(b.id));
       const visibleIds=new Set(visible.map(t=>t.id));
@@ -108,7 +109,7 @@
         const d=views.get(task.id);let card=nodes.get(task.id);
         if(!card){
           card=document.createElement('article');card.className='work-card';card.dataset.workCard=task.id;
-          card.innerHTML='<div class="card-identity"><div class="card-visual"><img hidden alt=""><span class="card-placeholder" aria-hidden="true">▷</span></div><div class="card-heading"><span class="card-mode"></span><h3></h3></div></div><div class="card-body"><div class="progress-heading"><strong class="card-phase"></strong><span class="card-stage"></span></div><div class="progress-mount"></div><div class="current-work"><div class="card-top"><span class="board-status"></span><span class="activity-dot" hidden aria-hidden="true"></span></div><p class="card-message"></p><p class="card-activity" hidden></p></div></div><footer class="card-footer"><div class="card-version-line"><span class="card-version"></span><span class="card-previous"></span></div><button class="card-open"></button></footer>';
+          card.innerHTML='<div class="card-identity"><div class="card-visual"><img hidden alt=""><span class="card-placeholder" aria-hidden="true">▷</span></div><div class="card-heading"><span class="card-mode"></span><h3></h3></div></div><div class="card-body"><div class="progress-heading"><strong class="card-phase"></strong><span class="card-stage"></span></div><details class="card-progress-details"><summary>자세한 제작 단계</summary><div class="progress-mount"></div></details><div class="current-work"><div class="card-top"><span class="board-status"></span><span class="activity-dot" hidden aria-hidden="true"></span></div><p class="card-message"></p><p class="card-activity" hidden></p></div></div><footer class="card-footer"><div class="card-version-line"><span class="card-version"></span><span class="card-previous"></span></div><button class="card-open"></button></footer>';
           const button=card.querySelector('.card-open');button.dataset.work=task.id;button.type='button';button.setAttribute('aria-controls','work-drawer');
           card.querySelector('.progress-mount').append(createProgress());nodes.set(task.id,card);
         }
@@ -121,11 +122,11 @@
         card.querySelector('.card-activity').hidden=!d.running;card.querySelector('.activity-dot').hidden=!d.running;
         const img=card.querySelector('img'),cover=task.thumbnail_url||(task.edits||[]).find(e=>e.id===task.edit_id)?.cover_url||`thumbs/${encodeURIComponent(task.shortcode)}.jpg`;
         if(img.getAttribute('src')!==cover){img.onerror=()=>{img.hidden=true;};img.src=cover;img.hidden=false;}
-        const lane=lanes.get(d.stage).querySelector('.column-cards');
+        const lane=lanes.get(bucket(d)).querySelector('.column-cards');
         if(card.parentElement!==lane){const moved=!!card.parentElement;lane.append(card);if(moved){card.classList.remove('stage-arrived');void card.offsetWidth;card.classList.add('stage-arrived');}}
       }
       if(focus&&document.contains(focus)&&document.activeElement!==focus)focus.focus({preventScroll:true});
-      for(const [id,lane] of lanes){const n=visible.filter(t=>views.get(t.id).stage===id).length;text(lane.querySelector('.column-count'),n);lane.querySelector('.column-empty').hidden=n>0;}
+      for(const [id,lane] of lanes){const n=visible.filter(t=>bucket(views.get(t.id))===id).length;text(lane.querySelector('.column-count'),n);lane.querySelector('.column-empty').hidden=n>0;}
       return visible.length;
     }
     return {render};

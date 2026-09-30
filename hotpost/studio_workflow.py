@@ -176,13 +176,18 @@ class WorkflowMixin:
             return None
         actions = {'save-feedback', 'save-script', 'restore-script', 'apply-proposal', 'regenerate-voice',
                    'revise-edit', 'request-edit', 'reproduce', 'discard-feedback', 'select-candidate', 'discard-edit-feedback',
-                   'save-captions', 'export-edit'}
+                   'save-captions', 'export-edit', 'make-video'}
         if action not in actions:
             return None
         def change(s, db):
             if data.get('feedback_revision') is not None and data['feedback_revision'] != s.get('feedback_revision',0):
                 raise Conflict('다른 화면에서 피드백이 변경되었습니다. 최신 내용을 확인한 뒤 다시 저장하세요.')
             feedback = s.setdefault('feedback', {})
+            if action == 'make-video':
+                if 'text' in data:
+                    text = str(data['text']).strip()
+                    if not text or len(text) > 3000: raise ValueError('대본은 1~3000자로 입력하세요.')
+                    feedback['script_text'] = text
             if action in {'save-captions','export-edit'}:
                 edit = next((e for e in s['edits'] if e['id']==data.get('edit_id')), None)
                 if not edit or edit['id'] != s.get('edit_id'):
@@ -232,7 +237,7 @@ class WorkflowMixin:
                     text = proposal['text']
                 if not text or len(text) > 3000: raise ValueError('대본은 1~3000자로 입력하세요.')
                 feedback['script_text'] = text
-            elif action in {'save-feedback', 'regenerate-voice'}:
+            elif action in {'save-feedback', 'regenerate-voice', 'make-video'}:
                 if 'speed' in data:
                     speed = float(data['speed'])
                     if not math.isfinite(speed) or not .8 <= speed <= 1.25: raise ValueError('속도는 0.8~1.25배입니다.')
@@ -271,7 +276,7 @@ class WorkflowMixin:
                 request = str(data.get('request', '')).strip()
                 if not request: raise ValueError('수정 요청을 입력하세요.')
                 self.store.enqueue(db, task_id, 'suggest_edit', {**data, 'feedback_hash': self.feedback_hash(feedback)}, uid('suggest:'))
-            if action in {'reproduce','export-edit'}:
+            if action in {'reproduce','export-edit','make-video'}:
                 if s.get('pending_reproduction'): raise Conflict('이미 재제작이 대기 중입니다.')
                 if not feedback: raise ValueError('반영할 변경사항을 먼저 저장하세요.')
                 if feedback.get('changes') and any(k in feedback for k in ('script_text', 'speed', 'pronunciations', 'regenerate_voice', 'source_ids')):

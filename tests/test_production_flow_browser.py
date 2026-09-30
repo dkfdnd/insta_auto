@@ -391,6 +391,43 @@ def test_live_caption_shift_paints_without_render_and_exports_last_input(flow_pa
     assert page.locator('[data-field="caption:b1"]').input_value()=='다음 내보내기에 쓸 문구'
 
 
+def test_undo_restores_clean_state_and_capcut(flow_page):
+    page=flow_page;setup_editor(page)
+    page.evaluate('''()=>{
+      task.jobs=[];task.caption_editor_supported=true;task.edit_id='e1';
+      task.edits=[{id:'e1',duration:3,clean_preview_url:'/base.mp4',export_url:'/final.mp4',plan:{
+        cues:[{id:'c1',text:'자막',start:.2,end:1.2}],beats:[{id:'b1',cue_id:'c1'}]}}];task.revision++;draw();
+      const v=document.querySelector('[data-edit-preview]');
+      Object.defineProperty(v,'duration',{get:()=>3});Object.defineProperty(v,'readyState',{get:()=>4});
+    }''')
+    original=page.locator('[data-pf=export-edit]').inner_text()
+    page.locator('[data-sync=later]').click()
+    assert page.locator('[data-pf=open-capcut]').is_disabled()
+    page.locator('[data-caption-undo]').click()
+    assert page.locator('[data-pf=open-capcut]').is_enabled()
+    assert page.locator('[data-pf=export-edit]').inner_text()==original
+    assert page.evaluate('JSON.parse(localStorage.getItem("production-feedback-work-test")||"{}")["start:b1"]===undefined')
+
+
+def test_make_video_sends_visible_changes_once_and_keeps_later_typing(flow_page):
+    page=flow_page;setup_editor(page)
+    page.locator('[data-field=script]').fill('지금 만들 대본')
+    page.locator('[data-field=speed]').fill('1.1')
+    assert page.locator('[data-pf=make-video]').is_enabled()
+    page.evaluate('window.hold=true')
+    page.locator('[data-pf=make-video]').click()
+    page.wait_for_function('requests.length===1')
+    assert page.evaluate('requests[0].url.endsWith("/make-video")')
+    assert page.evaluate('requests[0].body.text')=='지금 만들 대본'
+    assert page.evaluate('requests[0].body.speed')==1.1
+    assert page.locator('[data-pf=make-video]').is_disabled()
+    page.locator('[data-field=script]').fill('다음에 만들 대본')
+    page.evaluate('release()')
+    page.wait_for_function('!document.querySelector("#root")._saving')
+    assert page.locator('[data-field=script]').input_value()=='다음에 만들 대본'
+    assert page.evaluate('requests.length')==1
+
+
 def test_caption_shift_presets_custom_bounds_and_export(flow_page):
     page = flow_page
     setup_editor(page)

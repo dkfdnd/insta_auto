@@ -9,11 +9,12 @@
   const current=()=>tasks.find(t=>t.id===selectedId);
   const board=window.StudioBoard.mount($('#work-list'),$('#overview'));
   const updateJourney=window.StudioBoard.mountJourney($('#drawer-journey'));
-  $('#board-stages').innerHTML=window.StudioBoard.columns.map(([id,title],i)=>`<button data-jump-stage="${id}"><span>${String(i+1).padStart(2,'0')}</span>${title}</button>`).join('');
+  $('#board-stages').innerHTML=[['attention','내가 확인할 영상'],['working','제작 중'],['finished','완성 영상']].map(([id,title],i)=>`<button data-jump-stage="${id}"><span>${String(i+1).padStart(2,'0')}</span>${title}</button>`).join('');
   const panels=new Map(), memories=new Map();
   let selecting=false;
   const description=t=>window.StudioBoard.describe(t);
   const workspaceTab=value=>['original','script','voice'].includes(value)?'script':['edit','results','export'].includes(value)?'edit':value;
+  document.addEventListener('production-draft',()=>{if(current())renderHero(current(),description(current()));});
   function updateDrawerHeader(){
     const t=current();if(!t)return;
     $('#drawer-title').textContent=window.StudioBoard.title(t);
@@ -23,11 +24,12 @@
     updateJourney(t);applyDetailTab();$('#journey-current').textContent=d.phase;renderHero(t,d);
   }
   function renderHero(t,d){
+    const local=JSON.parse(localStorage.getItem('production-feedback-'+t.id)||'{}');const pending=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|source:|caption:|start:|end:)/.test(k))||Object.keys(t.feedback||{}).length;
     const next=d.steps.find((s,i)=>i>d.currentIndex&&s.state!=='done');
     const empty=d.stage==='sources'&&!t.sources.length;
-    const title=d.complete?'완성 영상을 확인하세요':empty?'영상만 넣으면, 다음 단계로':d.stage==='sources'?'준비된 영상으로 이어가세요':d.stage==='script'?'우리만의 대본을 다듬을 차례':d.stage==='voice'?'목소리와 발음을 확인할 차례':d.stage==='edit'?'장면과 자막을 완성할 차례':d.stage==='export'?'완성 영상을 준비하고 있어요':'원본 내용을 확인하고 있어요';
+    const title=d.complete&&pending?'기존 영상 완성 · 수정 내용 반영 전':d.complete?'완성 영상을 확인하세요':empty?'영상만 넣으면, 다음 단계로':d.stage==='sources'?'준비된 영상으로 이어가세요':d.stage==='script'?'우리만의 대본을 다듬을 차례':d.stage==='voice'?'목소리와 발음을 확인할 차례':d.stage==='edit'?'장면과 자막을 완성할 차례':d.stage==='export'?'완성 영상을 준비하고 있어요':'원본 내용을 확인하고 있어요';
     const action=empty?'＋ 직접 영상 넣기':d.complete?'완성 영상 보기 →':d.stage==='sources'?'영상 선택하고 이어가기 →':'현재 단계 작업하기 →';
-    const html=`<div class="hero-stage-ring" style="--stage-angle:${d.done/6*360}deg" aria-label="6단계 중 ${d.done}단계 완료"><span><strong>${d.complete?'✓':{sources:1,script:2,edit:3}[workspaceTab(d.tab)]}</strong><small>${d.complete?'제작 완료':'/ 3 작업'}</small></span></div><div class="hero-copy"><div class="hero-state"><span class="hero-status ${d.state}">${d.state==='running'?'<i class="activity-dot" aria-hidden="true"></i>':''}${esc(d.label)}</span><span>${esc(d.stageName)}</span></div><h3>${title}</h3><p role="status">${esc(d.message)}</p><div class="hero-actions"><button class="primary" data-focus-current>${action}</button>${t.error&&!empty?'<button class="secondary" data-action="retry">다시 시도</button>':''}<span class="hero-next">${next?'다음 → '+esc(next.label):'마지막 단계 · 완성본 확인'}</span></div></div><details class="hero-controls"><summary aria-label="제작 제어">⋯</summary>${t.automation&&t.status!=='completed'?`<button class="secondary" data-action="${t.automation.active?'pause-auto':'resume-auto'}">${t.automation.active?'자동 진행 중지':'자동 진행 재개'}</button>`:'<span>제작 완료</span>'}</details>`;
+    const html=`<div class="hero-stage-ring" style="--stage-angle:${d.done/6*360}deg" aria-label="6단계 중 ${d.done}단계 완료"><span><strong>${d.complete?'✓':{sources:1,script:2,edit:3}[workspaceTab(d.tab)]}</strong><small>${d.complete?'제작 완료':'/ 3 작업'}</small></span></div><div class="hero-copy"><div class="hero-state"><span class="hero-status ${d.state}">${d.state==='running'?'<i class="activity-dot" aria-hidden="true"></i>':''}${esc(d.complete&&pending?'수정 중 · 이전 영상 보관됨':d.label)}</span><span>${esc(d.stageName)}</span></div><h3>${title}</h3><p role="status">${esc(d.message)}</p><div class="hero-actions"><button class="primary" data-focus-current>${action}</button>${t.error&&!empty?'<button class="secondary" data-action="retry">다시 시도</button>':''}<span class="hero-next">${next?'다음 → '+esc(next.label):'마지막 단계 · 완성본 확인'}</span></div></div><details class="hero-controls"><summary aria-label="제작 제어">⋯</summary>${t.automation&&t.status!=='completed'?`<button class="secondary" data-action="${t.automation.active?'pause-auto':'resume-auto'}">${t.automation.active?'자동 진행 중지':'자동 진행 재개'}</button>`:'<span>제작 완료</span>'}</details>`;
     const hero=$('#work-hero');
     if(hero._markup!==html){const open=hero.querySelector('.hero-controls')?.open;hero.innerHTML=html;hero._markup=html;if(open)hero.querySelector('.hero-controls').open=true;}
   }
@@ -56,6 +58,10 @@
     if(!selectedId)return;
     const panel=$('#detail');panel.querySelectorAll('video,audio').forEach(m=>m.pause());
     panels.set(selectedId,panel);memories.set(selectedId,{tab,activeEditId,lastRevision,scroll:$('#drawer-scroll').scrollTop});
+  }
+  function showCompletedVideo(){
+    tab='edit';applyDetailTab();
+    const output=$('.pf-summary > video');if(output){output.scrollIntoView({block:'start'});output.focus({preventScroll:true});}
   }
   async function openWork(id){
     if(selecting||!tasks.some(t=>t.id===id))return;
@@ -178,11 +184,11 @@
   async function saveScript(){const t=current(),input=$('#script-editor');if(!t||!input||!dirty)return;if(saving){await saving;if(dirty)return saveScript();return;}const text=input.value;saving=(async()=>{const saved=await action('save-script',{text},{quiet:true});dirty=input.value!==text;if(dirty){localStorage.setItem('studio-draft-'+t.id,JSON.stringify({base:saved.script_id,text:input.value}));}else{localStorage.removeItem('studio-draft-'+t.id);}$('#save-status').textContent=dirty?'수정 중…':`저장됨 · ${text.length}자`;})();try{await saving;}finally{saving=false;}}
   function showCandidates(beatId){const t=current(),e=revision(t,'edits',t.edit_id),b=e.plan.beats.find(b=>b.id===beatId);$('#candidate-caption').textContent=`“${b.text}” · 실제 확보된 장면 중에서 선택하세요.`;$('#candidates').innerHTML=b.options.map((o,i)=>{const s=e.plan.shots.find(s=>s.id===o.shot_id);return `<article class="candidate"><video src="${esc(s.video_url)}#t=${s.start},${s.end}" poster="${esc(s.thumbnail_url)}" controls preload="none"></video><h4>후보 ${i+1} <span class="pill ${o.relation==='direct'?'draft_review':'review'}">${{direct:'직접 대응',context:'제품 맥락',illustration:'대체 장면'}[o.relation]}</span></h4><p>${esc(s.observation)}<br>${esc(o.reason)}</p><button class="primary" data-choose-shot="${s.id}" data-for-beat="${b.id}">${b.selected_shot_id===s.id?'현재 장면':'이 장면 사용'}</button></article>`;}).join('');$('#candidate-dialog').showModal();}
   document.addEventListener('click',async event=>{const el=event.target.closest('button');
-    if(!el){const card=event.target.closest('[data-work-card]');if(card&&!event.target.closest('a,input,select,video,audio'))await openWork(card.dataset.workCard);return;}
+    if(!el){const card=event.target.closest('[data-work-card]');if(card&&!event.target.closest('a,input,select,video,audio,details'))await openWork(card.dataset.workCard);return;}
     try{
-    if(el.hasAttribute('data-focus-current')){tab=description(current()).tab;applyDetailTab();$('#drawer-scroll').scrollTop=0;const upload=$('[data-upload-open]');if(tab==='sources'&&upload){const choice=$('[data-field^="source:"]');if(current().sources.length&&choice)choice.focus();else upload.focus();}else $('#detail').querySelector('[data-pf-section="'+tab+'"] textarea, [data-pf-section="'+tab+'"] button')?.focus();return;}
+    if(el.hasAttribute('data-focus-current')){tab=description(current()).tab;applyDetailTab();$('#drawer-scroll').scrollTop=0;if(description(current()).complete){const output=$('.pf-summary > video');if(output){output.scrollIntoView({block:'start'});output.focus({preventScroll:true});}return;}const upload=$('[data-upload-open]');if(tab==='sources'&&upload){const choice=$('[data-field^="source:"]');if(current().sources.length&&choice)choice.focus();else upload.focus();}else $('#detail').querySelector('[data-pf-section="'+tab+'"] textarea, [data-pf-section="'+tab+'"] button')?.focus();return;}
     if(el.dataset.jumpStage){const lane=$(`[data-stage="${el.dataset.jumpStage}"]`);$('#work-list').scrollTo({left:lane.getBoundingClientRect().left-$('#work-list').getBoundingClientRect().left+$('#work-list').scrollLeft,behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'instant':'smooth'});return;}
-    if(el.dataset.work){await openWork(el.dataset.work);return;}
+    if(el.dataset.work){await openWork(el.dataset.work);if(current()&&description(current()).complete)showCompletedVideo();return;}
     if(el.id==='close-work'){await closeWork();return;}
     if(el.id==='expand-work'){$('#work-drawer').classList.toggle('expanded');const full=$('#work-drawer').classList.contains('expanded');el.textContent=full?'패널로 축소':'전체화면';el.setAttribute('aria-pressed',String(full));syncDrawerMode();return;}
     if(el.dataset.filter){filter=el.dataset.filter;$('#filters').querySelectorAll('button').forEach(b=>b.classList.toggle('selected',b===el));renderList();return;}

@@ -96,16 +96,19 @@ def studio_page():
 
 def test_columns_filters_and_stable_polling(studio_page):
     page,tasks=studio_page
-    assert page.locator('.kanban-column').count()==6
-    assert page.locator('[data-stage="export"] [data-work-card="export"] .board-status').inner_text()=='외부 작업 대기'
+    assert page.locator('.kanban-column').count()==3
+    assert page.locator('[data-stage="attention"] [data-work-card="export"] .board-status').inner_text()=='외부 작업 대기'
     assert page.locator('.work-card.is-running').count()==1
+    page.locator('[data-work-card="voice"] .card-progress-details summary').click()
+    assert page.locator('[data-work-card="voice"] .milestone-progress').is_visible()
+    assert not page.locator('#work-drawer').is_visible()
     page.locator('[data-work-card="voice"]').evaluate('(e)=>{window.keptCard=e;window.keptActivity=e.querySelector(".activity-dot")}')
     page.evaluate('refreshStudio()')
     assert page.evaluate('keptCard===document.querySelector("[data-work-card=voice]") && keptActivity===keptCard.querySelector(".activity-dot")')
     tasks[2].update(status='editing',revision=2)
     tasks[2]['jobs']=[dict(kind='edit',status='running')]
     page.evaluate('refreshStudio()')
-    assert page.locator('[data-stage="edit"] [data-work="voice"]').count()==1
+    assert page.locator('[data-stage="working"] [data-work="voice"]').count()==1
     assert page.evaluate('keptCard===document.querySelector("[data-work-card=voice]")')
     page.locator('[data-filter="review"]').click()
     assert page.locator('.work-card').count()==2
@@ -135,7 +138,7 @@ def test_feedback_survives_poll_tab_close_switch_and_save(studio_page):
     page.locator('[data-work="voice"]').click()
     assert editor.input_value()=='저장하기 전 직접 고친 문장'
     page.locator('[data-pf="save-script"]').click()
-    page.wait_for_function('document.querySelector(".pf-message").textContent.includes("저장했습니다")')
+    page.wait_for_function('document.querySelector(".pf-message").textContent.includes("보관했습니다")')
     assert tasks[2]['feedback']['script_text']=='저장하기 전 직접 고친 문장'
     assert page.evaluate('localStorage.getItem("production-feedback-voice")') is None
 
@@ -237,7 +240,7 @@ def test_attention_actions_and_reduced_motion(studio_page):
     tasks[2].update(status='attention',error='음성 연결 실패',revision=2)
     tasks[2]['jobs'][0]['status']='failed'
     page.evaluate('refreshStudio()')
-    assert page.locator('[data-stage="voice"] [data-work-card="voice"] [class="board-status"]').inner_text()=='확인 필요'
+    assert page.locator('[data-stage="attention"] [data-work-card="voice"] [class="board-status"]').inner_text()=='확인 필요'
     page.locator('[data-work="voice"]').click()
     assert page.locator('#work-hero [data-action="retry"]').is_visible()
     page.locator('#close-work').click()
@@ -272,8 +275,8 @@ def test_numbered_progress_and_six_stage_navigation(studio_page):
 def test_mobile_progress_expansion_and_stage_navigation(studio_page):
     page,_=studio_page
     page.set_viewport_size({'width':390,'height':844})
-    page.locator('[data-jump-stage="export"]').click()
-    page.wait_for_function('document.querySelector("#work-list").scrollLeft>0')
+    assert page.locator('#work-list').evaluate('(e)=>e.scrollWidth<=e.clientWidth')
+    assert page.locator('.kanban-column').count()==3
     page.locator('[data-work="voice"]').click()
     assert page.locator('#journey-panel').get_attribute('open') is None
     assert page.locator('#detail-tabs button').count()==3
