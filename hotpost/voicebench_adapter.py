@@ -60,6 +60,22 @@ class VoiceBenchAdapter:
     def _url(self, path: str) -> str:
         return self.settings.voicebench_url.rstrip("/") + path
 
+    def voices(self) -> dict:
+        try:
+            return self._response_json(self.session.get(self._url('/v1/voices'),headers=self._headers(),timeout=15))
+        except requests.RequestException as exc:
+            raise RuntimeError('목소리 목록을 불러오지 못했어요. VoiceBench 연결·업데이트 상태를 확인하고 다시 눌러주세요.') from exc
+
+    def preview(self, voice_id: str) -> tuple[bytes,str]:
+        import re
+        if not re.fullmatch(r'[a-z0-9_-]{1,100}',voice_id): raise ValueError('올바르지 않은 목소리입니다.')
+        try:
+            response=self.session.get(self._url('/v1/voices/'+voice_id+'/preview'),headers=self._headers(),timeout=20)
+            response.raise_for_status()
+            return response.content,response.headers.get('Content-Type','audio/wav')
+        except requests.RequestException as exc:
+            raise RuntimeError('이 목소리의 미리듣기를 준비하지 못했어요. 다른 목소리를 듣거나 잠시 후 다시 시도하세요.') from exc
+
     @staticmethod
     def _response_json(response) -> dict:
         response.raise_for_status()
@@ -72,7 +88,8 @@ class VoiceBenchAdapter:
                    progress: Callable[[str, int], None] | None = None,
                    request_id: int | None = None,
                    on_submitted: Callable[[int], None] | None = None,
-                   retry_failed: bool = False, generation_key: str | None = None) -> dict:
+                   retry_failed: bool = False, generation_key: str | None = None,
+                   voice_profile_id: str | None = None) -> dict:
         script = text.strip()
         if not script:
             raise ValueError("VoiceBench cannot synthesize an empty script.")
@@ -86,6 +103,10 @@ class VoiceBenchAdapter:
         timeout = min(60.0, float(self.settings.voicebench_timeout))
         progress("VoiceBench 음성 생성을 요청하는 중", 5)
         payload = {"text": script}
+        if voice_profile_id:
+            if not any(v.get('id')==voice_profile_id and v.get('available') for v in self.voices().get('voices',[])):
+                raise ValueError('선택한 목소리가 준비되지 않았습니다. 다른 목소리를 선택하세요.')
+            payload['voice_id'] = voice_profile_id
         if generation_key:
             payload['generation_key'] = generation_key
         try:
@@ -147,6 +168,8 @@ class VoiceBenchAdapter:
                 f"{detail[:500]}"
             )
 
+        if voice_profile_id and status.get('voice_id') != voice_profile_id:
+            raise RuntimeError('요청한 목소리와 생성 결과가 다릅니다. VoiceBench 업데이트 상태를 확인하세요.')
         try:
             audio = self.session.get(
                 self._url(f"/v1/tts/{request_id}/audio"), headers=headers,
@@ -169,6 +192,7 @@ class VoiceBenchAdapter:
             temporary.unlink(missing_ok=True)
         metadata = {
             "voicebench_request_id": request_id,
+            "voice_profile_id": status.get('voice_id') or voice_profile_id,
             "status": "succeeded",
             "output_path": str(target),
             "audio": audio_info,

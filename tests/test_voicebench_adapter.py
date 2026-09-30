@@ -87,6 +87,30 @@ def valid_wav():
     return buffer.getvalue()
 
 
+@pytest.mark.parametrize('returned_id', ['qwen-sohee', 'qwen-aiden', None])
+def test_named_voice_is_submitted_and_wrong_voice_never_downloaded(tmp_path,returned_id):
+    class NamedSession(Session):
+        def post(self,url,**kwargs):
+            self.posts+=1
+            assert kwargs['json']=={'text':'실제 대본','voice_id':'qwen-sohee'}
+            return Response({'id':17,'status':'succeeded','voice_id':returned_id})
+        def get(self,url,**kwargs):
+            assert kwargs['headers']['Authorization']=='Bearer secret'
+            if url.endswith('/voices'):
+                return Response({'voices':[{'id':'qwen-sohee','available':True}]})
+            assert returned_id=='qwen-sohee', 'Wrong voice audio must never be downloaded'
+            return super().get(url,**kwargs)
+    settings=_settings(tmp_path);target=settings.data_dir/'named.wav'
+    adapter=VoiceBenchAdapter(settings,session=NamedSession(valid_wav()))
+    if returned_id=='qwen-sohee':
+        result=adapter.synthesize('실제 대본',target,voice_profile_id='qwen-sohee')
+        assert result['voice_profile_id']=='qwen-sohee' and target.is_file()
+    else:
+        with pytest.raises(RuntimeError,match='목소리'):
+            adapter.synthesize('실제 대본',target,voice_profile_id='qwen-sohee')
+        assert not target.exists()
+
+
 @pytest.mark.parametrize('payload', [
     b'RIFF' + (36).to_bytes(4, 'little') + b'WAVE' + b'\0' * 32,
     valid_wav()[:-100],

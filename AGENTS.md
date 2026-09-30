@@ -29,6 +29,7 @@
 - 대본 추출은 `hotpost/transcript.py`가 담당한다. `speech`는 실제 오디오 전사, `screen_text`는 프레임 OCR이며 둘을 같은 종류의 대사로 취급하지 않는다. API는 `POST /api/transcript-jobs`, `GET /api/transcript-jobs/{id}`, `GET /api/transcript-jobs/{id}/download?format=txt|json`이다. 작업 상태는 SQLite 큐에 보존된다.
 - 제작 연결은 `hotpost/production.py`가 단계별 ID·선택 대본·변환 계획·해시를 저장한다. PersonalProject1이 대본을 재가공하고 사용자가 선택한 버전만 VoiceBench와 편집으로 전달한다. 원본 전사문으로 자동 대체하지 않는다. CapCut 연동은 `hotpost/editing_adapter.py`의 버전 JSON·별도 프로세스 경계를 유지한다. 패키지 직접 import나 가상환경 통합은 금지한다.
 - VoiceBench 연동은 `hotpost/voicebench_adapter.py`의 로컬 HTTP API 경계를 사용한다. VoiceBench 패키지를 import하거나 엔진·레퍼런스·Seed를 클라이언트에서 덮어쓰지 않는다. API 키는 환경변수 또는 VoiceBench의 Git 제외 파일에서만 읽는다.
+- 사용자 요청에 따라 제작실에서 `/v1/voices`에 공개된 공식 목소리의 `voice_id`를 선택할 수 있다. 엔진·참조 음성은 VoiceBench가 서버에서 결정하며, 빈 ID는 기존 기본 목소리를 뜻한다. 다른 PC의 기본 설정을 변경하지 않는다.
 - 서버는 표준 라이브러리 `ThreadingHTTPServer`, 화면은 빌드 단계 없는 HTML/CSS/JS다. 백엔드 API를 바꾸면 `web/app.js`의 모달 요청·표시·다운로드도 함께 점검한다.
 
 ## 개발·검증

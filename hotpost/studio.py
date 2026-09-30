@@ -535,7 +535,8 @@ class Studio(WorkflowMixin):
             result = VoiceBenchAdapter(self.settings).synthesize(p.get('spoken_text', script["text"]), voice,
                 progress=lambda message, pct: self.store.change(state['id'], lambda s, db: s.update(message=message, progress=pct)),
                 request_id=job["checkpoint"].get("request_id"), on_submitted=checkpoint,
-                retry_failed=bool(job['checkpoint'].get('retry_requested')), generation_key=p.get('generation_key'))
+                retry_failed=bool(job['checkpoint'].get('retry_requested')), generation_key=p.get('generation_key'),
+                **({'voice_profile_id':p['voice_profile_id']} if p.get('voice_profile_id') else {}))
             _atomic_json(metadata, result)
         result = json.loads(metadata.read_text(encoding="utf-8"))
         if p["speed"] != 1:
@@ -545,6 +546,7 @@ class Studio(WorkflowMixin):
         return {"id": p["voice_id"], "script_id": script["id"], "path": str(voice), "sha256": digest(voice),
                 "created": time.time(), "speed": p["speed"], "duration": info["duration"],
                 "spoken_text": p.get('spoken_text', script['text']),
+                "voice_profile_id": result.get('voice_profile_id') or '',
                 "request_id": result["voicebench_request_id"], "quality_control": result.get("quality_control")}
 
     def _process(self, state, job, action, payload):

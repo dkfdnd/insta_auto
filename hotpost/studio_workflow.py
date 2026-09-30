@@ -132,6 +132,14 @@ class WorkflowMixin:
 
     def workflow_action(self, task_id, action, data):
         state = self.store.get(task_id)
+        if action in {'make-video','save-feedback','regenerate-voice'} and 'voice_profile_id' in data:
+            profile = data['voice_profile_id']
+            if not isinstance(profile,str) or len(profile)>100: raise ValueError('목소리 목록에서 선택하세요.')
+            if profile:
+                from .voicebench_adapter import VoiceBenchAdapter
+                voices=VoiceBenchAdapter(self.settings).voices().get('voices',[])
+                if not any(v['id']==profile and v.get('available') for v in voices):
+                    raise ValueError('이 목소리는 아직 준비되지 않았어요. 사용 가능한 목소리를 선택하세요.')
         if action == 'use-sources':
             def continue_with_sources(s, db):
                 ids = data.get('source_ids')
@@ -238,6 +246,7 @@ class WorkflowMixin:
                 if not text or len(text) > 3000: raise ValueError('대본은 1~3000자로 입력하세요.')
                 feedback['script_text'] = text
             elif action in {'save-feedback', 'regenerate-voice', 'make-video'}:
+                if 'voice_profile_id' in data: feedback['voice_profile_id'] = data['voice_profile_id']
                 if 'speed' in data:
                     speed = float(data['speed'])
                     if not math.isfinite(speed) or not .8 <= speed <= 1.25: raise ValueError('속도는 0.8~1.25배입니다.')
@@ -279,7 +288,7 @@ class WorkflowMixin:
             if action in {'reproduce','export-edit','make-video'}:
                 if s.get('pending_reproduction'): raise Conflict('이미 재제작이 대기 중입니다.')
                 if not feedback: raise ValueError('반영할 변경사항을 먼저 저장하세요.')
-                if feedback.get('changes') and any(k in feedback for k in ('script_text', 'speed', 'pronunciations', 'regenerate_voice', 'source_ids')):
+                if feedback.get('changes') and any(k in feedback for k in ('script_text', 'speed', 'pronunciations', 'regenerate_voice', 'source_ids', 'voice_profile_id')):
                     raise Conflict('대본·음성·소스를 바꾸면 장면 구성이 달라집니다. 구간 수정만 초기화한 뒤 재제작하고, 새 영상에서 장면·자막을 조정하세요. 기존 완성본은 보존됩니다.')
                 ids = feedback.get('source_ids', [v['id'] for v in s['sources']])
                 if not ids: raise ValueError('사용할 소스를 한 개 이상 선택하세요.')
@@ -318,13 +327,13 @@ class WorkflowMixin:
         if 'script_text' in feedback:
             self._script(s, feedback['script_text'], 'manual')
             s['automation']['needs_top_pick'] = False
-        if any(k in feedback for k in ('script_text', 'pronunciations', 'speed', 'regenerate_voice')):
+        if any(k in feedback for k in ('script_text', 'pronunciations', 'speed', 'regenerate_voice', 'voice_profile_id')):
             s.update(voice_id=None, approved_voice_id=None, edit_id=None)
         elif 'source_ids' in feedback:
             s['edit_id'] = None
         s['automation'].update(active=True, paused_by_user=False)
         s.update(error='', progress=0)
-        if feedback.get('changes') and not any(k in feedback for k in ('script_text','pronunciations','speed','regenerate_voice','source_ids')):
+        if feedback.get('changes') and not any(k in feedback for k in ('script_text','pronunciations','speed','regenerate_voice','source_ids','voice_profile_id')):
             edit = next(e for e in s['edits'] if e['id'] == feedback['base_edit_id'])
             self.store.enqueue(db, s['id'], 'revision', {'edit_id':edit['id'], 'script_id':edit['script_id'],
                 'voice_id':edit['voice_id'], 'changes':feedback['changes'], 'caption_only':bool(feedback.get('caption_only'))}, 'revision:'+run['id'])
@@ -350,6 +359,7 @@ class WorkflowMixin:
             text = script['text']
             for pair in run['inputs'].get('pronunciations', []): text = text.replace(pair['from'], pair['to'])
             payload = dict(script_id=script['id'], voice_id=voice_id, speed=run['inputs'].get('speed',1), spoken_text=text)
+            if run['inputs'].get('voice_profile_id'): payload['voice_profile_id'] = run['inputs']['voice_profile_id']
             if run['inputs'].get('regenerate_voice'):
                 payload['generation_key'] = key
             s['automation']['script_selection'] = {'mode':'automatic','script_id':script['id']}

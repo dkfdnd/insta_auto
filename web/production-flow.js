@@ -37,10 +37,10 @@
   }
   function changeStatus(t){
     const f=t.feedback||{},local=JSON.parse(localStorage.getItem(storageKey(t))||'{}');
-    const groups=[['script_text','대본'],['speed','속도'],['pronunciations','발음'],['regenerate_voice','새 음성'],['source_ids','사용 영상'],['changes','장면·자막']].filter(([k])=>k in f);
+    const groups=[['script_text','대본'],['voice_profile_id','목소리'],['speed','속도'],['pronunciations','발음'],['regenerate_voice','새 음성'],['source_ids','사용 영상'],['changes','장면·자막']].filter(([k])=>k in f);
     const oldEdit=localStorage.getItem(storageKey(t)+'-edit');
     const staleEdit=oldEdit&&oldEdit!==t.edit_id&&Object.keys(local).some(k=>/^(shot|caption|start|end|emphasis):/.test(k));
-    const conflict=f.changes?.length&&['script_text','speed','pronunciations','regenerate_voice','source_ids'].some(k=>k in f);
+    const conflict=f.changes?.length&&['script_text','speed','pronunciations','voice_profile_id','regenerate_voice','source_ids'].some(k=>k in f);
     if(!Object.keys(local).length&&!groups.length)return '<div class="pf-change-status"><strong>수정사항 없음 · 대본이나 설정을 바꾸면 새 영상을 만들 수 있어요</strong></div>';
     return `<div class="pf-change-status" role="status">${staleEdit?'<p>새 편집본이 준비되어 이전 구간 입력을 보관 중입니다. 내용을 복사한 뒤 구간 입력만 비우고 새 영상을 확인하세요.</p><details><summary>보관된 이전 구간 입력</summary><p class="pf-text">'+Object.entries(local).filter(([k])=>/^(caption|start|end):/.test(k)).map(([,v])=>esc(v)).join('<br>')+'</p></details><button data-pf="discard-local-edit">이전 구간 입력만 비우기</button>':''}<strong>${Object.keys(local).length?'● 저장하지 않은 입력이 있어요':groups.length?'● 저장됨 · 다음 제작에 반영 예정':'✓ 저장된 제작 내용'}</strong><div class="pf-change-chips">${groups.map(([,label])=>`<span>${label}</span>`).join('')}</div><p>${Object.keys(local).length?'이 기기에 임시 보관 중입니다. 아래 제작 버튼을 누르면 저장하고 영상에 반영합니다.':impact(f)}</p>${conflict?'<p>새 대본·음성·소스와 기존 구간 수정을 함께 적용할 수 없어요. 기존 완성본은 보존됩니다.</p><button data-pf="discard-edit-feedback">구간 수정만 초기화</button>':''}</div>`;
   }
@@ -148,7 +148,7 @@
       <div class="pf-ai-status" data-ai-status="proposal" role="status">${aiStatus(t,'proposal')}</div><div data-proposals>${t.proposals.slice().reverse().map(p=>`<details><summary>수정안 · ${esc(p.summary)}</summary><div class="pf-compare"><div><b>요청 당시 대본</b><p class="pf-text">${esc(p.base_text||s?.text||'')}</p></div><div><b>AI 수정안</b><p class="pf-text">${esc(p.text)}</p></div></div><button data-pf="proposal" data-id="${p.id}">이 수정안 선택</button></details>`).join('')}</div></div>
       </div><details class="pf-advanced"><summary>이전 제작 대본 복원</summary>${t.scripts.slice().reverse().map((v,i)=>`<details><summary>대본 ${t.scripts.length-i}${v.id===t.script_id?' · 현재 제작 기준':''}</summary><p class="pf-text">${esc(v.text)}</p><button data-pf="restore-script" data-script-id="${v.id}">이 대본을 수정본으로 가져오기</button></details>`).join('')}</details><details class="pf-advanced"><summary>원본 · 후보 대본 비교</summary><h4>원본 영상에서 들리는 말</h4><p class="pf-text">${esc(t.original_text||'원본 영상의 대본을 준비하고 있어요.')}</p><p>${esc(t.selection_reason||'')}</p>
       ${(t.script_candidates||[]).map((c,i)=>`<details><summary>후보 ${i+1}${i===t.selected_candidate?' · 추천':''}</summary><p>${esc(c.text)}</p><button data-pf="candidate" data-index="${i}">이 대본 선택</button></details>`).join('')}</details></details>
-      <details open data-pf-section="voice"><summary>목소리와 읽는 속도</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">♫</span><div><h3>들어보고 자연스럽게 다듬으세요</h3><p>속도와 발음을 조절하고 저장하면 다음 음성 제작에 적용됩니다.</p></div></div>${voice?`<div class="pf-audio-card"><b>현재 제작 음성 · ${Number(voice.speed||1).toFixed(2)}배 · ${Number(voice.duration||0).toFixed(1)}초</b><details><summary>이 음성이 읽는 대본</summary><p class="pf-text">${esc(voice.spoken_text||item(t,'scripts',voice.script_id)?.text||'기록된 대본이 없습니다.')}</p></details><audio controls src="${esc(voice.path_url)}"></audio></div>`:'<div class="pf-empty"><b>음성을 아직 만들지 않았어요</b><p>소스와 대본을 준비하면 음성 제작으로 이어집니다.</p><button data-pf-tab="script">대본 확인하기 →</button></div>'}<div class="pf-tool-card"><label>읽는 속도 <input data-field="speed" type="number" min="0.8" max="1.25" step="0.05" value="${f.speed??inputs.speed??1}"> 배</label><details class="pf-advanced"><summary>발음 교정 · 어려운 단어가 있을 때</summary><label>한 줄에 ‘원문=읽을 발음’<textarea data-field="pronunciation" placeholder="USB=유에스비">${esc((f.pronunciations??inputs.pronunciations??[]).map(p=>p.from+'='+p.to).join('\n'))}</textarea></label><p class="pf-help">자막은 그대로 두고 읽는 발음만 바꿉니다.</p></details><p class="pf-help">자동 제작은 VoiceBench에 설정된 기본 목소리를 사용합니다. 이 화면에서는 읽는 속도와 발음을 바꿀 수 있어요.</p><details class="pf-advanced"><summary>음성 설정만 보관하기</summary><button data-pf="save-voice">설정 보관</button><button class="pf-secondary" data-pf="regenerate-voice" ${voice?'':'disabled'}>같은 대본으로 음성 다시 만들기 예약</button><p>예약 후 ‘수정한 영상 만들기’를 눌러 실행하세요.</p></details></div></details>
+      <details open data-pf-section="voice"><summary>목소리와 읽는 속도</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">♫</span><div><h3>들어보고 자연스럽게 다듬으세요</h3><p>속도와 발음을 조절하고 저장하면 다음 음성 제작에 적용됩니다.</p></div></div>${voice?`<div class="pf-audio-card"><b>현재 제작 음성 · ${Number(voice.speed||1).toFixed(2)}배 · ${Number(voice.duration||0).toFixed(1)}초</b><details><summary>이 음성이 읽는 대본</summary><p class="pf-text">${esc(voice.spoken_text||item(t,'scripts',voice.script_id)?.text||'기록된 대본이 없습니다.')}</p></details><audio controls src="${esc(voice.path_url)}"></audio></div>`:'<div class="pf-empty"><b>음성을 아직 만들지 않았어요</b><p>소스와 대본을 준비하면 음성 제작으로 이어집니다.</p><button data-pf-tab="script">대본 확인하기 →</button></div>'}<div data-voice-picker class="voice-picker"><div><span>읽어줄 목소리</span><strong data-current-voice></strong><p>남성·여성 목소리를 미리 듣고 골라보세요.</p></div><input type="text" hidden data-field="voice-profile" value="${esc(f.voice_profile_id??inputs.voice_profile_id??voice?.voice_profile_id??'')}"><button type="button" data-choose-voice>목소리 선택</button></div><div class="pf-tool-card"><label>읽는 속도 <input data-field="speed" type="number" min="0.8" max="1.25" step="0.05" value="${f.speed??inputs.speed??1}"> 배</label><details class="pf-advanced"><summary>발음 교정 · 어려운 단어가 있을 때</summary><label>한 줄에 ‘원문=읽을 발음’<textarea data-field="pronunciation" placeholder="USB=유에스비">${esc((f.pronunciations??inputs.pronunciations??[]).map(p=>p.from+'='+p.to).join('\n'))}</textarea></label><p class="pf-help">자막은 그대로 두고 읽는 발음만 바꿉니다.</p></details><p class="pf-help">목소리·속도·발음 변경은 아래 ‘수정한 영상 만들기’를 누르면 적용됩니다.</p><details class="pf-advanced"><summary>음성 설정만 보관하기</summary><button data-pf="save-voice">설정 보관</button><button class="pf-secondary" data-pf="regenerate-voice" ${voice?'':'disabled'}>같은 대본으로 음성 다시 만들기 예약</button><p>예약 후 ‘수정한 영상 만들기’를 눌러 실행하세요.</p></details></div></details>
       <details open data-pf-section="original"><summary>원본 영상에서 들리는 말 확인</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">${fileIcon("voice")}</span><div><h3>듣고 확인하는 원본의 이야기</h3><p>실제 발화를 교정하고, 제작 대본을 위한 참고 자료로 보관하세요.</p></div></div>${originalPanel(t,false)}</details>${window.CaptionEditor?window.CaptionEditor.markup(t,e):''}<div class="pf-actionbar"><div data-change-status>${changeStatus(t)}</div><p class="pf-impact">${impact(f)}</p><p data-action-notice role="status" hidden></p><button data-pf="discard-feedback">변경사항 초기화</button><button data-pf="make-video" ${t.pending_reproduction||!Object.keys(f).length?'disabled':''}>${t.pending_reproduction?'수정 영상 제작 대기':'수정한 영상 만들기 →'}</button></div></div>`;
   }
   function aiStatus(t,kind){
@@ -161,7 +161,7 @@
     }
     return '';
   }
-  function impact(f){if(!Object.keys(f).length)return '수정한 항목을 저장하면 새 버전을 만들 수 있어요';if(['script_text','speed','pronunciations','regenerate_voice'].some(k=>k in f))return '다음 제작: 음성 → 장면·자막 → 최종 영상 · 기존 완료본 보존';if('source_ids' in f||f.changes)return '다음 제작: 장면·자막 → 최종 영상 · 기존 음성 재사용';return '피드백 저장됨';}
+  function impact(f){if(!Object.keys(f).length)return '수정한 항목을 저장하면 새 버전을 만들 수 있어요';if(['script_text','speed','pronunciations','voice_profile_id','regenerate_voice'].some(k=>k in f))return '다음 제작: 음성 → 장면·자막 → 최종 영상 · 기존 완료본 보존';if('source_ids' in f||f.changes)return '다음 제작: 장면·자막 → 최종 영상 · 기존 음성 재사용';return '피드백 저장됨';}
   function runtime(t){
     const action=t.error?'<button data-pf="retry">중단 단계 재시도</button>':t.automation?.active&&t.status!=='completed'?'<button data-pf="pause-auto">자동 진행 중지</button>':!t.automation?.active&&t.status!=='completed'?'<button data-pf="resume-auto">자동 진행 재개</button>':'';
     return `<div class="pf-runtime">${action}<p>${esc(window.StudioBoard.message(t.error||t.message))}</p></div>`;
@@ -227,11 +227,11 @@
   }
   function refreshActions(root){
     const t=root._task,local=JSON.parse(localStorage.getItem(storageKey(t))||'{}'),f=t.feedback||{};
-    const changed=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|source:)/.test(k))||Object.keys(f).length>0;
+    const changed=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|voice-profile$|source:)/.test(k))||Object.keys(f).length>0;
     const button=root.querySelector('[data-pf="make-video"]');
     if(button)button.disabled=!changed||!!t.pending_reproduction||!!root._saving;
     const label=root.querySelector('.pf-script-state .pf-count');if(label)label.textContent='script' in local||f.script_text!==undefined?'수정 중인 대본 · 영상 반영 전':'현재 제작에 사용한 대본';
-    const audio=root.querySelector('.pf-audio-card');if(audio){let note=audio.querySelector('[data-voice-pending]');if(!note){note=document.createElement('p');note.dataset.voicePending='';note.className='pf-version-note';audio.prepend(note);}note.hidden=!(['script','speed','pronunciation'].some(k=>k in local)||['script_text','speed','pronunciations','regenerate_voice'].some(k=>k in f));note.textContent='지금 듣는 음성은 수정사항 반영 전 음성입니다. 수정한 영상 만들기를 누르면 새 대본과 설정으로 음성을 만듭니다.';}
+    const audio=root.querySelector('.pf-audio-card');if(audio){let note=audio.querySelector('[data-voice-pending]');if(!note){note=document.createElement('p');note.dataset.voicePending='';note.className='pf-version-note';audio.prepend(note);}note.hidden=!(['script','speed','pronunciation','voice-profile'].some(k=>k in local)||['script_text','speed','pronunciations','voice_profile_id','regenerate_voice'].some(k=>k in f));note.textContent='지금 듣는 음성은 수정사항 반영 전 음성입니다. 수정한 영상 만들기를 누르면 새 대본과 설정으로 음성을 만듭니다.';}
     const impact=root.querySelector('.pf-impact');if(impact)impact.textContent=changed?'입력 내용을 저장하고 필요한 음성·영상을 새로 만듭니다. 기존 완성 영상은 보존됩니다.':'내용을 바꾸면 여기에 제작 버튼이 활성화됩니다.';
   }
   function sourceBaseline(t,id){
@@ -281,7 +281,7 @@
         }
         if(focusedField&&!library.contains(document.activeElement))[...library.querySelectorAll('[data-field]')].find(e=>e.dataset.field===focusedField)?.focus({preventScroll:true});
       }
-      bindUploads();window.CaptionEditor?.bind(root,t);
+      bindUploads();window.VoicePicker?.bind(root);window.CaptionEditor?.bind(root,t);
       options.onRender?.();return;
     }
     if(root._renderedRevision===t.revision && root._renderedSelected===root._selected && root.querySelector('.production-flow')){options.onRender?.();return;}
@@ -351,7 +351,7 @@
       }
       if(action==='save-voice'||action==='regenerate-voice'){
         kind=action==='save-voice'?'save-feedback':action;
-        body={speed:Number(value('speed')),pronunciations:value('pronunciation').split('\n').filter(v=>v.trim()).map(v=>{const pos=v.indexOf('=');return {from:pos<0?'':v.slice(0,pos).trim(),to:pos<0?'':v.slice(pos+1).trim()};})};
+        body={voice_profile_id:value('voice-profile'),speed:Number(value('speed')),pronunciations:value('pronunciation').split('\n').filter(v=>v.trim()).map(v=>{const pos=v.indexOf('=');return {from:pos<0?'':v.slice(0,pos).trim(),to:pos<0?'':v.slice(pos+1).trim()};})};
       }
       if(action==='propose-script')body={request:value('script-request'),base_text:value('script')};
       if(['candidate','restore-script'].includes(action)&&'script' in submitted){message('직접 수정한 대본을 먼저 저장하세요. 저장 후 다른 대본을 선택할 수 있습니다.');return;}
@@ -362,6 +362,7 @@
       if(action==='make-video'){
         if(Object.keys(submitted).some(k=>/^(caption|start|end|shot|emphasis):/.test(k))){message('자막 수정과 대본 변경은 함께 제작할 수 없어요. 자막을 먼저 영상 파일로 저장하거나 실행 취소해 주세요.');return;}
         if('script' in submitted)body.text=value('script');
+        if('voice-profile' in submitted)body.voice_profile_id=value('voice-profile');
         if('speed' in submitted)body.speed=Number(value('speed'));
         if('pronunciation' in submitted)body.pronunciations=value('pronunciation').split('\n').filter(v=>v.trim()).map(v=>{const pos=v.indexOf('=');return {from:pos<0?'':v.slice(0,pos).trim(),to:pos<0?'':v.slice(pos+1).trim()};});
         if(Object.keys(submitted).some(k=>k.startsWith('source:')))body.source_ids=[...root.querySelectorAll('[data-field^="source:"]:checked')].map(e=>e.dataset.field.slice(7));
@@ -385,7 +386,7 @@
         }
         // Preserve unsaved fields in other sections; clear only fields saved here.
         const local=JSON.parse(localStorage.getItem(storageKey(task))||'{}');
-        const prefixes=action==='make-video'?['script','speed','pronunciation','source:']:['save-captions','export-edit'].includes(action)?['caption:','start:','end:']:action==='save-original'?['original']:action==='save-script'?['script']:action==='save-voice'||action==='regenerate-voice'?['speed','pronunciation']:['save-sources','use-sources'].includes(action)?['source:']:action==='save-beat'?['shot:'+button.dataset.beat,'caption:'+button.dataset.beat,'start:'+button.dataset.beat,'end:'+button.dataset.beat,'emphasis:'+button.dataset.beat]:action==='search'?['search']:action==='propose-script'?['script-request']:action==='request-edit'?['edit-request','edit-start','edit-end']:[];
+        const prefixes=action==='make-video'?['script','speed','pronunciation','voice-profile','source:']:['save-captions','export-edit'].includes(action)?['caption:','start:','end:']:action==='save-original'?['original']:action==='save-script'?['script']:action==='save-voice'||action==='regenerate-voice'?['speed','pronunciation','voice-profile']:['save-sources','use-sources'].includes(action)?['source:']:action==='save-beat'?['shot:'+button.dataset.beat,'caption:'+button.dataset.beat,'start:'+button.dataset.beat,'end:'+button.dataset.beat,'emphasis:'+button.dataset.beat]:action==='search'?['search']:action==='propose-script'?['script-request']:action==='request-edit'?['edit-request','edit-start','edit-end']:[];
         for(const k of Object.keys(local))if(local[k]===submitted[k]&&prefixes.some(p=>k===p||p.endsWith(':')&&k.startsWith(p)))delete local[k];
         if(['candidate','proposal','restore-script'].includes(action)&&local.script===submitted.script)delete local.script;
         if(action==='discard-feedback')for(const k of Object.keys(local))if(local[k]===submitted[k])delete local[k];
@@ -397,7 +398,7 @@
         message(({'prepare-caption-preview':'실시간 자막 미리보기가 준비됐습니다.','save-captions':'편집 내용을 저장했습니다. 내보내기를 누르면 이 자막으로 MP4를 만듭니다.','export-edit':'마지막 편집 내용을 저장했습니다. 해당 버전의 내보내기 결과는 아래에서 확인하세요.','save-original':'교정본을 저장했습니다. 제작 대본은 그대로이며, 다음 AI 수정 요청에 교정본을 사용합니다.','review-result':'이 버전의 사용자 검토를 완료했습니다.','discard-feedback':'저장한 변경사항을 초기화했습니다.','discard-edit-feedback':'구간 수정만 초기화했습니다. 대본·음성·소스 변경은 유지됩니다.','propose-script':'지금 입력한 대본으로 AI 수정안을 요청했습니다. 완료되면 변경 전후를 비교하세요.','search':'추가 검색을 요청했습니다. 확보된 영상은 목록에서 선택해 다음 제작에 사용하세요.','retry-source-search':'소스 검색 재시도를 요청했습니다. 현재 검색 상태를 확인하세요.','use-sources':'선택한 영상으로 제작을 이어갑니다. 현재 단계에서 진행 상황을 확인하세요.',retry:'재시도 요청을 접수했습니다. 위 현재 단계에서 실행 상태를 확인하세요.','start-auto':'자동 제작 요청을 접수했습니다.','resume-auto':'자동 진행 재개를 요청했습니다.','pause-auto':'자동 진행 중지를 요청했습니다. 현재 실행 중인 작업은 마무리될 수 있습니다.','make-video':'수정사항을 저장하고 새 영상 제작을 시작했습니다. 진행 상황은 위에서 확인하세요.',reproduce:'재제작 요청 완료'})[action]||'보관했습니다. 수정한 영상 만들기를 누르면 영상에 반영합니다.');
       }catch(e){if(['save-captions','export-edit','prepare-caption-preview'].includes(action))root._captionError=window.StudioBoard.message(e.message);message(window.StudioBoard.message(e.message));}finally{root._saving=false;button.disabled=false;updateSourceSearch(root,root._task);window.CaptionEditor?.refresh(root,root._task);refreshActions(root);}
     };
-    bindUploads();window.CaptionEditor?.bind(root,t);refreshActions(root);options.onRender?.();
+    bindUploads();window.VoicePicker?.bind(root);window.CaptionEditor?.bind(root,t);refreshActions(root);options.onRender?.();
   }
   window.ProductionFlow={mount,api,scriptReview,originalPanel};
 })();

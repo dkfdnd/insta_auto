@@ -24,7 +24,7 @@
     updateJourney(t);applyDetailTab();$('#journey-current').textContent=d.phase;renderHero(t,d);
   }
   function renderHero(t,d){
-    const local=JSON.parse(localStorage.getItem('production-feedback-'+t.id)||'{}');const pending=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|source:|caption:|start:|end:)/.test(k))||Object.keys(t.feedback||{}).length;
+    const local=JSON.parse(localStorage.getItem('production-feedback-'+t.id)||'{}');const pending=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|voice-profile$|source:|caption:|start:|end:)/.test(k))||Object.keys(t.feedback||{}).length;
     const next=d.steps.find((s,i)=>i>d.currentIndex&&s.state!=='done');
     const empty=d.stage==='sources'&&!t.sources.length;
     const title=d.complete&&pending?'기존 영상 완성 · 수정 내용 반영 전':d.complete?'완성 영상을 확인하세요':empty?'영상만 넣으면, 다음 단계로':d.stage==='sources'?'준비된 영상으로 이어가세요':d.stage==='script'?'우리만의 대본을 다듬을 차례':d.stage==='voice'?'목소리와 발음을 확인할 차례':d.stage==='edit'?'장면과 자막을 완성할 차례':d.stage==='export'?'완성 영상을 준비하고 있어요':'원본 내용을 확인하고 있어요';

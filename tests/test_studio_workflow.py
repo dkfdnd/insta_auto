@@ -86,6 +86,27 @@ def test_make_video_invalid_setting_rolls_back_script_and_queue(prepared,invalid
     assert not [j for j in studio.store.jobs(task) if j['status']=='queued']
 
 
+def test_voice_choice_rebuilds_voice_and_can_return_to_default(prepared,monkeypatch):
+    from hotpost.voicebench_adapter import VoiceBenchAdapter
+    monkeypatch.setattr(VoiceBenchAdapter,'voices',lambda self:{'voices':[{'id':'qwen-sohee','available':True}]})
+    studio,task=prepared;complete(studio,task)
+    before=studio.store.get(task)
+    with pytest.raises(ValueError):studio.action(task,'make-video',{'voice_profile_id':'not-approved'})
+    assert studio.store.get(task)==before
+    studio.action(task,'make-video',{'voice_profile_id':'qwen-sohee'})
+    job=next(j for j in studio.store.jobs(task) if j['status']=='queued')
+    with studio.store.connect() as db:
+        payload=json.loads(db.execute('SELECT payload FROM jobs WHERE id=?',(job['id'],)).fetchone()[0])
+    assert job['kind']=='voice' and payload['voice_profile_id']=='qwen-sohee'
+    complete(studio,task)
+    studio.action(task,'make-video',{'voice_profile_id':''})
+    job=next(j for j in studio.store.jobs(task) if j['status']=='queued')
+    with studio.store.connect() as db:
+        payload=json.loads(db.execute('SELECT payload FROM jobs WHERE id=?',(job['id'],)).fetchone()[0])
+    assert job['kind']=='voice' and not payload.get('voice_profile_id')
+    assert studio.store.get(task)['runs'][-1]['inputs']['voice_profile_id']==''
+
+
 def test_caption_export_is_atomic_reuses_voice_and_skips_native_registration(prepared):
     studio,task=prepared;complete(studio,task)
     before=studio.store.get(task);edit=next(e for e in before['edits'] if e['id']==before['edit_id'])

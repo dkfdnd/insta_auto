@@ -43,6 +43,8 @@ class StudioHTTP:
             self._json({"error": str(exc)}, 409)
         except (ValueError, KeyError, StopIteration, TypeError) as exc:
             self._json({"error": str(exc) or "요청한 버전을 찾을 수 없습니다."}, 400)
+        except RuntimeError as exc:
+            self._json({'error':str(exc)},503)
         return True
 
     def studio_get(self, studio):
@@ -51,7 +53,18 @@ class StudioHTTP:
             return False
         try:
             parts = parsed.path.strip("/").split("/")
-            if len(parts) == 2:
+            if parts == ['api','studio','voices']:
+                from .voicebench_adapter import VoiceBenchAdapter
+                data=VoiceBenchAdapter(studio.settings).voices()
+                for voice in data.get('voices',[]):
+                    if voice.get('preview_url'): voice['preview_url']='/api/studio/voices/'+voice['id']+'/preview'
+                self._json(data)
+            elif len(parts)==5 and parts[:3]==['api','studio','voices'] and parts[4]=='preview':
+                from .voicebench_adapter import VoiceBenchAdapter
+                content,mime=VoiceBenchAdapter(studio.settings).preview(parts[3])
+                self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(content)))
+                self.send_header('Cache-Control','private, max-age=300');self.end_headers();self.wfile.write(content)
+            elif len(parts) == 2:
                 self._json({"tasks": [studio.public(s) for s in studio.store.list()]})
             elif len(parts) == 3:
                 self._json(studio.public(studio.store.get(parts[2])))
@@ -66,6 +79,8 @@ class StudioHTTP:
                 self._json({"error": "경로를 찾을 수 없습니다."}, 404)
         except (ValueError, KeyError, OSError) as exc:
             self._json({"error": str(exc)}, 404)
+        except RuntimeError as exc:
+            self._json({'error':str(exc)},503)
         return True
 
     def _studio_stream(self, target, download=False):

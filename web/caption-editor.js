@@ -46,7 +46,7 @@
     const issue=root._captionError||(savedConflict?'보관한 구간 수정을 확인한 뒤 비우고 새 영상을 편집하세요.':ok?validate(root,t):'');
     const local=JSON.parse(localStorage.getItem('production-feedback-'+t.id)||'{}');
     const dirty=Object.keys(local).some(k=>/^(caption|start|end):/.test(k));
-    const other=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|source:)/.test(k))||Object.keys(t.feedback||{}).some(k=>!['changes','base_edit_id','caption_only'].includes(k));
+    const other=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|voice-profile$|source:)/.test(k))||Object.keys(t.feedback||{}).some(k=>!['changes','base_edit_id','caption_only'].includes(k));
     const note=box.querySelector('[data-caption-state]');
     note.textContent=!t.caption_editor_supported?'서버 업데이트 적용 후 편집할 수 있습니다. 기존 영상은 아래에서 확인하세요.':box.dataset.captionEdit!==e?.id?'새 영상이 준비됐어요. 이전 입력을 보관한 뒤 새 영상을 확인하세요.':!ok?'자막을 분리한 편집 미리보기를 준비해 주세요.':issue|| (other?'소스·대본·음성 변경을 먼저 저장·반영하거나 초기화하세요.':busy?'현재 버전 내보내기·제작 중 · 이후 수정은 다음 내보내기에 반영됩니다.':dirty?'미리보기 반영됨 · 내보내면 함께 저장됩니다.':t.feedback?.changes?.length?'편집 저장됨 · MP4에 반영하려면 내보내세요.':'편집 준비 완료 · 자막을 바꾸면 화면에서 바로 확인할 수 있어요.');
     note.dataset.error=String(!!issue);box.querySelector('[data-caption-stale]').hidden=box.dataset.captionEdit===e?.id;
