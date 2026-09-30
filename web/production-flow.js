@@ -208,7 +208,11 @@
     if(video.readyState<1||!Number.isFinite(video.duration)){note.textContent='미리보기 영상을 불러온 뒤 다시 눌러주세요.';return;}
     if(action==='start')start=Math.round(video.currentTime*100)/100;
     if(action==='end')end=Math.round(video.currentTime*100)/100;
-    if(action==='earlier'||action==='later'){const shift=action==='earlier'?-.1:.1;start=Math.round((start+shift)*100)/100;end=Math.round((end+shift)*100)/100;}
+    if(action==='earlier'||action==='later'){
+      const field=f.card.querySelector('[data-caption-shift]'),amount=field?Number(field.value):.1;
+      if(!Number.isFinite(amount)||amount<=0||(field&&(!field.value||!field.validity.valid))){note.textContent='이동 간격은 0.01초 이상의 숫자를 소수점 두 자리까지 입력하세요.';return;}
+      const shift=action==='earlier'?-amount:amount;start=Math.round((start+shift)*100)/100;end=Math.round((end+shift)*100)/100;
+    }
     if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>video.duration){note.textContent='시작은 0초 이상, 끝은 시작보다 뒤여야 해요. 영상 길이 '+video.duration.toFixed(2)+'초 안에서 지정하세요.';return;}
     root._syncSelected=id;
     if(action==='loop'){

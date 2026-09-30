@@ -14,6 +14,9 @@
     }
     return '';
   }
+  function shiftControls(id,index){
+    return `<div class="ce-shift-controls"><div class="ce-shift-options" role="group" aria-label="${index+1}번 자막 이동 간격"><span class="ce-shift-label">이동 간격</span>${[.1,.5,1].map(n=>`<button type="button" data-caption-step="${n}" aria-pressed="${n===.1}">${n}초</button>`).join('')}<label class="ce-shift-custom"><span>직접 입력</span><input type="number" data-caption-shift min="0.01" step="0.01" value="0.1" inputmode="decimal" aria-label="${index+1}번 자막 이동 간격(초)"><span>초</span></label></div><div class="ce-shift"><button data-sync="earlier" data-beat="${esc(id)}" aria-label="${index+1}번 자막 0.1초 앞당기기">← 0.1초 앞당기기</button><button data-sync="later" data-beat="${esc(id)}" aria-label="${index+1}번 자막 0.1초 늦추기">0.1초 늦추기 →</button></div><p class="ce-shift-help">이 자막의 시작·끝을 함께 이동합니다.</p></div>`;
+  }
   function markup(t,e){
     if(!e?.plan)return '<section data-pf-section="edit"><div class="pf-empty"><b>미리보기를 준비하고 있어요</b><p>대본과 음성이 준비되면 이곳에서 영상을 확인하고 내보낼 수 있습니다.</p></div></section>';
     const f=t.feedback||{},conflict=f.changes?.length&&(f.base_edit_id!==e.id||f.changes.some(c=>Object.keys(c).some(k=>!['beat_id','text','start','end'].includes(k))));
@@ -24,7 +27,7 @@
       <button data-pf="prepare-caption-preview" class="pf-secondary" ${e.clean_preview_url?'hidden':''}>편집 미리보기 준비</button>
       <button class="pf-capcut-launch" data-pf="open-capcut" data-edit-id="${esc(e.id)}">↗ CapCut에서 정밀 편집</button><p class="pf-capcut-help">장면 교체·효과·정밀 편집은 CapCut에서 진행하세요. 웹의 미저장 자막은 먼저 내보내세요. CapCut에서 수정한 내용은 웹에 자동으로 돌아오지 않습니다.</p>
       <span data-sync-caption hidden></span><output data-sync-range class="ce-time-readout"></output></aside>
-      <div class="ce-captions"><div class="ce-list-heading"><h4>자막 편집</h4><span>${e.plan.cues.length}개 구간 · 0.1초씩 조정</span></div>${e.plan.beats.map((b,i)=>{const cue=e.plan.cues.find(c=>c.id===b.cue_id),d=(!conflict&&f.changes?.find(c=>c.beat_id===b.id))||{};return `<article class="pf-beat ce-cue" data-sync-beat="${esc(b.id)}" data-caption-card="${esc(b.id)}"><div class="ce-cue-heading"><button data-sync="loop" data-beat="${esc(b.id)}" aria-pressed="false">▷ ${i+1}. 앞뒤 함께 듣기</button><output data-sync-times></output></div><label>화면에 보일 자막<input maxlength="100" data-field="caption:${esc(b.id)}" value="${esc(d.text??cue.text)}"></label><div class="ce-shift"><button data-sync="earlier" data-beat="${esc(b.id)}" aria-label="${i+1}번 자막 0.1초 앞당기기">−0.1초</button><span>자막 표시 시간</span><button data-sync="later" data-beat="${esc(b.id)}" aria-label="${i+1}번 자막 0.1초 늦추기">＋0.1초</button></div><details><summary>시작·끝 시간 직접 맞추기</summary><div class="ce-times"><label>시작(초)<input type="number" step="0.01" min="0" data-field="start:${esc(b.id)}" value="${d.start??cue.start}"></label><label>끝(초)<input type="number" step="0.01" min="0" data-field="end:${esc(b.id)}" value="${d.end??cue.end}"></label></div><button data-sync="start" data-beat="${esc(b.id)}">현재 위치를 시작으로</button><button data-sync="end" data-beat="${esc(b.id)}">현재 위치를 끝으로</button></details><p class="pf-sync-feedback" role="status"></p></article>`;}).join('')}</div></div></section>`;
+      <div class="ce-captions"><div class="ce-list-heading"><h4>자막 편집</h4><span>${e.plan.cues.length}개 구간 · 간격 선택 또는 직접 입력</span></div>${e.plan.beats.map((b,i)=>{const cue=e.plan.cues.find(c=>c.id===b.cue_id),d=(!conflict&&f.changes?.find(c=>c.beat_id===b.id))||{};return `<article class="pf-beat ce-cue" data-sync-beat="${esc(b.id)}" data-caption-card="${esc(b.id)}"><div class="ce-cue-heading"><button data-sync="loop" data-beat="${esc(b.id)}" aria-pressed="false">▷ ${i+1}. 앞뒤 함께 듣기</button><output data-sync-times></output></div><label>화면에 보일 자막<input maxlength="100" data-field="caption:${esc(b.id)}" value="${esc(d.text??cue.text)}"></label>${shiftControls(b.id,i)}<details><summary>시작·끝 시간 직접 맞추기</summary><div class="ce-times"><label>시작(초)<input type="number" step="0.01" min="0" data-field="start:${esc(b.id)}" value="${d.start??cue.start}"></label><label>끝(초)<input type="number" step="0.01" min="0" data-field="end:${esc(b.id)}" value="${d.end??cue.end}"></label></div><button data-sync="start" data-beat="${esc(b.id)}">현재 위치를 시작으로</button><button data-sync="end" data-beat="${esc(b.id)}">현재 위치를 끝으로</button></details><p class="pf-sync-feedback" role="status"></p></article>`;}).join('')}</div></div></section>`;
   }
   function remember(root){
     const box=root.querySelector('[data-caption-edit]');if(!box)return;
@@ -48,7 +51,7 @@
     note.textContent=!t.caption_editor_supported?'서버 업데이트 적용 후 편집할 수 있습니다. 기존 영상은 아래에서 확인하세요.':box.dataset.captionEdit!==e?.id?'새 영상이 준비됐어요. 이전 입력을 보관한 뒤 새 영상을 확인하세요.':!ok?'자막을 분리한 편집 미리보기를 준비해 주세요.':issue|| (other?'소스·대본·음성 변경을 먼저 저장·반영하거나 초기화하세요.':busy?'현재 버전 내보내기·제작 중 · 이후 수정은 다음 내보내기에 반영됩니다.':dirty?'미리보기 반영됨 · 내보내면 함께 저장됩니다.':t.feedback?.changes?.length?'편집 저장됨 · MP4에 반영하려면 내보내세요.':'편집 준비 완료 · 자막을 바꾸면 화면에서 바로 확인할 수 있어요.');
     note.dataset.error=String(!!issue);box.querySelector('[data-caption-stale]').hidden=box.dataset.captionEdit===e?.id;
     for(const button of box.querySelectorAll('[data-pf="save-captions"],[data-pf="export-edit"]'))button.disabled=!ok||!!issue||other||busy||!!root._saving;
-    for(const control of box.querySelectorAll('[data-sync],input'))control.disabled=!ok;
+    for(const control of box.querySelectorAll('[data-sync],[data-caption-step],input'))control.disabled=!ok;
     box.querySelector('[data-caption-undo]').disabled=!ok||!box._history?.length;
     box.querySelector('[data-pf="prepare-caption-preview"]').hidden=ok;
     box.querySelector('[data-pf="prepare-caption-preview"]').disabled=!t.caption_editor_supported||!!root._saving;
@@ -83,6 +86,24 @@
     for(const event of ['loadeddata','seeked','timeupdate','pause'])video.addEventListener(event,paint);
     video.addEventListener('play',start);
     box.addEventListener('focusin',e=>{if(e.target.matches('[data-field]'))remember(root);});
+    const updateShift=card=>{
+      const field=card.querySelector('[data-caption-shift]'),amount=Number(field.value);
+      const valid=field.value!==''&&Number.isFinite(amount)&&amount>0&&field.validity.valid;
+      field.setAttribute('aria-invalid',String(!valid));
+      card.querySelectorAll('[data-caption-step]').forEach(b=>b.setAttribute('aria-pressed',String(valid&&Number(b.dataset.captionStep)===amount)));
+      const index=fields(root).indexOf(card)+1;
+      for(const action of ['earlier','later']){
+        const b=card.querySelector(`[data-sync="${action}"]`),label=action==='earlier'?'앞당기기':'늦추기';
+        b.textContent=action==='earlier'?`← ${valid?amount+'초 ':''}${label}`:`${valid?amount+'초 ':''}${label} →`;
+        b.setAttribute('aria-label',`${index}번 자막 ${valid?amount+'초 ':''}${label}`);
+      }
+      card.querySelector('.pf-sync-feedback').textContent=valid?'':'이동 간격은 0.01초 이상의 숫자를 소수점 두 자리까지 입력하세요.';
+    };
+    box.addEventListener('click',event=>{
+      const button=event.target.closest('[data-caption-step]');if(!button)return;
+      const card=button.closest('[data-caption-card]');card.querySelector('[data-caption-shift]').value=button.dataset.captionStep;updateShift(card);
+    });
+    box.addEventListener('input',event=>{if(event.target.matches('[data-caption-shift]'))updateShift(event.target.closest('[data-caption-card]'));});
     box.addEventListener('input',()=>{root._captionError='';refresh(root,root._task);});
     box.querySelector('[data-caption-undo]').onclick=()=>{
       const saved=box._history?.pop();if(!saved)return;

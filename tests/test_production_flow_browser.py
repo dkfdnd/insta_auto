@@ -389,3 +389,54 @@ def test_live_caption_shift_paints_without_render_and_exports_last_input(flow_pa
     page.evaluate('release()')
     page.wait_for_function('!document.querySelector("#root")._saving')
     assert page.locator('[data-field="caption:b1"]').input_value()=='다음 내보내기에 쓸 문구'
+
+
+def test_caption_shift_presets_custom_bounds_and_export(flow_page):
+    page = flow_page
+    setup_editor(page)
+    page.evaluate('''()=>{
+      task.jobs=[];task.caption_editor_supported=true;task.edit_id='e1';
+      task.edits=[{id:'e1',duration:10,clean_preview_url:'/base.mp4',plan:{
+        cues:[{id:'c1',text:'간격 조절',start:2,end:3}],
+        beats:[{id:'b1',cue_id:'c1',emphasis:0}]}}];task.revision++;draw();
+      const v=document.querySelector('[data-edit-preview]');
+      Object.defineProperty(v,'duration',{get:()=>10});Object.defineProperty(v,'readyState',{get:()=>4});
+      v.currentTime=2.05;v.dispatchEvent(new Event('seeked'));
+    }''')
+    start = page.locator('[data-field="start:b1"]')
+    end = page.locator('[data-field="end:b1"]')
+    amount = page.locator('[data-caption-shift]')
+    canvas = page.locator('[data-caption-canvas]')
+    for seconds in [.1, .5, 1]:
+        page.locator(f'[data-caption-step="{seconds:g}"]').click()
+        assert float(start.input_value()) == 2  # Selecting an interval never moves the cue.
+        assert page.locator(f'[data-caption-step="{seconds:g}"]').get_attribute('aria-pressed') == 'true'
+        page.locator('[data-sync=later]').click()
+        assert float(start.input_value()) == 2 + seconds
+        assert float(end.input_value()) == 3 + seconds
+        assert canvas.get_attribute('data-active-cue') == ''
+        page.locator('[data-caption-undo]').click()
+        assert float(start.input_value()) == 2
+        assert canvas.get_attribute('data-active-cue') == 'b1'
+        page.locator('[data-sync=earlier]').click()
+        assert float(start.input_value()) == 2 - seconds
+        assert float(end.input_value()) == 3 - seconds
+        page.locator('[data-caption-undo]').click()
+    for invalid in ['', '0', '-1', '0.001', '100']:
+        amount.fill(invalid)
+        page.locator('[data-sync=earlier]').click()
+        assert float(start.input_value()) == 2
+        assert float(end.input_value()) == 3
+        assert page.locator('.pf-sync-feedback').inner_text()
+    amount.fill('0.35')
+    assert page.locator('[data-caption-step][aria-pressed=true]').count() == 0
+    page.locator('[data-sync=earlier]').click()
+    assert float(start.input_value()) == 1.65
+    assert float(end.input_value()) == 2.65
+    assert page.locator('[data-edit-preview]').evaluate('(v)=>v.currentTime') == 2.05
+    assert page.evaluate('requests.length') == 0
+    page.locator('[data-pf=export-edit]').click()
+    page.wait_for_function('requests.length===1')
+    assert page.evaluate('requests[0].body.changes[0]') == {
+        'beat_id': 'b1', 'text': '간격 조절', 'start': 1.65, 'end': 2.65,
+    }
