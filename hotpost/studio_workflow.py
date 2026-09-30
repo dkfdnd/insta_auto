@@ -175,7 +175,7 @@ class WorkflowMixin:
         if not enabled(state):
             return None
         actions = {'save-feedback', 'save-script', 'restore-script', 'apply-proposal', 'regenerate-voice',
-                   'revise-edit', 'request-edit', 'reproduce', 'discard-feedback', 'select-candidate'}
+                   'revise-edit', 'request-edit', 'reproduce', 'discard-feedback', 'select-candidate', 'discard-edit-feedback'}
         if action not in actions:
             return None
         def change(s, db):
@@ -184,15 +184,20 @@ class WorkflowMixin:
             feedback = s.setdefault('feedback', {})
             if action == 'discard-feedback':
                 s['feedback'] = {}
+            elif action == 'discard-edit-feedback':
+                feedback.pop('changes', None)
+                feedback.pop('base_edit_id', None)
             elif action in {'save-script', 'restore-script', 'apply-proposal', 'select-candidate'}:
                 if action == 'save-script': text = str(data.get('text', '')).strip()
                 elif action == 'restore-script': text = next(v['text'] for v in s['scripts'] if v['id'] == data['script_id'])
                 elif action == 'select-candidate': text = s['script_candidates'][int(data['index'])]['text']
                 else:
                     proposal = next(p for p in s['proposals'] if p['id'] == data['proposal_id'])
-                    base = feedback.get('script_text') or next(v['text'] for v in s['scripts'] if v['id'] == s['script_id'])
+                    base = str(data.get('base_text', feedback.get('script_text') or next(v['text'] for v in s['scripts'] if v['id'] == s['script_id']))).strip()
                     if proposal.get('base_hash') and proposal['base_hash'] != hashlib.sha256(base.encode()).hexdigest():
                         raise Conflict('수정안 생성 후 대본이 바뀌었습니다. 다시 요청하세요.')
+                    if proposal.get('original_text', s.get('reviewed_original_text', s['original_text'])) != s.get('reviewed_original_text', s['original_text']):
+                        raise Conflict('원본 발화가 교정되었습니다. 교정한 발화를 기준으로 수정안을 다시 요청하세요.')
                     text = proposal['text']
                 if not text or len(text) > 3000: raise ValueError('대본은 1~3000자로 입력하세요.')
                 feedback['script_text'] = text
@@ -216,6 +221,8 @@ class WorkflowMixin:
                 if action == 'regenerate-voice': feedback['regenerate_voice'] = True
             elif action == 'revise-edit':
                 edit = next(e for e in s['edits'] if e['id'] == data['edit_id'])
+                if s.get('edit_id') and edit['id'] != s['edit_id']:
+                    raise Conflict('새 편집 영상이 준비되었습니다. 입력 내용을 보관한 뒤 새로고침하여 새 영상의 구간을 확인하세요.')
                 changes = data.get('changes', [])
                 if not isinstance(changes, list) or not changes: raise ValueError('수정할 구간을 선택하세요.')
                 if feedback.get('base_edit_id', edit['id']) != edit['id']: raise Conflict('다른 편집 버전의 수정이 저장되어 있습니다.')
@@ -227,12 +234,16 @@ class WorkflowMixin:
                 validate_edit_feedback(edit, list(by_id.values()))
                 feedback['changes'] = list(by_id.values())
             elif action == 'request-edit':
+                if data.get('edit_id') != s.get('edit_id'):
+                    raise Conflict('새 편집 영상이 준비되었습니다. 새로고침하여 수정할 구간을 확인하세요.')
                 request = str(data.get('request', '')).strip()
                 if not request: raise ValueError('수정 요청을 입력하세요.')
                 self.store.enqueue(db, task_id, 'suggest_edit', {**data, 'feedback_hash': self.feedback_hash(feedback)}, uid('suggest:'))
             elif action == 'reproduce':
                 if s.get('pending_reproduction'): raise Conflict('이미 재제작이 대기 중입니다.')
                 if not feedback: raise ValueError('반영할 변경사항을 먼저 저장하세요.')
+                if feedback.get('changes') and any(k in feedback for k in ('script_text', 'speed', 'pronunciations', 'regenerate_voice', 'source_ids')):
+                    raise Conflict('대본·음성·소스를 바꾸면 장면 구성이 달라집니다. 구간 수정만 초기화한 뒤 재제작하고, 새 영상에서 장면·자막을 조정하세요. 기존 완성본은 보존됩니다.')
                 ids = feedback.get('source_ids', [v['id'] for v in s['sources']])
                 if not ids: raise ValueError('사용할 소스를 한 개 이상 선택하세요.')
                 snapshot(s)

@@ -91,6 +91,93 @@ def test_completed_version_survives_new_version_and_latest_updates(prepared):
     assert s['latest_completed_run_id']!=old
 
 
+def test_original_correction_preserves_evidence_and_proposal_uses_visible_text(prepared, monkeypatch):
+    studio, task = prepared
+    before = studio.store.get(task)
+    studio.action(task, 'save-original', {'text':'사용자가 들으며 교정한 발화', 'base_text':'원본 발화'})
+    after = studio.store.get(task)
+    assert after['original_text'] == before['original_text']
+    assert after['script_id'] == before['script_id']
+    with pytest.raises(Conflict):
+        studio.action(task, 'save-original', {'text':'다른 교정', 'base_text':'원본 발화'})
+    studio.action(task, 'propose-script', {'request':'도입을 짧게', 'base_text':'아직 저장하지 않은 화면의 대본'})
+    job = next(j for j in studio.store.jobs(task) if j['kind']=='proposal')
+    with studio.store.connect() as db:
+        job['payload'] = json.loads(db.execute('SELECT payload FROM jobs WHERE id=?',(job['id'],)).fetchone()[0])
+    calls = []
+    def propose(settings, state, text, request):
+        calls.append((state['original_text'],text))
+        return {'text':'짧게 고친 수정안', 'summary':'도입 축약'}
+    monkeypatch.setattr('hotpost.studio_ai.propose_script', propose)
+    proposal = studio._proposal(studio.store.get(task), job)
+    assert calls == [('사용자가 들으며 교정한 발화','아직 저장하지 않은 화면의 대본')]
+    studio.store.change(task, lambda s,db:s['proposals'].append(proposal))
+    with pytest.raises(Conflict):
+        studio.action(task, 'apply-proposal', {'proposal_id':proposal['id'], 'base_text':'요청 이후 더 고친 대본'})
+    studio.action(task, 'apply-proposal', {'proposal_id':proposal['id'], 'base_text':proposal['base_text']})
+    assert studio.store.get(task)['feedback']['script_text']=='짧게 고친 수정안'
+    studio.action(task, 'save-original', {'text':'다시 확인한 발화'})
+    with pytest.raises(Conflict, match='원본 발화'):
+        studio.action(task, 'apply-proposal', {'proposal_id':proposal['id'], 'base_text':proposal['base_text']})
+
+
+def test_mixed_upstream_and_scene_edits_are_recoverable_without_losing_completed_version(prepared):
+    studio, task = prepared
+    complete(studio, task)
+    old = studio.store.get(task)['run_id']
+    studio.action(task, 'save-script', {'text':'타이밍이 달라질 새 대본'})
+    studio.store.change(task, lambda s,db:s['feedback'].update(changes=[{'beat_id':'old-beat','start':0,'end':2}],base_edit_id=s['edit_id']))
+    with pytest.raises(Conflict, match='구간 수정만 초기화'):
+        studio.action(task, 'reproduce', {})
+    assert studio.store.get(task)['run_id']==old
+    studio.action(task, 'discard-edit-feedback', {})
+    assert studio.store.get(task)['feedback']=={'script_text':'타이밍이 달라질 새 대본'}
+    studio.action(task, 'reproduce', {})
+    assert studio.download(task,old,'export').read_bytes()==b'exported'
+    job = studio.store.claim()
+    assert job['kind']=='voice'
+
+
+def test_user_result_review_is_version_specific(prepared):
+    studio, task = prepared
+    before = studio.store.get(task)['run_id']
+    with pytest.raises(ValueError):
+        studio.action(task,'review-result',{'run_id':before,'checks':['speech','captions','scenes']})
+    complete(studio,task)
+    with pytest.raises(ValueError):
+        studio.action(task,'review-result',{'run_id':before,'checks':['speech']})
+    studio.action(task,'review-result',{'run_id':before,'checks':['speech','captions','scenes']})
+    studio.action(task,'save-script',{'text':'새로 검토할 제작 대본'})
+    studio.action(task,'reproduce',{})
+    state=studio.store.get(task)
+    assert before in state['result_reviews']
+    assert state['run_id'] not in state['result_reviews']
+
+
+def test_original_evidence_media_is_scoped_and_ocr_stays_separate(prepared):
+    studio, task=prepared
+    folder=studio.settings.data_dir/'transcripts'/'reference';folder.mkdir(parents=True)
+    ref=folder/'reference.mp4';ref.write_bytes(b'video')
+    other=folder/'unrelated.mp4';other.write_bytes(b'other')
+    transcript=folder/'transcript.json'
+    transcript.write_text(json.dumps({'speech':[{'start':0,'text':'말한 내용'}], 'screen_text':[{'start':1,'text':'화면 문구'}]}),encoding='utf-8')
+    studio.store.change(task,lambda s,db:s.update(reference_video=str(ref),transcript_path=str(transcript)))
+    public=studio.public(studio.store.get(task))
+    assert public['original_evidence']['speech'][0]['text']=='말한 내용'
+    assert public['original_evidence']['screen_text'][0]['text']=='화면 문구'
+    assert public['reference_url']
+    assert studio.media(task,str(ref.relative_to(studio.settings.data_dir)))==ref
+    with pytest.raises(ValueError): studio.media(task,str(other.relative_to(studio.settings.data_dir)))
+
+
+def test_old_editor_cannot_apply_cues_to_new_edit(prepared):
+    studio,task=prepared;complete(studio,task)
+    state=studio.store.get(task);old=state['edit_id']
+    studio.store.change(task,lambda s,db:s.update(edit_id='newer-edit'))
+    with pytest.raises(Conflict,match='새 편집 영상'):
+        studio.action(task,'revise-edit',{'edit_id':old,'changes':[{'beat_id':'old-beat','text':'보존할 입력'}]})
+
+
 def test_capcut_wait_does_not_consume_retry_and_survives_recovery(prepared):
     studio,task=prepared;job=studio.store.claim()
     studio.store.defer(job,'CapCut 종료 대기',100,waiting=True)

@@ -109,13 +109,33 @@ class Studio(WorkflowMixin):
                 raise ValueError('대본은 1~3000자로 입력하세요.')
             state = self.store.get(task_id)
             try:
-                return StudioAdapter(self.settings).review(text, state['original_text'])
+                return StudioAdapter(self.settings).review(text, state.get('reviewed_original_text', state['original_text']))
             except (RuntimeError, OSError) as exc:
                 raise ValueError('대본 검사 서비스에 연결하지 못했습니다. script_auto 실행 상태를 확인하세요. 입력 내용은 그대로 유지됩니다.') from exc
         handled = self.workflow_action(task_id, action, data)
         if handled is not None:
             return handled
         def change(state, db):
+            if action == 'save-original':
+                if data.get('base_text', state.get('reviewed_original_text', state['original_text'])) != state.get('reviewed_original_text', state['original_text']):
+                    raise Conflict('다른 화면에서 원본 발화가 바뀌었습니다. 최신 교정본을 확인하세요.')
+                text = str(data.get('text', '')).strip()
+                if not text or len(text) > 12000:
+                    raise ValueError('원본 발화는 1~12000자로 입력하세요.')
+                state.setdefault('original_reviews', []).append({'text': text, 'created': time.time()})
+                state['reviewed_original_text'] = text
+                self.store.event(db, task_id, action, {})
+                return
+            if action == 'review-result':
+                run = next(r for r in self.pipeline(state) if r['id'] == data.get('run_id'))
+                if not run.get('video_url') or run['status'] != 'completed':
+                    raise ValueError('최종 영상이 완성된 뒤 확인할 수 있습니다.')
+                checks = data.get('checks', [])
+                if not isinstance(checks, list) or set(checks) != {'speech', 'captions', 'scenes'}:
+                    raise ValueError('발음·자막·장면을 모두 확인해 주세요.')
+                state.setdefault('result_reviews', {})[run['id']] = {'created': time.time(), 'checks': checks}
+                self.store.event(db, task_id, action, {'run_id': run['id']})
+                return
             if action in {'save-script', 'restore-script', 'apply-proposal', 'pause-auto'} and state.get('automation'):
                 state['automation']['active'] = False
                 state['automation']['paused_at'] = time.time()
@@ -159,12 +179,17 @@ class Studio(WorkflowMixin):
                     raise Conflict("AI 수정안을 준비하고 있습니다. 완료 후 다시 요청하세요.")
                 request = str(data.get("request", "")).strip()[:2000]
                 if not request: raise ValueError("수정 요청을 입력하세요.")
+                base_text = str(data.get('base_text', state.get('feedback', {}).get('script_text', script['text']))).strip()
+                if not base_text or len(base_text) > 3000:
+                    raise ValueError('대본은 1~3000자로 입력하세요.')
                 self.store.enqueue(db, task_id, "proposal", {"script_id": script["id"], "request": request,
-                    'base_text':state.get('feedback', {}).get('script_text',script['text'])}, uid("proposal:"))
+                    'base_text':base_text, 'original_text':state.get('reviewed_original_text', state['original_text'])}, uid("proposal:"))
             elif action == "apply-proposal":
                 proposal = next(p for p in state["proposals"] if p["id"] == data["proposal_id"])
                 if proposal["script_id"] != state["script_id"]:
                     raise Conflict("수정안 생성 후 대본이 바뀌었습니다. 현재 대본으로 다시 요청하세요.")
+                if proposal.get('original_text', state.get('reviewed_original_text', state['original_text'])) != state.get('reviewed_original_text', state['original_text']):
+                    raise Conflict('원본 발화가 교정되었습니다. 수정안을 다시 요청하세요.')
                 self._script(state, proposal["text"], "ai_proposal")
             elif action in {"approve-script", "regenerate-voice"}:
                 script = selected(state, "scripts", "script_id")
@@ -254,6 +279,16 @@ class Studio(WorkflowMixin):
                     item["plan"] = plan
         for source in state["sources"]:
             source["url"] = self.media_url(state["id"], source["path"])
+        state['original_evidence'] = {'speech': [], 'screen_text': []}
+        if state.get('transcript_path'):
+            try:
+                transcript = json.loads(Path(state['transcript_path']).read_text(encoding='utf-8'))
+                state['original_evidence'] = {key: transcript.get(key, []) for key in ('speech', 'screen_text')}
+            except (OSError, ValueError):
+                pass
+        reference = Path(state.get('reference_video') or '')
+        if reference.is_file() and reference.is_relative_to(self.settings.data_dir.resolve()):
+            state['reference_url'] = self.media_url(state['id'], reference)
         state["jobs"] = self.store.jobs(state["id"])
         state['events'] = self.store.events(state['id'])
         state['pipeline'] = self.pipeline(state)
@@ -295,6 +330,8 @@ class Studio(WorkflowMixin):
         path = (self.settings.data_dir / relative).resolve()
         own = self.folder(task_id).resolve()
         sources = {Path(s["path"]).resolve() for s in state["sources"]}
+        if state.get('reference_video'):
+            sources.add(Path(state['reference_video']).resolve())
         if not path.is_file() or not path.is_relative_to(self.settings.data_dir.resolve()):
             raise ValueError("미디어 파일을 찾을 수 없습니다.")
         if not path.is_relative_to(own) and path not in sources:
@@ -441,7 +478,9 @@ class Studio(WorkflowMixin):
         from .studio_ai import propose_script
         script = next(s for s in state["scripts"] if s["id"] == job["payload"]["script_id"])
         text = job['payload'].get('base_text', script['text'])
-        return {**propose_script(self.settings, state, text, job["payload"]["request"]),
+        evidence = {**state, 'original_text':job['payload'].get('original_text', state.get('reviewed_original_text', state['original_text']))}
+        return {**propose_script(self.settings, evidence, text, job["payload"]["request"]),
+                'base_text':text, 'original_text':evidence['original_text'],
                 'base_hash':hashlib.sha256(text.encode()).hexdigest(),
                 "id": job["id"], "script_id": script["id"], "created": time.time()}
 
@@ -473,6 +512,7 @@ class Studio(WorkflowMixin):
         info = verify_wav(voice.read_bytes())
         return {"id": p["voice_id"], "script_id": script["id"], "path": str(voice), "sha256": digest(voice),
                 "created": time.time(), "speed": p["speed"], "duration": info["duration"],
+                "spoken_text": p.get('spoken_text', script['text']),
                 "request_id": result["voicebench_request_id"], "quality_control": result.get("quality_control")}
 
     def _process(self, state, job, action, payload):
@@ -569,6 +609,8 @@ class Studio(WorkflowMixin):
     def _accept(self, state, job, result, db=None):
         kind, p = job["kind"], job["payload"]
         if kind == 'suggest_edit':
+            if result['base_edit_id'] != state.get('edit_id'):
+                raise Conflict('수정안 준비 중 새 편집본이 만들어졌습니다. 새 영상에서 다시 요청하세요.')
             if self.feedback_hash(state.get('feedback', {})) != result['feedback_hash']:
                 raise Conflict('요청 후 피드백이 변경되었습니다. 수정 요청을 다시 보내세요.')
             feedback = state.setdefault('feedback', {})

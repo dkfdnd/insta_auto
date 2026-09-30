@@ -133,3 +133,89 @@ def test_polling_preserves_draft_and_updates_stage_and_recovery(flow_page):
     assert page.locator('[role=progressbar]').get_attribute('aria-valuenow') == '6'
     assert page.locator('[aria-current=step]').count() == 0
     assert '완성 영상' in page.locator('.pf-next').inner_text()
+
+
+def setup_editor(page):
+    page.evaluate('''()=>{
+        task.scripts=[{id:'s1',text:'현재 제작 대본'}];task.script_id='s1';task.feedback={};task.feedback_revision=0;
+        task.original_text='자동 인식 원문';task.reviewed_original_text='교정한 원본 발화';
+        task.original_evidence={speech:[{start:1,text:'실제 발화'}],screen_text:[{text:'화면 광고 문구'}]};
+        task.revision++;draw();window.requests=[];
+        window.fetch=async(url,options={})=>{
+            if(options.method!=='POST')return {ok:true,json:async()=>structuredClone(task)};
+            const body=JSON.parse(options.body);requests.push({url,body});
+            if(window.hold)await new Promise(resolve=>window.release=resolve);
+            if(url.endsWith('/save-script'))task.feedback.script_text=body.text;
+            if(url.endsWith('/save-original'))task.reviewed_original_text=body.text;
+            if(url.endsWith('/apply-proposal'))task.feedback.script_text='AI가 고친 대본';
+            task.revision++;task.feedback_revision++;
+            return {ok:true,json:async()=>structuredClone(task)};
+        };
+    }''')
+
+
+def test_ai_uses_visible_unsaved_script_and_proposal_arrives_without_losing_it(flow_page):
+    page=flow_page;setup_editor(page)
+    page.locator('[data-field=script]').fill('저장 전 사용자 수정 대본')
+    page.locator('[data-field=script-request]').fill('도입을 간결하게')
+    page.locator('[data-pf=propose-script]').click()
+    page.wait_for_function('requests.length===1 && !document.querySelector("#root")._saving')
+    assert page.evaluate('requests[0].body.base_text')=='저장 전 사용자 수정 대본'
+    assert page.locator('[data-field=script]').input_value()=='저장 전 사용자 수정 대본'
+    page.evaluate('''()=>{
+        task.proposals.push({id:'p1',base_text:'저장 전 사용자 수정 대본',text:'AI가 고친 대본',summary:'도입 수정'});
+        task.revision++;draw();
+    }''')
+    page.locator('[data-proposals] summary').click()
+    assert '저장 전 사용자 수정 대본' in page.locator('.pf-compare').inner_text()
+    page.locator('[data-pf=proposal]').click()
+    page.wait_for_function('requests.length===2 && !document.querySelector("#root")._saving')
+    assert page.locator('[data-field=script]').input_value()=='AI가 고친 대본'
+
+
+def test_typing_during_save_keeps_new_input_and_other_sections(flow_page):
+    page=flow_page;setup_editor(page)
+    page.locator('[data-field=script]').fill('첫 번째 저장 요청')
+    page.locator('[data-field=speed]').fill('1.15')
+    page.evaluate('window.hold=true')
+    page.locator('[data-pf=save-script]').click()
+    page.wait_for_function('typeof release === "function"')
+    page.locator('[data-field=script]').fill('저장 응답 전에 더 쓴 대본')
+    page.evaluate('release()')
+    page.wait_for_function('!document.querySelector("#root")._saving')
+    assert page.locator('[data-field=script]').input_value()=='저장 응답 전에 더 쓴 대본'
+    assert page.locator('[data-field=speed]').input_value()=='1.15'
+    assert page.evaluate('task.feedback.script_text')=='첫 번째 저장 요청'
+    assert '저장하지 않은' in page.locator('[data-change-status]').inner_text()
+
+
+def test_evidence_separation_stale_voice_and_result_review_survive_poll(flow_page):
+    page=flow_page;setup_editor(page)
+    page.evaluate('''()=>{
+        task.feedback={script_text:'새 대본'};task.voices=[{id:'voice1',script_id:'s1',speed:1.05,duration:4,spoken_text:'실제 읽은 발음',path_url:'/voice.wav'}];task.voice_id='voice1';
+        task.pipeline[0].video_url='/completed.mp4';task.revision++;draw();
+    }''')
+    assert '수정사항 반영 전 음성' in page.locator('.pf-audio-card').inner_text()
+    page.locator('.pf-original>summary').click()
+    assert page.locator('[data-field=original]').input_value()=='교정한 원본 발화'
+    assert '화면 속 글자 · 발화와 별도 자료' in page.locator('.pf-original').inner_text()
+    page.locator('[data-review-check=speech]').check()
+    page.evaluate('document.activeElement.blur();task.revision++;draw()')
+    assert page.locator('[data-review-check=speech]').is_checked()
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+
+
+def test_reload_keeps_old_scene_draft_separate_from_new_edit(flow_page):
+    page=flow_page;setup_editor(page)
+    page.evaluate('''()=>{
+        localStorage.setItem('production-feedback-work-test',JSON.stringify({'caption:old':'보관할 자막',script:'보관할 대본'}));
+        localStorage.setItem('production-feedback-work-test-edit','old-edit');
+        task.edit_id='new-edit';task.revision++;draw();
+    }''')
+    assert '이전 구간 입력' in page.locator('[data-change-status]').inner_text()
+    page.locator('[data-change-status] summary').click()
+    assert '보관할 자막' in page.locator('[data-change-status]').inner_text()
+    page.locator('[data-pf=discard-local-edit]').click()
+    assert page.locator('[data-field=script]').input_value()=='보관할 대본'
+    assert page.evaluate("JSON.parse(localStorage.getItem('production-feedback-work-test'))") == {'script':'보관할 대본'}
