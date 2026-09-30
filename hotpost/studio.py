@@ -165,7 +165,14 @@ class Studio(WorkflowMixin):
             if action == 'refresh-sources':
                 if db.execute("SELECT 1 FROM jobs WHERE task_id=? AND kind IN ('prepare','refresh_sources') AND status IN ('queued','running')", (task_id,)).fetchone():
                     raise Conflict('자료 수집이 이미 대기 중이거나 실행 중입니다.')
-                self.store.enqueue(db, task_id, 'refresh_sources', {'request':str(data.get('request',''))[:1000]}, uid('sources:'))
+                request = str(data.get('request', ''))[:1000]
+                if data.get('retry_job_id'):
+                    failed = db.execute("SELECT payload FROM jobs WHERE id=? AND task_id=? AND kind='refresh_sources' AND status='failed'",
+                                        (data['retry_job_id'], task_id)).fetchone()
+                    if not failed:
+                        raise Conflict('재시도할 소스 검색이 변경되었습니다. 최신 상태를 확인하세요.')
+                    request = json.loads(failed['payload']).get('request', '')
+                self.store.enqueue(db, task_id, 'refresh_sources', {'request':request}, uid('sources:'))
                 state['source_search'] = {'status': 'queued', 'message': '다국어 추가 수집 대기', 'progress': 0}
             elif action == "save-script":
                 self._script(state, data.get("text", ""), "manual")
@@ -262,6 +269,7 @@ class Studio(WorkflowMixin):
 
     def public(self, state):
         state = copy.deepcopy(state)
+        state['source_search_retry_supported'] = True
         if state.get("manifest_path"):
             state["sources"] = self._source_records([s["path"] for s in state["sources"]], state["manifest_path"], state["sources"])
             from .source_audit import summarize

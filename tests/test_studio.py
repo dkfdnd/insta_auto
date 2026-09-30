@@ -28,6 +28,31 @@ def test_create_is_idempotent_and_prepare_only(studio):
     assert [j["kind"] for j in studio.store.jobs(first["id"])] == ["prepare"]
 
 
+def test_source_retry_preserves_query_and_cannot_retry_other_tasks_or_job_kinds(studio):
+    state, _ = studio.store.create('search-retry', '검색 재시도')
+    other, _ = studio.store.create('other-search', '다른 제작')
+    def fixture(s, db):
+        db.execute("UPDATE jobs SET status='failed' WHERE task_id=?", (s['id'],))
+        studio.store.enqueue(db, s['id'], 'refresh_sources', {'request': '가방 내부 칸막이'}, 'failed-search')
+        db.execute("UPDATE jobs SET status='failed' WHERE task_id=?", (s['id'],))
+    studio.store.change(state['id'], fixture)
+    failed = next(j for j in studio.store.jobs(state['id']) if j['kind'] == 'refresh_sources')
+    prepare = next(j for j in studio.store.jobs(state['id']) if j['kind'] == 'prepare')
+    with pytest.raises(Conflict):
+        studio.action(state['id'], 'refresh-sources', {'retry_job_id': prepare['id']})
+    studio.store.change(other['id'], lambda s, db: db.execute("UPDATE jobs SET status='done' WHERE task_id=?", (s['id'],)))
+    with pytest.raises(Conflict):
+        studio.action(other['id'], 'refresh-sources', {'retry_job_id': failed['id']})
+    result = studio.action(state['id'], 'refresh-sources', {'retry_job_id': failed['id'], 'request': '덮어쓰면 안 됨'})
+    assert result['source_search']['status'] == 'queued'
+    assert result['source_search_retry_supported'] is True
+    with studio.store.transaction() as db:
+        row = db.execute("SELECT payload FROM jobs WHERE task_id=? AND kind='refresh_sources' AND status='queued'", (state['id'],)).fetchone()
+    assert json.loads(row['payload'])['request'] == '가방 내부 칸막이'
+    with pytest.raises(Conflict):
+        studio.action(state['id'], 'refresh-sources', {'retry_job_id': failed['id']})
+
+
 def test_approval_gates_and_duplicate_click(studio):
     state=prepared(studio)
     with pytest.raises(Conflict):

@@ -5,6 +5,31 @@
   const link=(url,label)=>url?`<a href="${esc(url)}" download>${esc(label)} ↓</a>`:'';
   const item=(t,c,id)=>t[c].find(v=>v.id===id);
   const storageKey=t=>'production-feedback-'+t.id;
+  function sourceSearchState(t){
+    const jobs=t.jobs||[],search=t.source_search||{};
+    const busy=jobs.find(j=>['prepare','refresh_sources'].includes(j.kind)&&['queued','running'].includes(j.status));
+    const latest=jobs.find(j=>j.kind==='refresh_sources');
+    const failed=search.status==='failed'&&latest?.status==='failed'?latest:null;
+    // A prepare failure may be transcription or rewriting; only an explicit missing-source error is actionable here.
+    const missing=!t.sources?.length&&/Source manifest contains no selected local videos|제작에 사용할 소스 영상이 없습니다/.test(t.error||'');
+    return {busy,failed,missing};
+  }
+  function sourceSearchStatus(t){
+    const {busy,failed,missing}=sourceSearchState(t),search=t.source_search||{};
+    if(busy)return `<div class="pf-search-notice" role="status"><strong>${busy.kind==='prepare'?'제작 자료 준비 중':busy.status==='queued'?'소스 검색 대기 중':'소스 검색 진행 중'}</strong><p>${esc(window.StudioBoard.message(busy.kind==='prepare'?t.message:search.message,'현재 요청을 처리하고 있습니다.'))}</p><small>현재 작업이 끝나면 추가 검색할 수 있어요.</small></div>`;
+    if(failed||missing)return `<div class="pf-search-notice is-error" role="status"><strong>${failed?'소스 검색이 중단됐어요':'사용할 소스를 확보하지 못했어요'}</strong><p>${esc(window.StudioBoard.message(failed?search.message:t.error))}</p><button data-pf="retry-source-search" ${failed?`data-job-id="${esc(failed.id)}"`:''} ${failed&&!t.source_search_retry_supported?'disabled':''}>실패한 소스 검색 다시 시도</button><small>${failed&&!t.source_search_retry_supported?'서버 업데이트 적용이 필요합니다. 로컬 Hotpost 서버를 재시작한 뒤 새로고침하세요. 아래에서 검색 조건을 직접 입력해 추가 검색할 수도 있습니다.':(failed?'이전 검색 조건으로 다시 실행합니다.':'기본 검색을 다시 실행합니다. 확보 후 사용할 영상을 선택해 제작을 이어가세요.')+' 인증·연결 문제가 있었다면 먼저 해결해 주세요.'}</small></div>`;
+    return search.status==='done'?`<p class="pf-help" role="status">${esc(window.StudioBoard.message(search.message,''))}</p>`:'';
+  }
+  function sourceSearchPanel(t){
+    const {busy}=sourceSearchState(t);
+    return `<section class="pf-source-search"><div data-search-status>${sourceSearchStatus(t)}</div><details class="pf-advanced" data-search-options ${!t.sources?.length&&!busy?'open':''}><summary>조건을 바꿔 추가 검색</summary><p class="pf-help">원하는 장면이 부족할 때 제품명·동작·촬영 장면을 구체적으로 입력하세요. 처음 소스 찾기와 같은 검색을 새 조건으로 다시 실행하며, 기존 영상은 유지합니다.</p><label>추가로 필요한 장면<textarea data-field="search" maxlength="1000" placeholder="예: 캠핑 수납 가방을 펼쳐 내부 칸막이를 보여주는 장면" aria-describedby="source-search-help"></textarea></label><p class="pf-help" id="source-search-help">새 영상이 발견되지 않을 수도 있습니다. 기존 결과의 다음 페이지를 가져오는 기능은 아닙니다.</p><button data-pf="search" ${busy?'disabled':''}>입력한 조건으로 추가 검색</button><p data-search-validation role="status"></p>${audit(t.source_audit)}</details></section>`;
+  }
+  function updateSourceSearch(root,t){
+    const box=root.querySelector('[data-search-status]');
+    if(box){const html=sourceSearchStatus(t);if(box.innerHTML!==html)box.innerHTML=html;}
+    const button=root.querySelector('[data-pf="search"]');
+    if(button)button.disabled=!!sourceSearchState(t).busy||!!root._saving;
+  }
   function originalPanel(t, expanded=false){
     const evidence=t.original_evidence||{},speech=evidence.speech||[],screen=evidence.screen_text||[];
     return `<details class="pf-original" ${expanded?'open':''}><summary>원본 발화 확인 · 잘못 인식한 말 교정</summary><p class="pf-help">영상에서 실제로 들리는 말만 교정하세요. 자동 인식 원문은 보존됩니다. 교정본 저장은 제작 대본·음성을 바꾸지 않으며, 다음 AI 수정 요청과 문장 검사의 참고 자료로 사용됩니다.</p>
@@ -116,7 +141,7 @@
     const currentText=f.script_text??s?.text??'';
     return `<div class="pf-editor">
       <details open data-pf-section="sources"><summary>영상 소스 준비</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">↥</span><div><h3>${t.sources.length?'지금 쓰는 영상부터 확인하세요':'영상부터 넣고 시작해 볼까요?'}</h3><p>현재 영상을 빼거나 유지하고, 새 영상을 추가해 다음 제작 구성을 정하세요.</p></div></div>${sourceLibrary(t)}
-      <details class="pf-advanced"><summary>직접 찾기 어려우면 · 자동 소스 검색</summary><label>찾을 장면이나 제품<textarea data-field="search" placeholder="예: 캠핑 수납 가방을 사용하는 장면"></textarea></label><button data-pf="search">소스 검색 시작</button><p>${esc(window.StudioBoard.message(t.source_search?.message,''))}</p>${audit(t.source_audit)}</details></details>
+      ${sourceSearchPanel(t)}</details>
       <details open data-pf-section="original"><summary>원본 발화 확인</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">${fileIcon("voice")}</span><div><h3>듣고 확인하는 원본의 이야기</h3><p>실제 발화를 교정하고, 제작 대본을 위한 참고 자료로 보관하세요.</p></div></div>${originalPanel(t,true)}</details><details open data-pf-section="script"><summary>대본 다듬기</summary><div class="pf-section-intro"><span class="pf-section-icon" aria-hidden="true">✎</span><div><h3>우리 영상의 이야기를 완성하세요</h3><p>직접 고치거나 AI에게 수정할 방향을 알려주세요. 원본과 후보 대본은 아래에서 비교할 수 있어요.</p></div></div>
       <div class="glass-script-grid"><div class="glass-writing"><div class="pf-script-state"><span class="pf-count">${f.script_text!==undefined?'수정 대본 · 반영 대기':'현재 제작 대본'}</span><p>저장 → 변경사항 반영해 재제작 순서로 진행합니다. 기존 음성과 완성본은 새 버전이 준비될 때까지 보존됩니다.</p></div><label>제작에 사용할 대본<textarea maxlength="3000" data-field="script" placeholder="제작할 대본을 입력하세요">${esc(currentText)}</textarea></label><div class="pf-button-row"><button data-pf="save-script">대본 저장</button><button class="pf-secondary" data-pf="check-script">문장 검사</button></div><details class="pf-advanced"><summary>문장 검사 결과</summary><div data-script-review aria-live="polite">${scriptReview((t.script_candidates||[]).find(c=>c.text===currentText))}</div></details>
       </div><div class="pf-tool-card glass-assistant"><div class="glass-card-kicker">WRITING ASSISTANT</div><h4>다른 표현이 필요할 때</h4><label>AI에게 수정 요청<textarea data-field="script-request" placeholder="예: 시작을 질문으로 바꾸고 설명을 짧게 해줘"></textarea></label><button data-pf="propose-script" ${s?'':'disabled'}>수정안 만들기</button>${!s?'<p class="pf-help">제작 대본이 준비되면 AI 수정안을 만들 수 있어요.</p>':''}
@@ -202,6 +227,7 @@
     root._task=t;root._options=options;
     const bindUploads=()=>window.SourceUpload?.bind(root,t,result=>{options.onUpdate?.(result);mount(root,result,options);},()=>{root._renderedRevision=null;mount(root,root._task,options);});
     if(root._taskId!==t.id){root._taskId=t.id;root._selected=null;root._dirty=false;root._feedbackBaseRevision=null;root._renderedRevision=null;root.innerHTML='';}
+    updateSourceSearch(root,t);
     const status=root.querySelector('[data-change-status]');if(status)status.innerHTML=changeStatus(t);
     const runningNote=root.querySelector('.pf-runtime');
     if(runningNote){const temp=document.createElement('div');temp.innerHTML=runtime(t);const content=temp.firstElementChild.innerHTML;if(runningNote.innerHTML!==content)runningNote.innerHTML=content;}
@@ -246,6 +272,7 @@
     root._renderedRevision=t.revision;root._renderedSelected=root._selected;root._renderedEditId=t.edit_id;
     const mediaPositions=new Map([...root.querySelectorAll('video,audio')].map(m=>[m.getAttribute('src'),m.currentTime]));
     const opens=[...root.querySelectorAll('details[open]')].map(d=>d.querySelector('summary')?.textContent);
+    const searchOpen=root.querySelector('[data-search-options]')?.open;
     root.innerHTML=`<section class="production-flow">${options.editor&&t.automation?.protocol===2?runtime(t):''}${summary(t,root._selected)}${options.editor&&t.automation?.protocol===2?editor(t):''}<p class="pf-message" role="status"></p></section>`;
     for(const kind of ['proposal','suggest_edit']){
       const button=root.querySelector('[data-pf="'+(kind==='proposal'?'propose-script':'request-edit')+'"]');
@@ -253,6 +280,7 @@
     }
     root.querySelectorAll('video,audio').forEach(m=>{const position=mediaPositions.get(m.getAttribute('src'));if(position>0){const restore=()=>{m.currentTime=position;};if(m.readyState>=2)restore();else m.addEventListener('loadeddata',restore,{once:true});}});
     if(opens.length)root.querySelectorAll('details').forEach(d=>d.open=opens.includes(d.querySelector('summary')?.textContent));
+    if(searchOpen!==undefined&&root.querySelector('[data-search-options]'))root.querySelector('[data-search-options]').open=searchOpen;
     const local=JSON.parse(localStorage.getItem(storageKey(t))||'null');
     if(options.editor&&local&&Object.keys(local).length){for(const field of root.querySelectorAll('[data-field]'))if(field.dataset.field in local){if(/^(shot|caption|start|end|emphasis):/.test(field.dataset.field)&&localStorage.getItem(storageKey(t)+'-edit')&&localStorage.getItem(storageKey(t)+'-edit')!==t.edit_id)continue;if(field.type==='checkbox')field.checked=local[field.dataset.field];else field.value=local[field.dataset.field];}root._dirty=true;root._feedbackBaseRevision=Number(localStorage.getItem(storageKey(t)+'-revision')??t.feedback_revision??0);}
     if(local&&'script' in local){const review=root.querySelector('[data-script-review]');if(review)review.textContent='불러온 편집 내용을 다시 검사해 주세요.';}
@@ -290,7 +318,15 @@
       if(action==='candidate'){kind='select-candidate';body={index:Number(button.dataset.index)};}
       if(action==='proposal'){kind='apply-proposal';body={proposal_id:button.dataset.id,base_text:value('script')};}
       if(action==='save-sources'){kind='save-feedback';body={source_ids:[...root.querySelectorAll('[data-field^="source:"]:checked')].map(e=>e.dataset.field.slice(7))};}
-      if(action==='search'){kind='refresh-sources';body={request:value('search')};}
+      if(action==='search'||action==='retry-source-search'){
+        if(sourceSearchState(task).busy)return;
+        kind='refresh-sources';
+        if(action==='search'){
+          const request=value('search').trim();
+          if(!request){root.querySelector('[data-search-validation]').textContent='추가로 필요한 장면이나 바꿀 검색 조건을 입력해 주세요.';field('search').focus();return;}
+          root.querySelector('[data-search-validation]').textContent='';body={request};
+        }else body=button.dataset.jobId?{retry_job_id:button.dataset.jobId}:{request:''};
+      }
       if(action==='save-voice'||action==='regenerate-voice'){
         kind=action==='save-voice'?'save-feedback':action;
         body={speed:Number(value('speed')),pronunciations:value('pronunciation').split('\n').filter(v=>v.trim()).map(v=>{const pos=v.indexOf('=');return {from:pos<0?'':v.slice(0,pos).trim(),to:pos<0?'':v.slice(pos+1).trim()};})};
@@ -311,6 +347,7 @@
           return;
         }
         const fresh=await api('/'+task.id);
+        if(body.retry_job_id&&!fresh.source_search_retry_supported)throw new Error('로컬 Hotpost 서버를 재시작한 뒤 새로고침해 주세요. 이전 검색 조건을 복원하려면 서버 업데이트 적용이 필요합니다.');
         const feedbackActions=['save-feedback','save-script','restore-script','apply-proposal','regenerate-voice','revise-edit','request-edit','reproduce','discard-feedback','select-candidate','discard-edit-feedback'];
         const result=await api('/'+task.id+'/'+kind,{revision:fresh.revision,...(feedbackActions.includes(kind)?{feedback_revision:root._feedbackBaseRevision??task.feedback_revision??0}:{}),...body});
         // Preserve unsaved fields in other sections; clear only fields saved here.
@@ -324,8 +361,8 @@
         if(Object.keys(local).length){localStorage.setItem(storageKey(task),JSON.stringify(local));localStorage.setItem(storageKey(task)+'-revision',String(result.feedback_revision||0));}else{localStorage.removeItem(storageKey(task));localStorage.removeItem(storageKey(task)+'-revision');}root._feedbackBaseRevision=null;
         if(root._task.id!==task.id){options.onUpdate?.(result);return;}
         root._dirty=false;root._renderedRevision=null;document.activeElement.blur();options.onUpdate?.(result);mount(root,result,options);
-        message(({'save-original':'교정본을 저장했습니다. 제작 대본은 그대로이며, 다음 AI 수정 요청에 교정본을 사용합니다.','review-result':'이 버전의 사용자 검토를 완료했습니다.','discard-feedback':'저장한 변경사항을 초기화했습니다.','discard-edit-feedback':'구간 수정만 초기화했습니다. 대본·음성·소스 변경은 유지됩니다.','propose-script':'지금 입력한 대본으로 AI 수정안을 요청했습니다. 완료되면 변경 전후를 비교하세요.','use-sources':'선택한 영상으로 제작을 이어갑니다. 현재 단계에서 진행 상황을 확인하세요.',retry:'재시도 요청을 접수했습니다. 위 현재 단계에서 실행 상태를 확인하세요.','start-auto':'자동 제작 요청을 접수했습니다.','resume-auto':'자동 진행 재개를 요청했습니다.','pause-auto':'자동 진행 중지를 요청했습니다. 현재 실행 중인 작업은 마무리될 수 있습니다.',reproduce:'재제작 요청 완료'})[action]||'저장했습니다. 변경사항 반영은 재제작 버튼으로 실행합니다.');
-      }catch(e){message(window.StudioBoard.message(e.message));}finally{root._saving=false;button.disabled=false;}
+        message(({'save-original':'교정본을 저장했습니다. 제작 대본은 그대로이며, 다음 AI 수정 요청에 교정본을 사용합니다.','review-result':'이 버전의 사용자 검토를 완료했습니다.','discard-feedback':'저장한 변경사항을 초기화했습니다.','discard-edit-feedback':'구간 수정만 초기화했습니다. 대본·음성·소스 변경은 유지됩니다.','propose-script':'지금 입력한 대본으로 AI 수정안을 요청했습니다. 완료되면 변경 전후를 비교하세요.','search':'추가 검색을 요청했습니다. 확보된 영상은 목록에서 선택해 다음 제작에 사용하세요.','retry-source-search':'소스 검색 재시도를 요청했습니다. 현재 검색 상태를 확인하세요.','use-sources':'선택한 영상으로 제작을 이어갑니다. 현재 단계에서 진행 상황을 확인하세요.',retry:'재시도 요청을 접수했습니다. 위 현재 단계에서 실행 상태를 확인하세요.','start-auto':'자동 제작 요청을 접수했습니다.','resume-auto':'자동 진행 재개를 요청했습니다.','pause-auto':'자동 진행 중지를 요청했습니다. 현재 실행 중인 작업은 마무리될 수 있습니다.',reproduce:'재제작 요청 완료'})[action]||'저장했습니다. 변경사항 반영은 재제작 버튼으로 실행합니다.');
+      }catch(e){message(window.StudioBoard.message(e.message));}finally{root._saving=false;button.disabled=false;updateSourceSearch(root,root._task);}
     };
     bindUploads();options.onRender?.();
   }

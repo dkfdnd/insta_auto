@@ -137,6 +137,7 @@ def test_polling_preserves_draft_and_updates_stage_and_recovery(flow_page):
 
 def setup_editor(page):
     page.evaluate('''()=>{
+        task.source_search_retry_supported=true;
         task.scripts=[{id:'s1',text:'현재 제작 대본'}];task.script_id='s1';task.feedback={};task.feedback_revision=0;
         task.original_text='자동 인식 원문';task.reviewed_original_text='교정한 원본 발화';
         task.original_evidence={speech:[{start:1,text:'실제 발화'}],screen_text:[{text:'화면 광고 문구'}]};
@@ -152,6 +153,64 @@ def setup_editor(page):
             return {ok:true,json:async()=>structuredClone(task)};
         };
     }''')
+
+
+def test_additional_search_requires_new_condition_and_keeps_existing_success_quiet(flow_page):
+    page=flow_page;setup_editor(page)
+    page.evaluate('''()=>{task.jobs=[];task.sources=[{id:'src1',url:'/source.mp4'}];
+        task.source_search={status:'done',message:'추가 수집 완료 · 신규 0개 / 보유 1개'};
+        task.revision++;draw();}''')
+    assert not page.locator('[data-search-options]').evaluate('(e)=>e.open')
+    assert page.locator('[data-pf=retry-source-search]').count()==0
+    page.locator('[data-search-options] > summary').click()
+    page.locator('[data-pf=search]').click()
+    assert page.evaluate('requests.length')==0
+    assert '검색 조건을 입력' in page.locator('[data-search-validation]').inner_text()
+    page.locator('[data-field=search]').fill('가방 내부 칸막이를 보여주는 장면')
+    page.locator('[data-pf=search]').click()
+    page.wait_for_function('requests.length===1 && !document.querySelector("#root")._saving')
+    assert page.evaluate('requests[0].body.request')=='가방 내부 칸막이를 보여주는 장면'
+    assert page.evaluate('requests[0].url.endsWith("/refresh-sources")')
+
+
+def test_search_retry_targets_failed_search_and_polling_preserves_new_query(flow_page):
+    page=flow_page;setup_editor(page)
+    page.evaluate('''()=>{task.jobs=[{id:'search-failed',kind:'refresh_sources',status:'failed'},
+        {id:'voice-failed',kind:'voice',status:'failed'}];
+        task.source_search={status:'failed',message:'CAPTCHA'};task.revision++;draw();}''')
+    page.locator('[data-search-options] > summary').click()
+    page.locator('[data-field=search]').fill('나중에 검색할 새로운 조건')
+    page.locator('[data-pf=retry-source-search]').click()
+    page.wait_for_function('requests.length===1 && !document.querySelector("#root")._saving')
+    assert page.evaluate('requests[0].body.retry_job_id')=='search-failed'
+    assert page.locator('[data-field=search]').input_value()=='나중에 검색할 새로운 조건'
+    page.evaluate('''()=>{window.searchInput=document.querySelector('[data-field=search]');
+        task.jobs.unshift({kind:'refresh_sources',status:'running'});
+        task.source_search={status:'running',message:'후보 영상 확인 중'};task.revision++;draw();}''')
+    assert page.locator('[data-pf=search]').is_disabled()
+    assert '소스 검색 진행 중' in page.locator('[data-search-status]').inner_text()
+    assert page.locator('[data-pf=retry-source-search]').count()==0
+    assert page.evaluate('searchInput===document.querySelector("[data-field=search]")')
+    page.evaluate('''()=>{task.jobs=[];task.source_search={status:'done',message:'추가 수집 완료 · 신규 0개'};task.revision++;draw();}''')
+    assert page.locator('[data-pf=search]').is_enabled()
+    assert '신규 0개' in page.locator('[data-search-status]').inner_text()
+
+
+def test_prepare_transcription_failure_is_not_presented_as_source_search_failure(flow_page):
+    page=flow_page
+    page.evaluate('''()=>{task.jobs=[{kind:'prepare',status:'failed'}];task.status='attention';
+        task.error='원본 발화를 추출하지 못했습니다.';task.revision++;draw();}''')
+    assert page.locator('[data-pf=retry-source-search]').count()==0
+    page.evaluate('''()=>{task.error='제작에 사용할 소스 영상이 없습니다.';task.revision++;draw();}''')
+    assert page.locator('[data-pf=retry-source-search]').count()==1
+
+
+def test_old_server_cannot_silently_drop_retry_conditions(flow_page):
+    page=flow_page
+    page.evaluate('''()=>{task.jobs=[{id:'failed-search',kind:'refresh_sources',status:'failed'}];
+        task.source_search={status:'failed',message:'연결 실패'};task.revision++;draw();}''')
+    assert page.locator('[data-pf=retry-source-search]').is_disabled()
+    assert '서버를 재시작' in page.locator('[data-search-status]').inner_text()
 
 
 def test_ai_uses_visible_unsaved_script_and_proposal_arrives_without_losing_it(flow_page):
