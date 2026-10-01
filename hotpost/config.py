@@ -93,6 +93,7 @@ class Settings:
     source_candidates_per_platform: int = 12
     source_refine_max_candidates: int = 12  # 검증된 후보 제목으로 한 차례 추가 탐색
     source_min_usable: int = 8         # 부족하면 남은 예산으로 한 차례 추가 탐색
+    source_tiktok_min_usable: int = 5  # 품질·중복 검사를 통과한 TikTok 소스 목표
     source_query_model_enabled: bool = True
     source_transcribe_reference: bool = True
     source_ytdlp_js_runtime: str = ""  # e.g. node:C:/Program Files/nodejs/node.exe

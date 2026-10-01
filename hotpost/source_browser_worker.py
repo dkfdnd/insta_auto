@@ -79,7 +79,8 @@ def isolated_search(settings, frames, queries, limit, debug_dir, previous_search
     checkpoint = debug_dir / f'search-checkpoint-{uuid.uuid4().hex}.json'
     names = ('source_browser_search', 'source_browser_headless', 'source_browser_frames',
              'source_browser_captcha_wait', 'source_browser_search_interval',
-             'source_browser_block_cooldown', 'source_queries_per_platform', 'source_candidates_per_platform')
+             'source_browser_block_cooldown', 'source_queries_per_platform', 'source_candidates_per_platform',
+             'source_tiktok_min_usable')
     public_settings = {name: getattr(settings, name) for name in names}
     public_settings['data_dir'] = str(settings.data_dir.resolve())
     payload = {'settings': public_settings, 'frames': [str(p.resolve()) for p in frames],

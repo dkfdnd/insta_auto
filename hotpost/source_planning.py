@@ -1,7 +1,6 @@
 """Ground search translations/actions in observed text, with explicit fallback diagnostics."""
 from __future__ import annotations
 
-import os
 import re
 from itertools import zip_longest
 
@@ -13,9 +12,7 @@ def enrich_plan(settings, plan, caption, transcript, generate=None):
                 'screen_text': transcript.get('screen_text', '')}
     plan = {**plan, 'query_details': list(plan['query_details']), 'planning_notes': []}
     if generate is None:
-        if not os.environ.get('GEMINI_API_KEY', '').strip():
-            plan['planning_notes'].append('검색어 모델 미설정: 관측된 주제 사전과 이미지 검색 사용')
-            return plan
+        # _generate already supports the local script_auto service without a Gemini key.
         from .script_rewriter import _generate
         generate = _generate
     try:

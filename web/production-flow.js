@@ -18,7 +18,9 @@
     const {busy,failed,missing}=sourceSearchState(t),search=t.source_search||{};
     if(busy)return `<div class="pf-search-notice" role="status"><strong>${busy.kind==='prepare'?'제작 자료 준비 중':busy.status==='queued'?'소스 검색 대기 중':'소스 검색 진행 중'}</strong><p>${esc(window.StudioBoard.message(busy.kind==='prepare'?t.message:search.message,'현재 요청을 처리하고 있습니다.'))}</p><small>현재 작업이 끝나면 추가 검색할 수 있어요.</small></div>`;
     if(failed||missing)return `<div class="pf-search-notice is-error" role="status"><strong>${failed?'소스 검색이 중단됐어요':'사용할 소스를 확보하지 못했어요'}</strong><p>${esc(window.StudioBoard.message(failed?search.message:t.error))}</p><button data-pf="retry-source-search" ${failed?`data-job-id="${esc(failed.id)}"`:''} ${failed&&!t.source_search_retry_supported?'disabled':''}>실패한 소스 검색 다시 시도</button><small>${failed&&!t.source_search_retry_supported?'서버 업데이트 적용이 필요합니다. 로컬 Hotpost 서버를 재시작한 뒤 새로고침하세요. 아래에서 검색 조건을 직접 입력해 추가 검색할 수도 있습니다.':(failed?'이전 검색 조건으로 다시 실행합니다.':'기본 검색을 다시 실행합니다. 확보 후 사용할 영상을 선택해 제작을 이어가세요.')+' 인증·연결 문제가 있었다면 먼저 해결해 주세요.'}</small></div>`;
-    return search.status==='done'?`<p class="pf-help" role="status">${esc(window.StudioBoard.message(search.message,''))}</p>`:'';
+    const goal=t.source_audit?.platform_targets?.tiktok;
+    const goalText=goal?`<div class="pf-search-notice" role="status"><strong>TikTok 사용 가능 ${goal.usable}/${goal.target}개 · ${goal.status==='met'?'목표 달성':'목표 미달 또는 검색 미완료'}</strong><p>${Object.entries(goal.languages||{}).map(([l,ok])=>esc({en:'영어',ko:'한국어',zh:'중국어'}[l]||l)+' '+(ok?'검색 완료':'미완료')).join(' · ')}</p>${goal.status==='met'?'':'<small>아래 소스 검색 내역에서 로그인·차단·검색어 부족 여부를 확인해 주세요. 필요한 검색어·인증을 준비한 뒤 추가 검색할 수 있어요.</small>'}</div>`:'';
+    return (search.status==='done'?`<p class="pf-help" role="status">${esc(window.StudioBoard.message(search.message,''))}</p>`:'')+goalText;
   }
   function sourceSearchPanel(t){
     const {busy}=sourceSearchState(t);
@@ -110,7 +112,7 @@
   function audit(a){
     if(!a)return '';
     const reasons={download_failed:'다운로드 실패',invalid_duration:'영상 길이 확인 필요',heavy_text_overlay:'자막이 많은 영상',low_product_or_scene_similarity:'주제·장면 불일치',title_query_mismatch:'검색어 불일치',low_resolution:'해상도 부족',not_probed:'영상 확인 대기',verification_failed:'영상 검증 실패',platform_budget_exhausted:'검색 시간 종료',platform_cooldown:'검색 서비스 휴식 중'};
-    const statuses={timeout:'시간 초과',results:'후보 발견',no_results:'결과 없음',login_required:'로그인 필요',captcha:'사람 확인 필요',rate_limited:'요청 제한',cooldown:'재시도 대기',error:'검색 실패',http_error:'응답 오류',started:'검색 시작'};
+    const statuses={timeout:'시간 초과',results:'후보 발견',no_results:'결과 없음',login_required:'로그인 필요',captcha:'사람 확인 필요',rate_limited:'요청 제한',cooldown:'재시도 대기',error:'검색 실패',http_error:'응답 오류',started:'검색 시작',no_supported_queries:'지원 언어 검색어 없음'};
     return `<details><summary>소스 검색 내역</summary><p>채택 ${a.selected||0}개 · 제작 가능 ${a.usable??'확인 중'}개</p>${Object.entries(a.platforms||{}).map(([p,n])=>`<p>${esc(p)}: 후보 ${n.candidates} → 다운로드 ${n.received} → 채택 ${n.selected}</p>`).join('')}<p>${Object.entries(a.rejections||{}).map(([r,n])=>esc(reasons[r]||'추가 검토 필요')+': '+n).join(' · ')}</p><details><summary>검색어와 실행 기록</summary>${(a.searches||a.planned_queries||[]).map(q=>`<p>${esc(q.provider||'')} · ${esc({ko:'한국어',en:'영어',zh:'중국어',image:'이미지'}[q.language]||'검색')} · ${esc(q.query)} · ${esc(statuses[q.status]||'확인 중')}</p>`).join('')}</details></details>`;
   }
   function sourceLibrary(t){

@@ -151,8 +151,12 @@ def platform_queries(queries: list[str], provider: str, limit: int) -> list[str]
     """지원 언어별 풀에서 고른다. 앞쪽 네 검색어에서 잘라 중국어를 버리지 않는다."""
     languages = ('zh', 'en', 'ko') if provider in {'douyin', 'xiaohongshu', 'bilibili'} else ('en', 'ko', 'zh')
     pools = {lang: [q for q in dict.fromkeys(queries) if language(q) == lang] for lang in languages}
-    if provider in {'douyin', 'xiaohongshu', 'bilibili'} and pools['zh']:
-        return pools['zh'][:limit]
+    if provider in {'douyin', 'xiaohongshu', 'bilibili'}:
+        return pools['zh'][:max(0, limit)]
+    if provider == 'tiktok':
+        # One query in each language before spending a second slot on any language.
+        return [q for batch in zip_longest(*(pools[l] for l in ('en', 'ko', 'zh')))
+                for q in batch if q][:max(0, limit)]
     out = []
     # 영어 우선 두 개마다 한국어 등 보조 언어 하나를 배분한다.
     preferred = pools[languages[0]]

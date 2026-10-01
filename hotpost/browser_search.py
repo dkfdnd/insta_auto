@@ -184,14 +184,18 @@ class BrowserSearcher:
                 return {"candidates": [], "terms": [], "notes": [f"Chrome 시작 실패: {exc}"]}
             context.set_default_timeout(15000)
             try:
+                # Reserve the first browser budget for all three TikTok languages.
+                self._platforms(context, queries, limit, providers={'tiktok'})
+                self.visual_candidates = list(self.candidates)
+                self.candidates = []
                 if selected:
                     self._google(context, selected, limit)
                     self._yandex(context, selected, limit)
-                visual_candidates = list(self.candidates)
+                visual_candidates = [*self.visual_candidates, *self.candidates]
                 self.visual_candidates = visual_candidates
                 self.candidates = []
                 expanded = list(dict.fromkeys([*queries, *clean_terms(self.terms)]))
-                self._platforms(context, expanded, limit)
+                self._platforms(context, expanded, limit, providers={'douyin', 'xiaohongshu', 'bilibili'})
                 # 역이미지 근거를 보존한다. 최종 플랫폼 분배는 source_finder에서 수행한다.
                 seen = set()
                 combined = []
@@ -294,29 +298,45 @@ class BrowserSearcher:
             if 2 <= len(line) <= 100:
                 self.terms.append(line)
 
-    def _platforms(self, context, queries: list[str], limit: int) -> None:
+    def _platforms(self, context, queries: list[str], limit: int, providers=None) -> None:
         platforms = [
             ("tiktok", "https://www.tiktok.com/search/video?q={}"),
             ("douyin", "https://www.douyin.com/search/{}"),
             ("xiaohongshu", "https://www.xiaohongshu.com/search_result?keyword={}"),
             ("bilibili", "https://search.bilibili.com/all?keyword={}"),
         ]
-        per_provider_limit = min(limit, max(1, self.settings.source_candidates_per_platform))
         for provider, template in platforms:
+            if providers is not None and provider not in providers:
+                continue
             if self._cooling_down(provider):
                 continue
+            used = {r.get('query') for r in self.previous_searches if r.get('provider') == provider}
+            query_limit = max(3, self.settings.source_queries_per_platform) if provider == 'tiktok' else self.settings.source_queries_per_platform
+            selected = platform_queries([q for q in queries if q not in used], provider, query_limit)
+            if not selected:
+                self.searches.append({'provider':provider, 'query':'', 'language':'',
+                                      'status':'no_supported_queries', 'candidates':0})
+                self.notes.append(f'{provider} · 지원 언어의 미사용 검색어가 없어 검색 건너뜀')
+                continue
+            planned_languages = {language(q) for q in selected}
+            if provider == 'tiktok':
+                missing = {'en','ko','zh'} - {language(q) for q in queries}
+                if missing:
+                    self.notes.append('TikTok 검색어 누락 언어: ' + ', '.join(sorted(missing)))
+            per_provider_limit = min(limit, max(1, self.settings.source_candidates_per_platform,
+                self.settings.source_tiktok_min_usable * 3 if provider == 'tiktok' else 0))
             auth = probe_platform_auth(context, provider)
             if auth != "authenticated":
                 self.notes.append(f"{provider} 인증 확인: {auth} (공개 검색은 계속 진행)")
             page = context.new_page()
-            page.route("**/*", lambda route: route.abort() if route.request.resource_type in {"image", "media", "font"}
+            page.route("**/*", lambda route: route.abort() if route.request.resource_type in {"media", "font"}
                        else route.continue_())
             provider_urls: set[str] = set()
             try:
-                used = {r.get('query') for r in self.previous_searches if r.get('provider') == provider}
-                selected = platform_queries([q for q in queries if q not in used], provider, self.settings.source_queries_per_platform)
                 per_query_limit = max(2, (per_provider_limit + len(selected) - 1) // max(1, len(selected)))
+                searched_languages = set()
                 for query in selected:
+                    searched_languages.add(language(query))
                     self.progress(f'{provider} · {language(query)} · {query}')
                     audit = {'provider': provider, 'query': query, 'language': language(query),
                              'auth': auth, 'status': 'started', 'candidates': 0}
@@ -359,7 +379,7 @@ class BrowserSearcher:
                     audit.update(status='results' if added else ('login_required' if auth == 'login_required' else 'no_results'),
                                  candidates=added)
                     self.progress(f'{provider} · {language(query)} · {query} → 후보 {added}개')
-                    if len(provider_urls) >= per_provider_limit:
+                    if len(provider_urls) >= per_provider_limit and searched_languages >= planned_languages:
                         break
             except Exception as exc:  # noqa: BLE001
                 if 'audit' in locals() and audit.get('provider') == provider and audit['status'] == 'started':

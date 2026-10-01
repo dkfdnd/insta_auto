@@ -12,6 +12,21 @@ import pytest
 WEB = Path(__file__).parents[1] / 'web'
 
 
+def test_source_panel_reports_tiktok_shortfall_and_missing_language(studio_page):
+    from playwright.sync_api import expect
+    page,tasks=studio_page
+    tasks[0]['source_audit']={'selected':2,'usable':2,'needs_review':0,'target':8,
+        'platforms':{},'rejections':{},'execution_audit_available':True,'searches':[],
+        'platform_targets':{'tiktok':{'target':5,'usable':2,'status':'shortfall',
+            'languages':{'en':True,'ko':True,'zh':False}}}}
+    tasks[0]['revision']+=1
+    tasks[0]['jobs']=[]
+    page.evaluate('refreshStudio()')
+    page.locator('[data-work="source"]').click()
+    expect(page.get_by_text('TikTok 사용 가능 2/5개 · 목표 미달 또는 검색 미완료',exact=True)).to_be_visible()
+    expect(page.get_by_text('영어 검색 완료 · 한국어 검색 완료 · 중국어 미완료',exact=False)).to_be_visible()
+
+
 def task(key, status, stage, automatic=True, job_status='queued'):
     t = dict(id=key, shortcode=key, title={'source':'작은 주방을 바꾸는 정리 아이디어',
         'script':'출근 가방 속 공간 활용', 'voice':'책상 위 케이블 정리',

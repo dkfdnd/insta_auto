@@ -82,7 +82,8 @@ def test_browser_failed_navigation_cannot_reuse_previous_results(tmp_path, monke
     searcher = bs.BrowserSearcher(Settings(source_queries_per_platform=1), tmp_path)
     searcher._platforms(SimpleNamespace(new_page=lambda: page), ['fry fish'], 4)
     assert len(searcher.searches) == 4
-    assert all(r['status'] == 'error' and r['candidates'] == 0 for r in searcher.searches)
+    assert searcher.searches[0]['status'] == 'error'
+    assert all(r['status'] == 'no_supported_queries' and r['candidates'] == 0 for r in searcher.searches[1:])
 
 
 def test_refresh_appends_sources_without_overwriting_review_versions(tmp_path):

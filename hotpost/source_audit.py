@@ -41,4 +41,5 @@ def summarize(path):
             'platforms': platforms, 'rejections': dict(reasons), 'download_errors': dict(failures), 'selected': data.get('downloaded', 0),
             'usable': usable, 'needs_review': max(0, data.get('downloaded', 0) - usable),
             'target': data.get('source_target'), 'stop_reason': data.get('budget_stop', ''),
+            'platform_targets': data.get('platform_targets', {}),
             'notes': data.get('browser_notes', []) + data.get('verification_notes', [])}

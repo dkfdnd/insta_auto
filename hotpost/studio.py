@@ -533,7 +533,8 @@ class Studio(WorkflowMixin):
         records = self._source_records(videos, manifest)
         for record in records:
             record['id'] = uid('source-')
-        return {'source_search_manifest_path': str(manifest), 'sources': records}
+        return {'source_search_manifest_path': str(manifest), 'sources': records,
+                'platform_targets': result.get('platform_targets', {})}
 
     def _rewrite(self, state, job):
         from .studio_services import ensure_local
@@ -708,6 +709,11 @@ class Studio(WorkflowMixin):
             state['sources'].extend(added)
             state['source_search_manifest_path'] = result['source_search_manifest_path']
             state['source_search'] = {'status': 'done', 'message': f'추가 수집 완료 · 신규 {len(added)}개 / 보유 {len(state["sources"])}개', 'progress': 100}
+            goal = result.get('platform_targets', {}).get('tiktok')
+            if goal:
+                state['source_search']['message'] += f" · TikTok {goal['usable']}/{goal['target']}개"
+                if goal['status'] != 'met':
+                    state['source_search']['message'] += ' · 목표 미달/검색 미완료 (검색 기록 확인)'
             return
         if kind == "prepare":
             # Uploads may arrive while preparation is running. Never discard

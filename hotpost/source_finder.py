@@ -31,7 +31,7 @@ from .request_pacing import request_pause, ytdlp_pacing_args
 from .storage import Storage
 from .source_urls import video_url, canonical_video_key
 from .source_queries import product_query_plan, platform_queries, clean_terms, language
-from .source_quality import (platform_of, round_robin_candidates, sha256_file,
+from .source_quality import (platform_of, sha256_file,
                              relevance_reasons, reuse_reasons, select_valid_candidates, media_format_reasons)
 
 Progress = Callable[[str, int], None]
@@ -811,6 +811,8 @@ def create_contact_sheet(frames: list[Path], out: Path) -> None:
 
 
 def find_sources(settings: Settings, shortcode: str, progress: Progress | None = None, *, search_request: str = '') -> dict:
+    from .source_targets import candidate_batch, select_sources, tiktok_count, tiktok_coverage
+    tiktok_target = max(0, settings.source_tiktok_min_usable)
     progress = progress or (lambda _m, _p: None)
     post = _post(settings, shortcode)
     if not post.is_video:
@@ -883,7 +885,7 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
     invalid_candidates = [c for c in candidates if not video_url(c.url)]
     for candidate in invalid_candidates:
         candidate.rejection_reasons = ['not_video_url']
-    candidates = round_robin_candidates([c for c in candidates if video_url(c.url)], settings.source_max_candidates)
+    candidates = candidate_batch([c for c in candidates if video_url(c.url)], settings.source_max_candidates, tiktok_target)
     progress(f"후보 {len(candidates)}개를 확인하는 중", 50)
     probed = 0
     attempted = 0
@@ -983,7 +985,8 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
         usable = len(select_valid_candidates(copy.deepcopy([c for c in candidates
                      if c.source_quality in {'clean-source', 'light-overlay'}]), settings.source_max_downloads))
         if ((i == len(candidates) or i == min(20, len(candidates))) and not refined
-                and usable < min(settings.source_min_usable, settings.source_max_downloads)
+                and (usable < min(settings.source_min_usable, settings.source_max_downloads)
+                     or tiktok_count(candidates, settings.source_max_downloads) < tiktok_target)
                 and settings.source_refine_max_candidates > 0
                 and attempted < settings.source_max_attempts and time.monotonic() < deadline
                 and probed < max(settings.source_max_downloads, settings.source_max_probe_downloads)):
@@ -999,7 +1002,7 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
                 extra_queries = list(dict.fromkeys(d['query'] for d in refinement_details))
                 if extra_queries:
                     probe_progress = max(probe_progress, 80)
-                    progress(f'유효 소스 {usable}개 · 미사용 다국어 검색어로 추가 검색 중', 80)
+                    progress(f'유효 소스 {usable}개 · TikTok {tiktok_count(candidates, settings.source_max_downloads)}/{tiktok_target}개 · 추가 검색 중', 80)
                     search_started = time.monotonic()
                     extra = []
                     if settings.source_browser_search:
@@ -1017,11 +1020,12 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
                     seen = {canonical_video_key(c.url) for c in candidates}
                     novel = [c for c in _dedupe(extra) if video_url(c.url) and canonical_video_key(c.url) not in seen]
                     # Probe fresh search intents next, before old candidates consume the remaining budget.
-                    candidates[i:i] = round_robin_candidates(novel, max(0, min(settings.source_refine_max_candidates,
-                                                                         settings.source_max_attempts - attempted)))
+                    candidates[i:i] = candidate_batch(novel, max(0, min(settings.source_refine_max_candidates,
+                                                                         settings.source_max_attempts - attempted)), tiktok_target)
     candidates.sort(key=lambda c: (c.downloaded_file != "", c.source_score or 0, c.similarity or 0), reverse=True)
     candidates.extend(invalid_candidates)
-    selected = select_valid_candidates(candidates, settings.source_max_downloads, embeddings)
+    selected = select_sources(candidates, settings.source_max_downloads, tiktok_target)
+    coverage = tiktok_coverage(candidates, search_audit, tiktok_target, budget_stop)
     downloaded = len(selected)
     quality_counts = {key: sum(c.selected_for_zip and c.source_quality == key for c in candidates)
                       for key in ("clean-source", "light-overlay", "edited-with-text", "unknown")}
@@ -1031,8 +1035,9 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
         "product_evidence": {key: value for key, value in query_plan.items() if key != 'query_details'},
         "match_mode": settings.source_match_mode, "budget_stop": budget_stop,
         "refinement_query_details": refinement_details,
-        "search_audit": search_audit, "search_policy_version": 2,
+        "search_audit": search_audit, "search_policy_version": 3,
         "source_target": min(settings.source_min_usable, settings.source_max_downloads),
+        "platform_targets": {"tiktok": coverage},
         "visual_product_queries": visual_queries, "openclip_product_evidence": verifier.product_evidence,
         "subject_reference_indices": verifier.subject_reference_indices,
         "google_vision_terms": vision_terms,
@@ -1061,7 +1066,8 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
                 z.write(root / c.downloaded_file, f"{folder}/{Path(c.downloaded_file).name}")
             if c.selected_for_zip and c.preview_file:
                 z.write(root / c.preview_file, c.preview_file)
-    progress("완료", 100)
+    progress(f"완료 · TikTok {coverage['usable']}/{tiktok_target}개" +
+             (' · 목표 미달/검색 미완료: ' + '; '.join(coverage['reasons']) if coverage['status']=='shortfall' else ''), 100)
     manifest["zip_path"] = str(zip_path)
     return manifest
 
