@@ -39,15 +39,26 @@ def enqueue_top(settings, report, run_key):
     results = []
     for row in selection:
         if not row['eligible']:
-            results.append(row)
+            results.append({**row, 'created':False, 'outcome':'skipped'})
             continue
-        task = studio.create(row['shortcode'], automation={
+        task, created = studio.create(row['shortcode'], automation={
             **row, 'active':True, 'protocol':2, 'run_key':str(run_key), 'selected_at':time.time(),
             'policy':'최근 14일 영상 · 기본 급상승순 상위 2개', 'stage':'prepare',
             'selection_mode':'automatic', 'reviewed_by_user':False,
-        })
-        results.append({**row, 'task_id':task['id']})
+        }, with_created=True)
+        from .studio_intake import task_status
+        status = task_status(task)
+        results.append({**row, 'task_id':task['id'], 'created':created,
+                        'outcome':'created' if created else 'existing', **status})
     return results
+
+
+def intake_log(rows):
+    created = sum(bool(r.get('created')) for r in rows)
+    existing = sum(r.get('outcome') == 'existing' for r in rows)
+    skipped = sum(r.get('outcome') == 'skipped' for r in rows)
+    blocked = sum(r.get('state') == 'blocked' for r in rows)
+    return f'제작실 자동 선정 결과: 신규 등록 {created}개 · 기존 작업 {existing}개 · 선정 보류 {skipped}개 (연결된 작업 중 진행 불가 {blocked}개)'
 
 
 def enqueue_latest(settings):

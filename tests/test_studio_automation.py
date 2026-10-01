@@ -39,7 +39,10 @@ def test_frozen_top_two_never_backfills_or_overwrites_manual_task(setup):
     assert [x['shortcode'] for x in rows]==['first','second']
     assert 'automation' not in studio.store.get(manual['id'])
     r['posts'][0]['rank_score']=99
-    assert enqueue_top(settings,r,'run-1')==rows
+    assert [x['created'] for x in rows] == [False, True]
+    repeated = enqueue_top(settings,r,'run-1')
+    assert [x['task_id'] for x in repeated] == [x['task_id'] for x in rows]
+    assert all(x['outcome']=='existing' and not x['created'] for x in repeated)
     assert len(studio.store.list())==2
     assert sum(len(studio.store.jobs(t['id'])) for t in studio.store.list())==2
 

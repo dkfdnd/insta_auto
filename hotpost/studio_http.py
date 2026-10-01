@@ -31,9 +31,14 @@ class StudioHTTP:
                 codes = data.get("shortcodes", [])
                 if not isinstance(codes, list) or not 1 <= len(codes) <= 100:
                     raise ValueError("제작할 소재를 선택하세요. 한 번에 최대 100개씩 추가할 수 있습니다.")
-                tasks = [studio.create(str(code)) for code in dict.fromkeys(codes)]
-                if data.get('automatic'):
-                    tasks = [studio.action(t['id'],'start-auto',{}) for t in tasks]
+                if data.get('only_new'):
+                    results = [studio.create(str(code), with_created=True) for code in dict.fromkeys(codes)]
+                    tasks = [studio.action(t['id'],'start-auto',{}) if created and data.get('automatic') else t
+                             for t,created in results]
+                else:
+                    tasks = [studio.create(str(code)) for code in dict.fromkeys(codes)]
+                    if data.get('automatic'):
+                        tasks = [studio.action(t['id'],'start-auto',{}) for t in tasks]
                 self._json({"tasks":tasks}, 202)
             elif len(parts) == 4:
                 self._json(studio.action(parts[2], parts[3], data), 202)
@@ -53,7 +58,10 @@ class StudioHTTP:
             return False
         try:
             parts = parsed.path.strip("/").split("/")
-            if parts == ['api','studio','voices']:
+            if parts == ['api','studio','intake']:
+                from .studio_intake import intake_status
+                self._json(intake_status(studio))
+            elif parts == ['api','studio','voices']:
                 from .voicebench_adapter import VoiceBenchAdapter
                 data=VoiceBenchAdapter(studio.settings).voices()
                 for voice in data.get('voices',[]):

@@ -61,7 +61,7 @@ class Studio(WorkflowMixin):
                 pass  # A report may not exist yet; the collection hook also enqueues.
             self.stop.wait(30)
 
-    def create(self, code, automation=None):
+    def create(self, code, automation=None, *, with_created=False):
         from .storage import Storage
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", code):
             raise ValueError("올바르지 않은 게시물 ID")
@@ -73,8 +73,9 @@ class Studio(WorkflowMixin):
             title = re.sub(r"#\S+", "", row["caption"] or "").strip().split("\n")[0][:70] or code
         finally:
             db.close()
-        state, _ = self.store.create(code, title, automation)
-        return self.public(state)
+        state, created = self.store.create(code, title, automation)
+        task = self.public(state)
+        return (task, created) if with_created else task
 
     def folder(self, task_id):
         if not re.fullmatch(r"work-[a-f0-9]{16}", task_id):

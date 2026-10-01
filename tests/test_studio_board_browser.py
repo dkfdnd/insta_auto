@@ -57,6 +57,8 @@ def studio_page():
             if path.startswith('/api/studio'):
                 if path=='/api/studio':
                     result={'tasks':copy.deepcopy(tasks)}
+                elif path=='/api/studio/intake':
+                    result={'available':False}
                 else:
                     parts=path.split('/')
                     t=next(t for t in tasks if t['id']==parts[3])
