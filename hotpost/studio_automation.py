@@ -99,11 +99,15 @@ def rewrite(studio, state, job):
         from pathlib import Path
         manifest_path = Path(state.get('manifest_path', ''))
         manifest = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.is_file() else {}
-        product = identify_subject(manifest, state['original_text'], state.get('product') or state['title'])
+        product = state.get('product_override') or identify_subject(manifest, state['original_text'], state.get('product') or state['title'])
         studio.store.change(state['id'], lambda s, db: s.update(product=product))
         remote = adapter.submit(state['id'], Path(state['reference_video']), state['original_text'],
                                 {'product':product,
-                                 'notes':'관찰 가능한 특징과 원본 발화만 사용하세요. 확인되지 않은 제품 사양을 추가하지 마세요.'})
+                                 'product_url':state.get('product_url_override',''),
+                                 'notes':'관찰 가능한 특징과 원본 발화만 사용하세요. 확인되지 않은 제품 사양을 추가하지 마세요. '
+                                         '보관하는 물건과 보관함을 구별하세요. 동일 모델이 확인되지 않은 외부 자료의 가격·재질·치수를 가져오지 마세요. '
+                                         + state.get('rewrite_instructions',''),
+                                 'generation_key':checkpoint.get('generation_key','')})
         request_id = remote['id']
         checkpoint['studio_job_id'] = request_id
         studio.store.checkpoint(job['id'], checkpoint)
@@ -120,6 +124,7 @@ def rewrite(studio, state, job):
             checkpoint.pop('retry_requested', None)
             studio.store.checkpoint(job['id'], checkpoint)
         if remote['state'] == 'completed':
+            _atomic_json(studio.folder(state['id']) / 'script-candidates.json', remote['result'])
             candidates = remote['result'].get('scripts', [])
             valid = []
             reference_hash = hashlib.sha256(state['original_text'].encode()).hexdigest()
@@ -131,7 +136,11 @@ def rewrite(studio, state, job):
                         and review.get('reference_sha256') == reference_hash):
                     valid.append((index, item))
             if not valid:
-                raise ValueError('대본 검사와 버전 검증을 통과한 재가공 대본이 없습니다. 원본으로 대체하지 않습니다.')
+                reasons = list(dict.fromkeys(reason for item in candidates
+                    for reason in (item.get('rewrite_review') or {}).get('reasons', [])))
+                raise ValueError('대본 검사와 버전 검증을 통과한 재가공 대본이 없습니다. '
+                                 + '상품과 근거를 확인한 뒤 새 대본을 생성하세요. 원본으로 대체하지 않습니다. '
+                                 + ' / '.join(reasons)[:420])
             if state.get('automation', {}).get('protocol') == 2:
                 from .studio_top_pick import choose
                 index, evaluation = choose(studio.settings, state, valid)
@@ -157,6 +166,11 @@ def rewrite(studio, state, job):
 def identify_subject(manifest, speech, fallback):
     from .source_queries import product_query_plan
     caption = manifest.get('caption', '')
+    text = caption+'\n'+speech
+    # A cabinet's contents are not the promoted product. Require storage
+    # evidence before resolving an implicit cabinet name from the narration.
+    if re.search(r'진열장|장식장|진열.{0,35}(?:문|닫)|(?:문|닫).{0,35}진열', text, re.S):
+        return '원목 진열장' if re.search(r'원목|대나무', text) else '진열장'
     # Direct wording takes precedence over broad visual catalog guesses.
     direct = product_query_plan(caption, [], [], {'speech':speech}, [])['products']
     products = direct or manifest.get('product_evidence', {}).get('products', [])

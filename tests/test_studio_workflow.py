@@ -405,6 +405,29 @@ def test_top_pick_compares_candidates_and_rejects_missing_scores(prepared,monkey
     assert index==1 and len(evaluation['evaluations'])==2
 
 
+def test_top_pick_uses_selected_sources_and_keeps_rejection_audit(prepared,monkeypatch):
+    from hotpost.studio_top_pick import choose
+    from hotpost.studio_workflow import current_run
+    studio,task=prepared;s=studio.store.get(task)
+    s['sources'].append({'id':'unused-game','path':'absent.mp4','sha256':'unused'})
+    current_run(s)['inputs']['source_ids']=['source1']
+    frames=[]; calls=[]
+    monkeypatch.setattr('hotpost.source_finder.extract_frames',lambda path,*a,**k:frames.append(path.name) or [])
+    def reject(*args,**kwargs):
+        calls.append(args[2])
+        return {'evaluations':[{'index':0,'eligible':False,'scores':dict(hook=3,grounding=1,narration=3,footage=1),
+                               'reason':'캠핑 대본과 수납장 영상이 맞지 않습니다','issues':['상품 불일치']}]}
+    monkeypatch.setattr('hotpost.studio_top_pick._generate',reject)
+    for _ in range(2):
+        with pytest.raises(ValueError,match='캠핑 대본과 수납장 영상'):
+            choose(studio.settings,s,[(0,{'text':'캠핑 대본'})])
+    assert len(calls)==2 and frames==['source.mp4','source.mp4']
+    assert [v['id'] for v in calls[0]['sources']]==['source1']
+    receipts=list((studio.folder(task)/'top-pick').glob('*.json'))
+    assert len(receipts)==1 and receipts[0].name.endswith('.rejected.json')
+    assert json.loads(receipts[0].read_text('utf-8'))['status']=='rejected'
+
+
 def test_feedback_revision_ignores_worker_progress_but_rejects_other_editor(prepared):
     studio,task=prepared
     studio.action(task,'save-script',{'text':'첫 번째 편집자의 대본이에요.','feedback_revision':0})

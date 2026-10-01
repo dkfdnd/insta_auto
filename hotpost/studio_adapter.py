@@ -60,6 +60,10 @@ class StudioAdapter:
         raise RuntimeError('로컬 AI 검토 대기 시간 초과. 재시도하면 기존 요청을 확인합니다.')
 
     def submit(self, production_id: str, video: Path, reference: str, payload: dict):
+        # Retrying the same request reuses its job; corrected inputs or an
+        # explicit new attempt must not return an old completed result.
+        identity = hashlib.sha256(json.dumps({'reference':reference, 'payload':payload},
+            sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:24]
         with video.open('rb') as stream:
             upload = self.request('POST', '/api/uploads',
                 files={'file': (video.name, stream, 'video/mp4')},
@@ -70,7 +74,7 @@ class StudioAdapter:
             'product_url': payload.get('product_url', ''),
             'notes': payload.get('notes', ''), 'relation': 'same',
             'target': 'local', 'release_model': True,
-        }, headers={'Idempotency-Key': production_id + '-rewrite'})
+        }, headers={'Idempotency-Key': production_id + '-rewrite-' + identity})
         return job
 
     def get(self, job_id):

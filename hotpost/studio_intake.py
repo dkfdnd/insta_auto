@@ -10,11 +10,17 @@ def task_status(task):
     status = task.get('status')
     if error or status == 'attention':
         if 'GEMINI_API_KEY' in error:
-            reason = '대본 생성 서비스의 API 키 설정이 필요합니다'
-            solution = '대본 서비스에 Gemini 키를 설정하고 서비스를 재시작한 뒤, 작업에서 다시 시도하세요.'
+            reason = '마지막 시도에서 Gemini 키 관련 오류가 기록됐습니다'
+            solution = '현재 로컬 대본 서비스의 결과를 다시 확인하려면 작업에서 재시도하세요. 최신 코드는 키 없이 로컬 모델로 이어갈 수 있습니다.'
         elif '대본 검사와 버전 검증' in error:
             reason = '재가공 대본이 검증을 통과하지 못했습니다'
             solution = '작업을 열어 원본과 대본을 확인하세요. 직접 대본을 입력하거나 대본 서비스의 검증 결과를 해결한 뒤 다시 시도하세요.'
+        elif '확인 가능한 정보' in error or '상품 자료를 수집하지 못' in error:
+            reason = '영상 속 상품과 일치하는 근거 자료가 부족합니다'
+            solution = '정확한 상품명이나 상품 링크를 확보해 새 대본을 생성하세요. 같은 조건으로 재시도하면 다시 멈출 수 있습니다.'
+        elif 'Top Pick 사실성 검증' in error:
+            reason = '대본의 근거 또는 영상 장면이 검증을 통과하지 못했습니다'
+            solution = '작업의 상세 이유를 확인하세요. 대본과 다른 상품·게임 영상은 선택에서 빼고, 실제 상품 장면을 확보해 대본과 함께 다시 검토하세요.'
         elif '세션' in error or '로그인' in error:
             reason = '원본 자료에 접근할 인증이 필요합니다'
             solution = '모니터링 계정의 Instagram 인증 상태를 확인한 뒤 다시 시도하거나, 소스 영상을 직접 넣으세요.'

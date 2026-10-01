@@ -41,7 +41,7 @@ def test_registration_execution_and_new_candidates_are_separate(tmp_path):
         receipt = intake_status(studio)
         assert (receipt['new_posts'],receipt['new_hot_videos'])==(2,2)
         assert (receipt['created'],receipt['existing'],receipt['blocked'])==(1,1,1)
-        assert receipt['rows'][0]['solution'].startswith('대본 서비스에 Gemini 키')
+        assert '키 없이 로컬 모델' in receipt['rows'][0]['solution']
         assert [r['shortcode'] for r in receipt['candidates']]==['new','third']
         assert receipt['candidates'][0]['task_id'] and receipt['candidates'][1]['task_id'] is None
     again = enqueue_top(settings, report, run)

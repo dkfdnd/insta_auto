@@ -101,6 +101,43 @@ class Studio(WorkflowMixin):
         return revision
 
     def action(self, task_id, action, data):
+        if action == 'regenerate-script':
+            product = str(data.get('product','')).strip()
+            instructions = str(data.get('instructions','')).strip()
+            product_url = str(data.get('product_url','')).strip()
+            from urllib.parse import urlparse
+            if not product or len(product)>300 or len(instructions)>1500:
+                raise ValueError('대상 상품은 1~300자, 수정 지침은 1500자 이하로 입력하세요.')
+            if product_url and (len(product_url)>2000 or urlparse(product_url).scheme not in {'http','https'} or not urlparse(product_url).hostname):
+                raise ValueError('상품 링크는 올바른 http 또는 https 주소로 입력하세요.')
+            def regenerate(s, db):
+                if not s.get('original_text') or not s.get('reference_video') or not s.get('sources'):
+                    raise ValueError('원본 영상·발화·사용 소스를 먼저 확보하세요.')
+                if db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status IN ('queued','running')", (task_id,)).fetchone():
+                    raise Conflict('진행 중인 작업이 끝난 뒤 새 대본을 생성하세요.')
+                # A completed version remains untouched; this action recovers
+                # failed rewrite steps, not an alternate edit-version path.
+                if s.get('script_id') or s.get('edit_id'):
+                    raise Conflict('이미 제작한 대본이 있습니다. 대본 수정 기능으로 새 버전을 만드세요.')
+                attempt = uid('rewrite-')
+                s.setdefault('rewrite_history', []).append({'studio_job_id':s.get('studio_job_id'),
+                    'product':s.get('product'), 'product_url':s.get('product_url_override',''),
+                    'script_candidates':copy.deepcopy(s.get('script_candidates',[])),
+                    'error':s.get('error'), 'at':time.time()})
+                s.update(product=product, product_override=product, rewrite_instructions=instructions,
+                         product_url_override=product_url, script_candidates=[], top_pick=None, selected_candidate=None,
+                         studio_job_id=None, status='rewriting', error='', progress=0,
+                         message='바로잡은 상품과 근거로 새 대본 생성 대기')
+                s.setdefault('automation', {}).update(protocol=2,active=True,paused_by_user=False,stage='rewrite',needs_top_pick=False)
+                init_run(s)
+                # Older attempts remain auditable but cannot be revived by
+                # retry/resume while the corrected request is being processed.
+                db.execute("UPDATE jobs SET status='superseded' WHERE task_id=? AND kind='rewrite' AND status IN ('failed','paused')", (task_id,))
+                self.store.enqueue(db, task_id, 'rewrite', {}, attempt)
+                db.execute('UPDATE jobs SET checkpoint=? WHERE key=?',
+                           (json.dumps({'generation_key':attempt}),attempt))
+                self.store.event(db, task_id, action, {'product':product,'attempt':attempt})
+            return self.public(self.store.change(task_id,regenerate,data.get('revision')))
         if action == 'prepare-caption-preview':
             state = self.store.get(task_id)
             edit = next((e for e in state['edits'] if e['id']==data.get('edit_id')), None)

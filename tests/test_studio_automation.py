@@ -56,6 +56,9 @@ def test_stale_top_rank_does_not_turn_third_into_second():
 
 
 def test_subject_uses_observed_context_instead_of_comment_bait():
+    assert identify_subject({}, '피규어 장난감을 투명창 안에 싹 진열하고 문만 닫아요. 대나무 원목이에요.', '피규어')=='원목 진열장'
+    assert identify_subject({}, '책을 진열장에 넣어요.', '책')=='진열장'
+    assert identify_subject({}, '피규어를 조립해요. 원목 책상에서 작업해요.', '피규어')!='원목 진열장'
     assert identify_subject({'caption':'생선 남겨주세요!\n오늘 저녁 생선구이 이렇게 해보세요'}, '', '생선 남겨주세요')=='생선구이'
     assert identify_subject({'caption':'타일 남겨주세요!\n타일 보수 비법을 소개합니다'}, '', '타일 남겨주세요')=='타일 보수'
     assert identify_subject({'caption':'댓글 남겨주세요\n관측한 새로운 도구의 실제 설명입니다'}, '', '댓글 남겨주세요')=='관측한 새로운 도구의 실제 설명입니다'
@@ -178,3 +181,42 @@ def test_open_registered_automatic_project_requests_launch(setup):
     with studio.store.connect() as db:
         row=db.execute("SELECT payload,status FROM jobs WHERE key='register:edit1'").fetchone()
     assert row['status']=='queued' and json.loads(row['payload'])['launch'] is True
+
+
+def test_explicit_rewrite_correction_preserves_old_result_and_queues_new_attempt(setup):
+    _,studio=setup
+    task=studio.create('first',automation={'protocol':2,'active':True})
+    def ready(s,db):
+        db.execute("UPDATE jobs SET status='failed' WHERE task_id=?",(s['id'],))
+        s.update(original_text='관찰한 원본 발화',reference_video=str(studio.folder(s['id'])/'reference.mp4'),sources=[{'id':'source','path':str(studio.folder(s['id'])/'source.mp4')}],
+                 studio_job_id='old-result',product='피규어',error='대본 검증 실패',status='attention',script_candidates=[{'text':'오래된 후보'}])
+        s['automation']['needs_top_pick']=True
+        studio.store.enqueue(db,s['id'],'rewrite',{},'old-rewrite')
+        db.execute("UPDATE jobs SET status='failed' WHERE key='old-rewrite'")
+    studio.store.change(task['id'],ready)
+    result=studio.action(task['id'],'regenerate-script',{'product':'원목 진열장','instructions':'원목 키워드를 유지하세요.','product_url':'https://example.com/cabinet'})
+    state=studio.store.get(task['id'])
+    assert state['rewrite_history'][-1]['studio_job_id']=='old-result'
+    assert state['product_override']=='원목 진열장' and state['studio_job_id'] is None
+    assert state['product_url_override']=='https://example.com/cabinet'
+    assert not state['automation']['needs_top_pick'] and state['script_candidates']==[]
+    assert state['rewrite_history'][-1]['script_candidates']==[{'text':'오래된 후보'}]
+    with studio.store.connect() as db:
+        assert db.execute("SELECT status FROM jobs WHERE key='old-rewrite'").fetchone()[0]=='superseded'
+    with pytest.raises(Exception,match='진행 중'):studio.action(task['id'],'regenerate-script',{'product':'원목 진열장'})
+    job=studio.store.claim()
+    assert job['kind']=='rewrite' and job['checkpoint']['generation_key'].startswith('rewrite-')
+
+
+def test_corrected_script_input_gets_new_idempotency_key(setup,tmp_path,monkeypatch):
+    from hotpost.studio_adapter import StudioAdapter
+    settings,_=setup;api=StudioAdapter(settings);video=tmp_path/'reference.mp4';video.write_bytes(b'video')
+    calls=[]
+    def request(method,path,**kwargs):
+        calls.append((path,kwargs['headers']['Idempotency-Key']))
+        return {'id':'upload' if path.endswith('uploads') else 'job'}
+    monkeypatch.setattr(api,'request',request)
+    for product,generation in [('피규어',''),('원목 진열장',''),('원목 진열장',''),('원목 진열장','attempt-2')]:
+        api.submit('task',video,'원본',{'product':product,'generation_key':generation})
+    keys=[key for path,key in calls if path=='/api/jobs']
+    assert keys[0]!=keys[1] and keys[1]==keys[2] and keys[2]!=keys[3]
