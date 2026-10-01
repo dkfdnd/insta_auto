@@ -105,6 +105,9 @@ class Studio(WorkflowMixin):
             product = str(data.get('product','')).strip()
             instructions = str(data.get('instructions','')).strip()
             product_url = str(data.get('product_url','')).strip()
+            evidence_mode = data.get('evidence_mode','research')
+            if evidence_mode not in {'research','reference'}:
+                raise ValueError('상품 조사 또는 원본 영상 관찰 모드를 선택하세요.')
             from urllib.parse import urlparse
             if not product or len(product)>300 or len(instructions)>1500:
                 raise ValueError('대상 상품은 1~300자, 수정 지침은 1500자 이하로 입력하세요.')
@@ -125,7 +128,7 @@ class Studio(WorkflowMixin):
                     'script_candidates':copy.deepcopy(s.get('script_candidates',[])),
                     'error':s.get('error'), 'at':time.time()})
                 s.update(product=product, product_override=product, rewrite_instructions=instructions,
-                         product_url_override=product_url, script_candidates=[], top_pick=None, selected_candidate=None,
+                         product_url_override=product_url, evidence_mode=evidence_mode, script_candidates=[], top_pick=None, selected_candidate=None,
                          studio_job_id=None, status='rewriting', error='', progress=0,
                          message='바로잡은 상품과 근거로 새 대본 생성 대기')
                 s.setdefault('automation', {}).update(protocol=2,active=True,paused_by_user=False,stage='rewrite',needs_top_pick=False)

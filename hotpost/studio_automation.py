@@ -104,6 +104,7 @@ def rewrite(studio, state, job):
         remote = adapter.submit(state['id'], Path(state['reference_video']), state['original_text'],
                                 {'product':product,
                                  'product_url':state.get('product_url_override',''),
+                                 'evidence_mode':state.get('evidence_mode','research'),
                                  'notes':'관찰 가능한 특징과 원본 발화만 사용하세요. 확인되지 않은 제품 사양을 추가하지 마세요. '
                                          '보관하는 물건과 보관함을 구별하세요. 동일 모델이 확인되지 않은 외부 자료의 가격·재질·치수를 가져오지 마세요. '
                                          + state.get('rewrite_instructions',''),

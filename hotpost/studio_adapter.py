@@ -72,6 +72,7 @@ class StudioAdapter:
             'kind': 'script', 'upload_id': upload['id'],
             'reference_script': reference, 'product': payload['product'],
             'product_url': payload.get('product_url', ''),
+            'evidence_mode':payload.get('evidence_mode','research'),
             'notes': payload.get('notes', ''), 'relation': 'same',
             'target': 'local', 'release_model': True,
         }, headers={'Idempotency-Key': production_id + '-rewrite-' + identity})
