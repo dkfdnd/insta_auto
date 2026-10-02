@@ -34,6 +34,39 @@ def test_model_requires_literal_evidence_and_real_language():
     assert '일부 언어' in actual['planning_notes'][0]
 
 
+def test_missing_chinese_is_repaired_once_without_weakening_evidence():
+    plan=product_query_plan('',[],[],{},[])
+    calls=[]
+    def generate(settings,instruction,evidence):
+        calls.append(instruction)
+        if len(calls)==1:
+            return {'subject_kind':'product','queries':[
+                dict(query='display cabinet',language='en',source='speech',quote='문이 있는 진열장'),
+                dict(query='문 있는 진열장',language='ko',source='speech',quote='문이 있는 진열장')]}
+        return {'queries':[
+            dict(query='带门展示柜',language='zh',source='speech',quote='문이 있는 진열장'),
+            dict(query='红木展示柜',language='zh',source='speech',quote='마호가니 재질'),
+            dict(query='진열장 중국어',language='zh',source='speech',quote='문이 있는 진열장')]}
+    actual=enrich_plan(Settings(),plan,'',{'speech':'문이 있는 진열장'},generate)
+    assert len(calls)==2
+    assert [q['query'] for q in actual['query_details'] if q['language']=='zh']==['带门展示柜']
+    assert {q['language'] for q in actual['query_details']}=={'ko','en','zh'}
+
+
+def test_uncertain_subject_is_not_retried_or_invented():
+    calls=[]
+    actual=enrich_plan(Settings(),product_query_plan('',[],[],{},[]),'알려드릴게요',{},
+        lambda *a:calls.append(a) or {'subject_kind':'other','queries':[]})
+    assert len(calls)==1 and actual['query_details']==[]
+
+
+@pytest.mark.parametrize('caption',['투명문 진열장','캠핑 주방세트 가방'])
+def test_storage_and_camping_categories_have_all_three_languages(caption):
+    plan=product_query_plan(caption,[],[],{},[])
+    assert {q['language'] for q in plan['query_details']}=={'en','ko','zh'}
+    assert not any('원목' in q['query'] or 'bamboo' in q['query'] for q in plan['query_details'])
+
+
 def test_queries_distribute_all_languages_in_six_global_searches():
     queries = ['fish ' + str(i) for i in range(6)] + ['생선 ' + str(i) for i in range(6)] + ['煎鱼 ' + str(i) for i in range(6)]
     assert {language(q) for q in platform_queries(queries, 'youtube', 6)} == {'ko', 'en', 'zh'}
@@ -79,7 +112,7 @@ def test_browser_failed_navigation_cannot_reuse_previous_results(tmp_path, monke
     def fail(*_a, **_k): raise TimeoutError()
     page = SimpleNamespace(route=lambda *_: None, goto=fail, close=lambda: None)
     monkeypatch.setattr(bs, '_anchors', lambda *_: pytest.fail('stale page must not be scraped'))
-    searcher = bs.BrowserSearcher(Settings(source_queries_per_platform=1), tmp_path)
+    searcher = bs.BrowserSearcher(Settings(data_dir=tmp_path, source_queries_per_platform=1), tmp_path)
     searcher._platforms(SimpleNamespace(new_page=lambda: page), ['fry fish'], 4)
     assert len(searcher.searches) == 4
     assert searcher.searches[0]['status'] == 'error'

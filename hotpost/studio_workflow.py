@@ -378,7 +378,9 @@ class WorkflowMixin:
             run.update(status='completed', completed=time.time())
             s['latest_completed_run_id'] = run['id']
             s['automation'].update(stage='completed', completed_at=time.time())
-            s.update(status='completed', message='수정한 자막으로 MP4 내보내기 완료' if edit.get('export_kind')=='web_captions' else 'CapCut 최종 영상 내보내기 완료', progress=100, error='')
+            message = {'web_captions':'수정한 자막으로 MP4 내보내기 완료',
+                       'web_render':'최종 MP4 내보내기 완료 · 웹 렌더링으로 복구'}.get(edit.get('export_kind'), 'CapCut 최종 영상 내보내기 완료')
+            s.update(status='completed', message=message, progress=100, error='')
             return
         self.store.enqueue(db, s['id'], stage, payload, stage+':'+key)
         if s['automation'].get('stage') != stage:
@@ -387,10 +389,34 @@ class WorkflowMixin:
         s.update(status=status, message=message, progress=0, error='')
 
     def _export(self, state, job):
-        from .editing_adapter import AutoCapcutAdapter
+        from .editing_adapter import AutoCapcutAdapter, NativeExportUnavailable
         edit = next(e for e in state['edits'] if e['id'] == job['payload']['edit_id'])
-        result = AutoCapcutAdapter(self.settings).export(job_id=job['id'], draft_name=edit['draft_name'], draft_path=Path(edit['draft_path']))
-        if result.get('width')!=1080 or result.get('height')!=1920 or abs(result.get('fps',0)-30)>.01:
+        hold = self.settings.editing_dir / job['id'] / 'export-hold.json'
+        if hold.is_file():
+            reason = json.loads(hold.read_text(encoding='utf-8')).get('reason', '소스 검증 미완료')
+            raise RuntimeError('편집 소스 재검토 필요: ' + str(reason)[:400])
+        checkpoint = job['checkpoint']
+        if not checkpoint.get('native_export_unavailable'):
+            try:
+                result = AutoCapcutAdapter(self.settings).export(job_id=job['id'], draft_name=edit['draft_name'], draft_path=Path(edit['draft_path']))
+            except NativeExportUnavailable as exc:
+                checkpoint['native_export_unavailable'] = str(exc)
+                self.store.checkpoint(job['id'], checkpoint)
+        if checkpoint.get('native_export_unavailable'):
+            # Keep the registered draft and its existing edit identity. The
+            # renderer reuses this exact picture/audio/cue plan and verifies
+            # the final media. Content holds and verification errors never
+            # enter this fallback; no native editor is killed or modified.
+            self.store.change(state['id'], lambda s, db: s.update(
+                message='CapCut 창 연결 실패 · 같은 장면·음성·자막으로 웹 내보내기 중', progress=50))
+            plan = json.loads(Path(edit['plan_path']).read_text(encoding='utf-8'))
+            rendered = self._process(state, job, 'caption-export', {'plan':plan, 'changes':[]})
+            target = Path(rendered.get('export_path', ''))
+            if rendered.get('export_verified') is not True or not target.is_file() or target.stat().st_size < 1024:
+                raise ValueError('웹 내보내기의 최종 영상 검증을 완료하지 못했습니다.')
+            return {'export_path':str(target), 'export_verified':True, 'exported_at':time.time(),
+                    'export_kind':'web_render', 'native_export_error':checkpoint['native_export_unavailable']}
+        if result.get('verified') is not True or result.get('width')!=1080 or result.get('height')!=1920 or abs(result.get('fps',0)-30)>.01:
             raise ValueError('최종 영상이 1080×1920 · 30fps 규격과 다릅니다. CapCut 내보내기 설정을 확인하세요.')
         target = self.folder(state['id']) / job['id'] / 'final.mp4'
         target.parent.mkdir(exist_ok=True)

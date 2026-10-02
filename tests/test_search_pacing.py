@@ -43,6 +43,17 @@ def test_captcha_on_same_url_does_not_masquerade_as_results(tmp_path, monkeypatc
     assert audit['status'] == 'captcha'
 
 
+def test_tiktok_slider_challenge_stops_search_even_on_http_200(tmp_path, monkeypatch):
+    monkeypatch.setattr(bs, 'BROWSER_COOLDOWNS', {})
+    searcher = bs.BrowserSearcher(Settings(data_dir=tmp_path, source_browser_headless=True), tmp_path)
+    page = SimpleNamespace(url='https://www.tiktok.com/search/video?q=camping',
+                           locator=lambda _: SimpleNamespace(inner_text=lambda: 'Top Users Videos LIVE Drag the slider to fit the puzzle'))
+    audit = {'http_status': 200}
+    assert searcher._check_block(page, 'tiktok', audit)
+    assert audit['status'] == 'captcha'
+    assert searcher._cooling_down('tiktok')
+
+
 def test_user_solved_captcha_continues_without_cooldown(tmp_path, monkeypatch):
     monkeypatch.setattr(bs, 'BROWSER_COOLDOWNS', {})
     searcher = bs.BrowserSearcher(Settings(data_dir=tmp_path), tmp_path)

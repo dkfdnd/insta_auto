@@ -62,6 +62,54 @@ def test_export_is_completion_boundary_and_all_assets_download(prepared):
     with pytest.raises(ValueError): studio.download(task,'../../other','script')
 
 
+def test_native_window_failure_recovers_same_plan_and_resumes_without_reopening(prepared, monkeypatch):
+    from hotpost import editing_adapter
+    studio,task=prepared;complete(studio,task)
+    state=studio.store.get(task);edit=next(e for e in state['edits'] if e['id']==state['edit_id'])
+    job={'id':'recovery-export','kind':'export','payload':{'edit_id':edit['id']},'checkpoint':{}}
+    attempts=[];renders=[]
+    def failed(*a,**k):
+        attempts.append(k)
+        raise editing_adapter.NativeExportUnavailable('CapCut MainWindow 창이 준비되지 않았습니다.')
+    monkeypatch.setattr(editing_adapter.AutoCapcutAdapter,'export',failed)
+    video=studio.folder(task)/'web-final.mp4';video.write_bytes(b'v'*2048)
+    def render(s,j,action,payload):
+        renders.append((action,payload))
+        return {'export_path':str(video),'export_verified':True}
+    monkeypatch.setattr(studio,'_process',render)
+    result=studio._export(state,job)
+    assert result['export_kind']=='web_render' and result['export_verified']
+    assert renders[0]==('caption-export',{'plan':json.loads(Path(edit['plan_path']).read_text()),'changes':[]})
+    assert studio._export(state,job)=={**result,'exported_at':pytest.approx(result['exported_at'],abs=1)}
+    assert len(attempts)==1
+    studio._accept(state,job,result)
+    with studio.store.transaction() as db:studio.advance_workflow(state,db)
+    assert state['status']=='completed' and '웹 렌더링' in state['message']
+    assert next(e for e in state['edits'] if e['id']==edit['id'])['draft_path']=='external/CapCut'
+
+
+def test_native_content_or_verification_errors_never_use_web_fallback(prepared,monkeypatch):
+    from hotpost import editing_adapter
+    studio,task=prepared;complete(studio,task);state=studio.store.get(task)
+    job={'id':'failed-export','payload':{'edit_id':state['edit_id']},'checkpoint':{}}
+    def fail(*a,**k):raise RuntimeError('편집 소스 재검토 필요')
+    monkeypatch.setattr(editing_adapter.AutoCapcutAdapter,'export',fail)
+    monkeypatch.setattr(studio,'_process',lambda *a,**k:pytest.fail('must not bypass validation'))
+    with pytest.raises(RuntimeError,match='재검토'):studio._export(state,job)
+    hold=studio.settings.editing_dir/job['id']/'export-hold.json';hold.parent.mkdir(parents=True)
+    hold.write_text(json.dumps({'reason':'mismatched product'}))
+    job['checkpoint']['native_export_unavailable']='previous window failure'
+    with pytest.raises(RuntimeError,match='mismatched product'):studio._export(state,job)
+
+
+def test_unverified_web_output_is_not_accepted(prepared,monkeypatch):
+    studio,task=prepared;complete(studio,task);state=studio.store.get(task)
+    job={'id':'bad-web-export','payload':{'edit_id':state['edit_id']},
+         'checkpoint':{'native_export_unavailable':'window failure'}}
+    monkeypatch.setattr(studio,'_process',lambda *a,**k:{'export_verified':False})
+    with pytest.raises(ValueError,match='검증'):studio._export(state,job)
+
+
 def test_make_video_atomically_saves_and_starts_once(prepared):
     studio,task=prepared;complete(studio,task)
     before=studio.store.get(task)

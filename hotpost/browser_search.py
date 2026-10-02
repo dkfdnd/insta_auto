@@ -147,7 +147,9 @@ class BrowserSearcher:
             return True
         body = page.locator('body').inner_text().lower()
         return any(token in body for token in ('unusual traffic', 'verify you are human',
-                   'confirm you are not a robot', '로봇이 아닙니다', '비정상적인 트래픽'))
+                   'confirm you are not a robot', '로봇이 아닙니다', '비정상적인 트래픽',
+                   'drag the slider', 'fit the puzzle', 'slide to verify',
+                   '拖动滑块', '滑动验证', '슬라이더를 끌어', '퍼즐을 맞춰'))
 
     def _check_block(self, page, provider, audit, response=None):
         if response is not None and response.status == 429:
@@ -368,6 +370,10 @@ class BrowserSearcher:
                         break
                     page.mouse.wheel(0, 900)
                     page.wait_for_timeout(1000)
+                    # The slider challenge may appear after the SPA hydrates
+                    # or scrolls, after the initial block check has passed.
+                    if self._check_block(page, provider, audit):
+                        break
                     found = [*_anchors(page, f"playwright-{provider}", query, "platform-search"),
                              *_embedded_candidates(page, provider, query)]
                     added = 0
@@ -378,6 +384,15 @@ class BrowserSearcher:
                             added += 1
                     audit.update(status='results' if added else ('login_required' if auth == 'login_required' else 'no_results'),
                                  candidates=added)
+                    if not found:
+                        # HTTP 200 alone cannot distinguish empty results from
+                        # a login/error/unfinished SPA. Keep visible evidence
+                        # for diagnosis without copying scripts or cookie data.
+                        try:
+                            audit['page_url'] = page.url.split('?', 1)[0]
+                            audit['page_excerpt'] = ' '.join(page.locator('body').inner_text().split())[:800]
+                        except Exception:
+                            pass
                     self.progress(f'{provider} · {language(query)} · {query} → 후보 {added}개')
                     if len(provider_urls) >= per_provider_limit and searched_languages >= planned_languages:
                         break

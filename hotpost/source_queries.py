@@ -8,6 +8,8 @@ import re
 from itertools import zip_longest
 
 PRODUCTS = [
+    ('진열장', 'display cabinet', '展示柜', ('진열장', '장식장', 'display cabinet', '展示柜', '陈列柜')),
+    ('캠핑 주방세트', 'camping kitchen set', '露营厨具套装', ('캠핑 주방세트', '캠핑 주방 세트', 'camping kitchen set', '露营厨具')),
     ('생선구이', 'pan fried fish cooking', '煎鱼技巧', ('생선구이', '생선 구이', '생선 굽', '생선을 구', '생선 부서', 'pan fried fish', 'frying fish', '煎鱼')),
     ('타일 보수', 'tile repair', '瓷砖修补', ('타일 보수', '타일보수', 'tile repair', '瓷砖修补')),
     ('여권 복대', 'hidden passport money belt', '隐形护照腰包', ('여권지갑', '여권 지갑', '여권 복대', '여행 복대', 'money belt', 'passport pouch', '护照腰包')),

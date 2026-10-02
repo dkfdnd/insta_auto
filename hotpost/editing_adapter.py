@@ -16,6 +16,10 @@ CONTRACT_VERSION = "1.0"
 _JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
+class NativeExportUnavailable(RuntimeError):
+    """Explicit runner receipt: CapCut could not open its home/project window."""
+
+
 def _atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -96,7 +100,11 @@ class AutoCapcutAdapter:
         if not result_path.is_file():
             raise RuntimeError("CapCut 내보내기 결과 응답이 없습니다.")
         result = json.loads(result_path.read_text(encoding="utf-8"))
-        if result.get("job_id") != job_id or result.get("status") != "completed":
+        if result.get('job_id') != job_id:
+            raise RuntimeError('CapCut 내보내기 응답의 작업 ID가 일치하지 않습니다.')
+        if result.get('status') != 'completed' and result.get('error_code') == 'native_export_unavailable':
+            raise NativeExportUnavailable(result.get('message') or 'CapCut 편집창을 준비하지 못했습니다.')
+        if result.get("status") != "completed":
             raise RuntimeError(result.get("message") or "CapCut 내보내기가 완료되지 않았습니다.")
         if not output.is_file() or output.stat().st_size < 1024 or not result.get("verified"):
             raise RuntimeError("내보낸 영상 파일이 검증되지 않았습니다.")

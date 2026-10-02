@@ -25,6 +25,24 @@ def _settings(tmp_path: Path) -> Settings:
                     auto_capcut_root=repo, auto_capcut_python=python)
 
 
+@pytest.mark.parametrize('response_id,error_code,exception', [
+    ('export-job','native_export_unavailable','unavailable'),
+    ('export-job','verification_failed','generic'),
+    ('other-job','native_export_unavailable','generic'),
+])
+def test_export_fallback_requires_explicit_matching_failure_receipt(tmp_path, response_id, error_code, exception):
+    from hotpost.editing_adapter import NativeExportUnavailable
+    settings=_settings(tmp_path)
+    def run(command, **kwargs):
+        Path(command[-1]).write_text(json.dumps({'job_id':response_id,'status':'failed',
+            'message':'CapCut window failed','error_code':error_code}),encoding='utf-8')
+        return subprocess.CompletedProcess(command,1,stdout='',stderr='')
+    expected=NativeExportUnavailable if exception=='unavailable' else RuntimeError
+    with pytest.raises(expected) as err:
+        AutoCapcutAdapter(settings,runner=run).export(job_id='export-job',draft_name='draft',draft_path=tmp_path/'draft')
+    if exception=='generic': assert not isinstance(err.value,NativeExportUnavailable)
+
+
 def test_transcript_script_uses_speech_only(tmp_path):
     transcript = tmp_path / "transcript.json"
     transcript.write_text(json.dumps({
