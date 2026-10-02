@@ -424,8 +424,18 @@ class Studio(WorkflowMixin):
                     self.store.finish(job, {}, lambda s, db, r: self.activate_reproduction(s, db))
                     continue
                 if job['kind'] in {'register', 'export'} and not job['payload'].get('launch') and capcut_running():
-                    self.store.defer(job, 'CapCut 종료 대기 · 저장하고 앱을 닫으면 자동으로 이어집니다', 15, waiting=True)
-                    continue
+                    registered = (job['kind'] == 'export' and any(
+                        e['id'] == job['payload'].get('edit_id') and e.get('draft_path') for e in state['edits']))
+                    if registered:
+                        # The editable draft is already registered. Exporting
+                        # its saved plan on the web path does not touch an open
+                        # CapCut session or any user edits in that draft.
+                        job['checkpoint'].setdefault('native_export_unavailable',
+                            'CapCut 창이 열려 있어 저장된 장면·음성·자막으로 웹 내보내기')
+                        self.store.checkpoint(job['id'], job['checkpoint'])
+                    else:
+                        self.store.defer(job, 'CapCut 종료 대기 · 저장하고 앱을 닫으면 자동으로 이어집니다', 15, waiting=True)
+                        continue
                 payload = job["payload"]
                 if "script_id" in payload and payload["script_id"] != state["script_id"]:
                     self.store.finish(job, {}, lambda *_: None); continue
