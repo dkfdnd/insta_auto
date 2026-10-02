@@ -152,6 +152,40 @@ def test_partial_collection_does_not_trigger_watcher(setup):
     assert studio.store.list()==[]
 
 
+@pytest.mark.parametrize('skipped,failed', [(1,0), (0,1)])
+def test_interrupted_collection_never_freezes_top_two(setup, skipped, failed):
+    from hotpost.studio_automation import enqueue_latest
+    settings,studio=setup
+    store=Storage(settings.db_path)
+    store.initialize_managed_accounts([('account',''),('other','')])
+    run_id=store.start_run(int(time.time()),'browser')
+    store.finish_run(run_id,1,failed,3,skipped=skipped,stop_reason='browser_navigation')
+    store.close()
+    settings.report_path.write_text(json.dumps(report(time.time())),encoding='utf-8')
+    assert enqueue_latest(settings)==[]
+    with studio.store.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM automatic_runs').fetchone()[0]==0
+
+
+def test_cli_interrupted_collection_does_not_start_production(setup, monkeypatch):
+    from hotpost import cli, report as reports, studio_automation, acquisition
+    settings,_=setup
+    monkeypatch.setattr(cli.AccountRegistry,'usernames',lambda _: ['account','other'])
+    def stopped(settings, store, source, usernames):
+        rid=store.start_run(int(time.time()),source)
+        store.finish_run(rid,1,0,3,skipped=1,stop_reason='browser_navigation')
+        return 1,0,3,[]
+    monkeypatch.setattr(cli,'collect',stopped)
+    monkeypatch.setattr(reports,'build_report',lambda *a,**k:{'summary':{'hot':2,'posts':3}})
+    monkeypatch.setattr(reports,'write_report',lambda *a: None)
+    def forbidden(*a,**k): pytest.fail('interrupted collection must not start production')
+    monkeypatch.setattr(studio_automation,'enqueue_top',forbidden)
+    monkeypatch.setattr(studio_automation,'ensure_worker',forbidden)
+    monkeypatch.setattr(acquisition,'acquire',forbidden)
+    args=SimpleNamespace(source='browser',only=None,acquire=True,serve=False)
+    assert cli._cmd_run_locked(settings,args)==1
+
+
 def test_explicit_retry_replaces_failed_remote_id_once(setup,monkeypatch):
     from hotpost import studio_adapter
     _,studio=setup

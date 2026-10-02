@@ -272,12 +272,16 @@ def _cmd_run_locked(settings: Settings, args) -> int:
     _log(f"리포트 생성: {settings.report_path}  (핫 게시물 {report['summary']['hot']}개 / 전체 {report['summary']['posts']}개)")
     if settings.studio_auto_top_enabled and args.source != 'demo' and not args.only:
         from .studio_automation import enqueue_top, ensure_worker, intake_log
-        selected = enqueue_top(settings, report, store.last_run()['id'])
-        _log(intake_log(selected))
-        for row in selected:
-            if row.get('state') == 'blocked':
-                _log(f"  {row['rank']}위: {row['reason']} → {row['solution']}")
-        ensure_worker(settings)
+        last_run = store.last_run()
+        if last_run.get('stop_reason') or last_run.get('accounts_skipped'):
+            _log('수집이 중단되어 제작실 자동 선정을 보류합니다. 남은 계정 수집을 완료한 뒤 전체 순위를 확인하세요.')
+        else:
+            selected = enqueue_top(settings, report, last_run['id'])
+            _log(intake_log(selected))
+            for row in selected:
+                if row.get('state') == 'blocked':
+                    _log(f"  {row['rank']}위: {row['reason']} → {row['solution']}")
+            ensure_worker(settings)
     elif getattr(args, 'acquire', False) and args.source != 'demo':
         from .acquisition import acquire
         results = acquire(settings, report, _log)

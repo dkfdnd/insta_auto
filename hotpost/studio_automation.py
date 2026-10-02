@@ -71,6 +71,8 @@ def enqueue_latest(settings):
         store.close()
     if not run or not run.get('finished_at') or not run.get('accounts_ok') or run.get('source') == 'demo':
         return []
+    if run.get('stop_reason') or run.get('accounts_skipped'):
+        return []
     # A manual --only run must not trigger selection from a partial report.
     if sum(run.get(k, 0) or 0 for k in ('accounts_ok', 'accounts_failed', 'accounts_skipped')) != account_count:
         return []

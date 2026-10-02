@@ -32,25 +32,31 @@ def ensure_local(settings, kind):
     def ready():
         try:
             response = session.get(url.rstrip('/') + path, headers=headers, timeout=3, allow_redirects=False)
+        except requests.Timeout:
+            # A cold service can accept the connection before its startup has
+            # finished. Keep waiting without launching another process.
+            return None
         except requests.ConnectionError:
             return False
         if response.status_code != 200 or response.json().get('service') != expected:
             raise RuntimeError(f'{kind} 연결 주소의 서비스 또는 인증 설정을 확인하세요.')
         return True
 
-    if ready():
+    initial = ready()
+    if initial:
         return
-    python = root / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-    if not python.is_file():
-        raise RuntimeError(f'{kind} 서비스 실행 환경이 없습니다. 해당 프로젝트의 설치 절차를 완료하세요.')
-    port = str(parsed.port or 80)
-    args = ['run.py', '--host', '127.0.0.1', '--port', port] if script else ['-m', 'voicebench', '--host', '127.0.0.1', '--port', port]
-    with (settings.data_dir / f'{kind}-service.log').open('a', encoding='utf-8') as log:
-        subprocess.Popen([str(python), '-X', 'utf8', *args], cwd=root, env=environment,
-                         stdout=log, stderr=log, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if initial is False:
+        python = root / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+        if not python.is_file():
+            raise RuntimeError(f'{kind} 서비스 실행 환경이 없습니다. 해당 프로젝트의 설치 절차를 완료하세요.')
+        port = str(parsed.port or 80)
+        args = ['run.py', '--host', '127.0.0.1', '--port', port] if script else ['-m', 'voicebench', '--host', '127.0.0.1', '--port', port]
+        with (settings.data_dir / f'{kind}-service.log').open('a', encoding='utf-8') as log:
+            subprocess.Popen([str(python), '-X', 'utf8', *args], cwd=root, env=environment,
+                             stdout=log, stderr=log, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if ready():
             return
         time.sleep(1)
-    raise RuntimeError(f'{kind} 서비스를 시작했지만 아직 응답하지 않습니다. 제작실에서 재시도하세요.')
+    raise RuntimeError(f'{kind} 서비스가 제한 시간 안에 준비되지 않았습니다. 서비스 실행 상태를 확인한 뒤 제작실에서 재시도하세요.')

@@ -39,10 +39,38 @@ def test_local_script_launch_uses_own_environment(tmp_path, monkeypatch):
     def get(*a, **k):
         attempts.append(1)
         if len(attempts)==1: raise requests.ConnectionError()
+        if len(attempts)==2: raise requests.ReadTimeout()
         return SimpleNamespace(status_code=200, json=lambda: {'service':'shortform-studio'})
     monkeypatch.setattr(service.requests, 'Session', lambda: SimpleNamespace(get=get))
     monkeypatch.setattr(service.subprocess, 'Popen', lambda args,**kwargs: launches.append((args,kwargs)))
+    monkeypatch.setattr(service.time, 'sleep', lambda _: None)
     ensure_local(Settings(data_dir=tmp_path, studio_root=root, studio_url='http://127.0.0.1:18767'), 'script')
     args,kwargs=launches[0]
     assert args[0]==str(python) and args[-1]=='18767' and 'run.py' in args
     assert kwargs['cwd']==root
+    assert len(launches)==1 and len(attempts)==3
+
+
+def test_slow_existing_service_is_awaited_without_duplicate_launch(tmp_path, monkeypatch):
+    from hotpost import studio_services as service
+    attempts=[]
+    def get(*a, **k):
+        attempts.append(1)
+        if len(attempts)==1: raise requests.ReadTimeout()
+        return SimpleNamespace(status_code=200, json=lambda: {'service':'shortform-studio'})
+    monkeypatch.setattr(service.requests, 'Session', lambda: SimpleNamespace(get=get))
+    monkeypatch.setattr(service.subprocess, 'Popen', lambda *a, **k: pytest.fail('must not launch a duplicate'))
+    ensure_local(Settings(data_dir=tmp_path), 'script')
+    assert len(attempts)==2
+
+
+def test_unresponsive_service_stops_after_bounded_wait(tmp_path, monkeypatch):
+    from hotpost import studio_services as service
+    def get(*a, **k): raise requests.ReadTimeout()
+    ticks=iter([0, 1, 61])
+    monkeypatch.setattr(service.requests, 'Session', lambda: SimpleNamespace(get=get))
+    monkeypatch.setattr(service.subprocess, 'Popen', lambda *a, **k: pytest.fail('must not launch a duplicate'))
+    monkeypatch.setattr(service.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(service.time, 'sleep', lambda _: None)
+    with pytest.raises(RuntimeError, match='제한 시간'):
+        ensure_local(Settings(data_dir=tmp_path), 'script')
