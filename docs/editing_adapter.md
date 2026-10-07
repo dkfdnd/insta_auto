@@ -38,6 +38,10 @@ PersonalProject1 uses port 18765. The integrated flow is:
    `AutoCapcutAdapter`.
 
 Integrated builds use the `clean_tts` audio profile and 1.0x tempo.
+Studio renders disable automatic emphasis sound effects by default. Visual
+caption emphasis does not enable audio effects. The MP4 and portable draft
+use narration only unless the plan explicitly enables `sound_effects.enabled`.
+Old exports and caption-only revisions retain their recorded audio.
 The legacy helper retains its 1.12x default. This avoids applying microphone denoise,
 podcast color, vocal beautification, and +20dB gain to a clean generated WAV.
 
@@ -51,3 +55,20 @@ Configuration can be overridden with `HOTPOST_AUTO_CAPCUT_ROOT`,
 VoiceBench overrides are `HOTPOST_VOICEBENCH_URL`,
 `HOTPOST_VOICEBENCH_API_KEY_FILE`, `HOTPOST_VOICEBENCH_TIMEOUT`, and
 `HOTPOST_VOICEBENCH_POLL_INTERVAL`.
+
+## 2026-10-07 자막·쉼 제작 합의
+
+신규 제작실 편집의 자막은 auto_capcut `studio_typography.default_style()`에서
+Pretendard ExtraBold / 66px / 대본 문구 그대로를 적용하고 타임라인에 버전으로
+보존한다. 문장이 길면 글자 축소나 요약 대신 실제 글꼴 폭을 기준으로 구절을 나눈다.
+과거 완성본·스타일 없는 과거 타임라인은 이전 렌더링 계약을 유지한다.
+
+사용자가 비교 후 승인한 `tight` 쉼 처리를 신규 제작실 편집에 기본 적용한다.
+VoiceBench의 원본 복제 음성 WAV와 voice ID는 보존한다. 별도 처리 WAV를
+auto_capcut 프로세스에서 만들고 원본 ASR 시간을 샘플 단위 cut-map으로
+변환한 뒤 자막·장면·완성 MP4·CapCut 초안을 같은 시계로 제작한다.
+배속하거나 대본을 재작성하지 않으며 들숨을 전부 제거했다고 표시하지 않는다.
+타임라인의 `voice_source`는 승인한 원본 TTS, `voice`는 쉼을 줄인 편집 음성,
+`pause_processing`은 변환 기록이다. 제작실 음성 듣기는 원본 TTS를 들려주고
+완성 영상은 편집 음성을 사용한다. 캐시 재실행은 동일 처리 음성을 검증해
+재사용한다. 과거 완성본·자막 수정은 기존 음성과 선택 상태를 유지한다.
