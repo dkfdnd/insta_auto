@@ -8,6 +8,21 @@ import re
 from itertools import zip_longest
 
 PRODUCTS = [
+    ('차량 후면 텐트', 'car rear tent', '车尾帐篷', ('차 뒤에 달고', 'car rear tent', 'hitch tent', '车尾帐篷')),
+    ('자동 감김 빨랫줄', 'retractable clothesline', '伸缩晾衣绳', ('자동 감김 빨랫줄', '줄이 상자 안으로', 'retractable clothesline', '伸缩晾衣绳')),
+    ('다진 마늘 준비', 'minced garlic preparation', '蒜末准备', ('다진마늘', '다진 마늘', '마늘보관', '마늘 보관', 'minced garlic', 'garlic storage', '蒜末')),
+    ('발 전용 핫팩', 'foot warmer wrap', '暖脚贴', ('발바닥 핫팩', '발 전용 핫팩', '전용 핫팩', 'foot warmer', '暖脚贴')),
+    ('투두 리스트', 'DIY checklist board', '自制待办清单板', ('투두', '투두리스트', 'to do list', 'checklist board', '待办清单')),
+    ('분사형 유리 청소기', '3 in 1 spray squeegee', '三合一喷水玻璃刮', ('분사부터 문지르기', '3in1', 'spray squeegee', '喷水玻璃刮')),
+    ('신발장', 'shoe cabinet demonstration', '鞋柜演示', ('신발장', 'shoe cabinet', '鞋柜')),
+    ('무타공 전동 블라인드', 'no drill motorized cellular blinds', '免打孔电动蜂巢帘', ('무타공 자동블라인드', '무타공블라인드', '무타공 전동', 'no drill motorized', '免打孔电动')),
+    ('쌀가루 요리', 'rice flour recipe', '米粉食谱', ('쌀가루', 'rice flour', '米粉食谱')),
+    ('문틀 운동 기구', 'door frame pull up gym', '门框单杠', ('푸시업부터 풀업', '문틀 운동', 'door frame gym', '门框单杠')),
+    ('래글런 롱슬리브', 'raglan long sleeve outfit', '插肩长袖穿搭', ('나그랑', '래글런', 'raglan', '插肩')),
+    ('다단 바지걸이', 'multi layer pants hanger', '多层裤架', ('바지가 층층이', '바지걸이', 'pants hanger', '裤架')),
+    ('코바늘 뜨개', 'crochet tutorial', '钩针教程', ('코바늘', 'crochet', '钩针')),
+    ('온 러닝 운동화', 'On running shoes outfit', 'On跑鞋穿搭', ('온러닝', '온 러닝', 'on running', 'On跑鞋')),
+    ('휴대용 얼룩 제거기', 'portable stain remover demonstration', '便携去渍笔演示', ('얼룩제거', '얼룩 제거', '리무버', 'stain remover', '去渍笔')),
     ('진열장', 'display cabinet', '展示柜', ('진열장', '장식장', 'display cabinet', '展示柜', '陈列柜')),
     ('캠핑 주방세트', 'camping kitchen set', '露营厨具套装', ('캠핑 주방세트', '캠핑 주방 세트', 'camping kitchen set', '露营厨具')),
     ('생선구이', 'pan fried fish cooking', '煎鱼技巧', ('생선구이', '생선 구이', '생선 굽', '생선을 구', '생선 부서', 'pan fried fish', 'frying fish', '煎鱼')),
@@ -126,7 +141,7 @@ def product_query_plan(caption: str, visual_queries: list[str], vision_terms: li
                 add(f'{brand} {attrs} {base}', lang, 'appearance', evidence + [s for f in features for s in f['sources']])
             intents = {'en': ('detail review', 'demonstration', 'unboxing'),
                        'zh': ('细节展示', '使用演示', '开箱 实拍'), 'ko': ('실물 리뷰', '사용 영상', '언박싱')}
-            if product['en'] in {'honey garlic soy chicken', 'pan fried fish cooking'}:
+            if product['en'] in {'honey garlic soy chicken', 'pan fried fish cooking', 'minced garlic preparation'}:
                 intents = {'en': ('recipe', 'cooking tutorial', 'close up cooking'),
                            'zh': ('做法', '制作教程', '烹饪 特写'), 'ko': ('레시피', '요리 과정', '만들기')}
             elif product['en'] == 'tile repair':
@@ -147,6 +162,70 @@ def product_query_plan(caption: str, visual_queries: list[str], vision_terms: li
                 details.append(item); seen.add(item['query'].casefold())
     return {'products': products, 'brands': brands, 'features': features, 'models': models,
             'query_details': details[:30]}
+
+
+def feedback_queries(request: str) -> list[str]:
+    """Accept concise explicit keywords, never a truncated instruction paragraph."""
+    result = []
+    for line in request.splitlines():
+        line = re.sub(r'^(?:검색어|keywords?|queries)\s*[:：]\s*', '', line.strip(), flags=re.I)
+        if len(line) > 180 or re.search(r'찾으세요|찾아주세요|제외하세요|허용하지|확정하지|레퍼런스|장면만|등의.*검색', line):
+            continue
+        for query in re.split(r'[,;；]', line):
+            query = ' '.join(query.strip(' \"\'').split())
+            if 2 <= len(query) <= 80 and not re.search(r'https?://|[.!?。!?]', query):
+                result.append(query)
+    return list(dict.fromkeys(result))[:8]
+
+
+def next_round_queries(plan, round_number, history):
+    """Change grounded search intents; never recycle an instruction paragraph."""
+    # A query tried on YouTube is still new on TikTok. Provider-specific
+    # exhaustion belongs to discovery, never to this shared grounded pool.
+    from .source_search.strategy import normalize_query
+    used = {normalize_query(r.get('query', '')) for r in history if not r.get('provider')
+            and r.get('status') in {'results', 'no_results'}}
+    details = [dict(q) for q in plan['query_details'] if q['query'].casefold() not in used]
+    intents = {
+        'en': [('close up demonstration','how to use'),('step by step tutorial','hands on review'),('preparation process','storage tips'),('product demonstration video','daily use'),('long review','detailed tutorial')],
+        'ko': [('사용 장면 클로즈업','사용 방법'),('단계별 사용법','실사용 후기'),('준비 과정','보관 방법'),('제품 시연 영상','일상 활용'),('상세 리뷰','자세한 사용법')],
+        'zh': [('使用 特写','使用方法'),('步骤 教程','实际体验'),('准备过程','保存方法'),('产品演示 视频','日常使用'),('详细评测','完整教程')],
+    }
+    offset = (round_number-1)%5
+    products = list(plan.get('products', []))
+    # Subjects identified by the model also need future search intents. Without
+    # a catalog match, exhausting their first queries used to leave an empty
+    # plan and only unrelated image-search labels in subsequent rounds.
+    if not products:
+        for lang in ('en', 'ko', 'zh'):
+            bases = [q for q in plan['query_details'] if q.get('language') == lang
+                     and q.get('role') == 'subject_action' and q.get('evidence_quote')]
+            for base in sorted(bases, key=lambda q: len(q['query']))[:2]:
+                products.append({lang:base['query'], 'sources':base.get('sources', [])})
+    for product in products:
+        for lang in ('en','ko','zh'):
+            base = product.get(lang)
+            if not base: continue
+            groups = intents[lang]
+            if plan.get('subject_kind') == 'recipe' or product.get('en') in {
+                    'minced garlic preparation', 'honey garlic soy chicken', 'pan fried fish cooking', 'rice flour recipe'}:
+                groups = {
+                    'en': [('close up preparation', 'step by step cooking'), ('preparation process', 'portioning'),
+                           ('storage preparation', 'spooning demonstration'), ('cooking technique', 'hands on preparation'),
+                           ('detailed cooking tutorial', 'ingredient preparation')],
+                    'ko': [('준비 장면 클로즈업', '단계별 조리 과정'), ('준비 과정', '소분 장면'),
+                           ('보관 준비', '숟가락으로 뜨는 장면'), ('조리 방법', '직접 준비하는 장면'),
+                           ('자세한 조리 과정', '재료 준비')],
+                    'zh': [('准备 特写', '分步烹饪'), ('准备过程', '分装'), ('保存准备', '舀取演示'),
+                           ('烹饪方法', '实际准备'), ('详细制作教程', '食材准备')],
+                }[lang]
+            # Visit every remaining intent, starting at a different group. A
+            # modulo-selected exhausted group must not erase the whole pool.
+            for suffix in [s for group in groups[offset:] + groups[:offset] for s in group]:
+                query = f'{base} {suffix}'
+                if query.casefold() not in used:
+                    details.insert(0, {'query':query,'language':lang,'role':'product','intent':suffix,'sources':product.get('sources',[]),'origin':'automatic_expansion'})
+    return list({normalize_query(d['query']): d for d in details}.values())
 
 
 def platform_queries(queries: list[str], provider: str, limit: int) -> list[str]:

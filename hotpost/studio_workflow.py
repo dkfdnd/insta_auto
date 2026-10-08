@@ -32,6 +32,8 @@ def init_run(state):
         return current_run(state)
     run = dict(id=uid('run-'), number=len(state.setdefault('runs', []))+1,
                created=time.time(), status='running', inputs={}, artifacts={})
+    if state.get('source_policy'):
+        run['source_policy'] = copy.deepcopy(state['source_policy'])
     state['runs'].append(run)
     state['run_id'] = run['id']
     return run
@@ -40,7 +42,8 @@ def init_run(state):
 def snapshot(state):
     run = init_run(state)
     run['artifacts'].update({k: copy.deepcopy(state.get(k)) for k in
-        ('script_id', 'voice_id', 'edit_id', 'transcript_path', 'original_text', 'manifest_path')})
+        ('script_id', 'voice_id', 'edit_id', 'transcript_path', 'original_text', 'manifest_path',
+         'reference_kind', 'reference_speech_text', 'reference_text_evidence')})
     ids = run['inputs'].get('source_ids')
     run['artifacts']['sources'] = copy.deepcopy([s for s in state['sources'] if ids is None or s['id'] in ids])
     script = next((s for s in state['scripts'] if s['id']==state.get('script_id')), {})
@@ -121,6 +124,8 @@ class WorkflowMixin:
             sha = sha256_file(path)
             def add(s, db):
                 if not any(v['sha256']==sha for v in s['sources']):
+                    if s.get('creation_mode') == 'self_shot' and len(s['sources']) >= 20:
+                        raise ValueError('내 촬영 영상은 작업 하나에 최대 20개까지 추가할 수 있습니다.')
                     s['sources'].append(dict(id=path.stem,path=str(path),sha256=sha,origin_url='',rights='user_supplied',original_name=Path(name).name))
                 self.store.event(db, task_id, 'source_uploaded', {'name':Path(name).name})
             saved = self.store.change(task_id,add)
@@ -132,6 +137,8 @@ class WorkflowMixin:
 
     def workflow_action(self, task_id, action, data):
         state = self.store.get(task_id)
+        if state.get('creation_mode') == 'self_shot' and action == 'use-sources':
+            return self.start_self_shot(task_id, data)
         if action in {'make-video','save-feedback','regenerate-voice'} and 'voice_profile_id' in data:
             profile = data['voice_profile_id']
             if not isinstance(profile,str) or len(profile)>100: raise ValueError('목소리 목록에서 선택하세요.')
@@ -171,7 +178,12 @@ class WorkflowMixin:
             def start(s, db):
                 if s.get('automation') and not s.get('top_pick') and s.get('script_candidates'):
                     s['automation']['needs_top_pick'] = True
-                s.setdefault('automation', {}).update(protocol=2, active=True, paused_by_user=False)
+                auto = s.setdefault('automation', {})
+                self.release_source_hold(s)
+                auto.update(protocol=2, active=True, paused_by_user=False, selection_mode='manual_resume')
+                auto.pop('consumed_by_daily_policy', None)
+                auto.pop('pause_reason', None)
+                db.execute("UPDATE jobs SET status='queued' WHERE task_id=? AND status='paused'", (task_id,))
                 init_run(s)
                 # Existing manual work and its assets become the first version.
                 if s.get('sources') and s.get('original_text'):
@@ -215,7 +227,7 @@ class WorkflowMixin:
                 cues={c['id']:c for c in plan['cues']}; beats={b['id']:b for b in plan['beats']}
                 changes=[c for c in changes if any(c[k]!=cues[beats[c['beat_id']]['cue_id']][k] for k in ('text','start','end') if k in c)]
                 if action=='export-edit':
-                    if db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status IN ('queued','running') AND kind NOT IN ('refresh_sources','proposal','suggest_edit')",(task_id,)).fetchone():
+                    if db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status IN ('queued','running') AND kind NOT IN ('collect_sources','refresh_sources','proposal','suggest_edit')",(task_id,)).fetchone():
                         raise Conflict('현재 제작 또는 내보내기가 끝나면 다시 내보낼 수 있습니다.')
                     if not changes and not edit.get('export_path'):
                         changes=[{'beat_id':b['id'],**{k:cues[b['cue_id']][k] for k in ('text','start','end')}} for b in plan['beats']]
@@ -246,7 +258,9 @@ class WorkflowMixin:
                 if not text or len(text) > 3000: raise ValueError('대본은 1~3000자로 입력하세요.')
                 feedback['script_text'] = text
             elif action in {'save-feedback', 'regenerate-voice', 'make-video'}:
-                if 'voice_profile_id' in data: feedback['voice_profile_id'] = data['voice_profile_id']
+                if 'voice_profile_id' in data:
+                    feedback['voice_profile_id'] = data['voice_profile_id']
+                    feedback['voice_selection_mode'] = 'manual' if data['voice_profile_id'] else 'personal_default'
                 if 'speed' in data:
                     speed = float(data['speed'])
                     if not math.isfinite(speed) or not .8 <= speed <= 1.25: raise ValueError('속도는 0.8~1.25배입니다.')
@@ -295,11 +309,13 @@ class WorkflowMixin:
                 snapshot(s)
                 # Reproduce is an explicit start request. A later pause must
                 # remain authoritative when the running step eventually ends.
-                s['automation'].update(active=True, paused_by_user=False)
+                s['automation'].update(active=True, paused_by_user=False, selection_mode='manual_resume')
+                s['automation'].pop('consumed_by_daily_policy', None)
+                s['automation'].pop('pause_reason', None)
                 s['pending_reproduction'] = copy.deepcopy(feedback)
                 s['feedback'] = {}
-                db.execute("UPDATE jobs SET status='superseded' WHERE task_id=? AND status IN ('queued','paused') AND kind NOT IN ('refresh_sources','proposal','suggest_edit')", (task_id,))
-                if not db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status='running' AND kind NOT IN ('refresh_sources','proposal','suggest_edit')", (task_id,)).fetchone():
+                db.execute("UPDATE jobs SET status='superseded' WHERE task_id=? AND status IN ('queued','paused') AND kind NOT IN ('collect_sources','refresh_sources','proposal','suggest_edit')", (task_id,))
+                if not db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status='running' AND kind NOT IN ('collect_sources','refresh_sources','proposal','suggest_edit')", (task_id,)).fetchone():
                     self.activate_reproduction(s, db)
                 else:
                     s['message'] = '현재 단계 결과 저장 후 수정본 제작으로 전환합니다'
@@ -316,12 +332,24 @@ class WorkflowMixin:
             return
         feedback = s.pop('pending_reproduction')
         old = snapshot(s)
+        old_script = next((x['text'] for x in s['scripts'] if x['id']==s.get('script_id')), '')
+        old_sources = old['inputs'].get('source_ids') or [x['id'] for x in s['sources']]
+        changed_narration = 'script_text' in feedback and feedback['script_text'] != old_script
+        changed_sources = 'source_ids' in feedback and set(feedback['source_ids']) != set(old_sources)
+        if s.get('reviewed_scene_rules') and (changed_narration or changed_sources):
+            # Bounded manual review belongs to those exact narration/source
+            # inputs. New user edits return to normal actual-frame selection.
+            rules = s.pop('reviewed_scene_rules')
+            self.store.event(db,s['id'],'reviewed_scenes_invalidated',
+                             {'rules':rules,'changed_narration':changed_narration,'changed_sources':changed_sources})
         if old['status'] != 'completed': old['status'] = 'superseded'
         old_inputs = copy.deepcopy(old['inputs'])
         old_inputs.pop('changes', None)
         old_inputs.pop('regenerate_voice', None)
         old_inputs.update(feedback)
         s.pop('run_id', None)
+        from .source_policy import adopt_policy
+        adopt_policy(s, self.settings)
         run = init_run(s)
         run.update(inputs=old_inputs, parent_id=old['id'])
         if 'script_text' in feedback:
@@ -347,34 +375,58 @@ class WorkflowMixin:
         if s.get('pending_reproduction'):
             self.activate_reproduction(s, db)
             return
-        if not s['automation'].get('active') or not s.get('sources'): return
+        if not s['automation'].get('active') or not s.get('original_text'): return
+        self.ensure_source_collection(s, db)
         script, voice, edit = (selected(s, c, k) for c, k in [('scripts','script_id'), ('voices','voice_id'), ('edits','edit_id')])
         key = run['id']
+        wrong_automatic_voice = bool(voice and voice.get('voice_profile_id') and run['inputs'].get('voice_selection_mode') != 'manual')
         if not script or s['automation'].get('needs_top_pick'):
-            stage, status, message, payload = 'rewrite', 'rewriting', '후보 대본 비교 · Top Pick 선정 중', {}
-        elif not voice or voice['script_id'] != script['id']:
-            stage, status, message = 'voice', 'voice_generating', '선정 대본으로 TTS 생성 중'
-            voice_id = 'voice-'+key
+            stage, status, message, payload = 'rewrite', 'rewriting', '후보 대본 비교 · Top Pick 선정 대기', {}
+        elif not voice or voice['script_id'] != script['id'] or wrong_automatic_voice:
+            stage, status, message = 'voice', 'voice_generating', '선정 대본으로 TTS 생성 대기'
+            voice_id = ('voice-personal-' if wrong_automatic_voice else 'voice-')+key
             s.update(approved_script_id=script['id'], pending_voice_id=voice_id)
             text = script['text']
             for pair in run['inputs'].get('pronunciations', []): text = text.replace(pair['from'], pair['to'])
             payload = dict(script_id=script['id'], voice_id=voice_id, speed=run['inputs'].get('speed',1), spoken_text=text)
-            if run['inputs'].get('voice_profile_id'): payload['voice_profile_id'] = run['inputs']['voice_profile_id']
+            # Automatic intake never inherits a legacy named-voice workaround.
+            # A voice explicitly selected in the Studio is a manual experiment.
+            manual_voice = run['inputs'].get('voice_selection_mode') == 'manual'
+            if manual_voice and run['inputs'].get('voice_profile_id'):
+                payload['voice_profile_id'] = run['inputs']['voice_profile_id']
+            payload['voice_mode'] = 'manual' if payload.get('voice_profile_id') else 'personal_clone'
             if run['inputs'].get('regenerate_voice'):
                 payload['generation_key'] = key
             s['automation']['script_selection'] = {'mode':'automatic','script_id':script['id']}
         elif not edit or edit['voice_id'] != voice['id']:
+            from .studio_sources import source_goal
+            goal = source_goal(s, self.settings.source_min_usable)
+            if not goal['ready']:
+                from .source_policy import goal_message
+                s.update(status='source_wait', message=('사용할 촬영 영상을 추가하거나 다시 선택해 주세요.'
+                    if s.get('creation_mode') == 'self_shot' else s.get('source_search', {}).get('message', '')
+                    if s.get('source_acquisition', {}).get('hold') else '소스 자동 추가 수집 대기 · '+goal_message(goal)), progress=0)
+                s['automation']['stage'] = 'sources'
+                return
             if digest(voice['path']) != voice['sha256']: raise Conflict('음성 파일이 변경되었습니다.')
-            stage, status, message = 'edit', 'editing', '장면·자막 구성 및 프로젝트 생성 중'
+            stage, status, message = 'edit', 'editing', '장면·자막 구성 및 프로젝트 생성 대기'
             s['approved_voice_id'] = voice['id']
             s['automation']['voice_selection'] = {'mode':'automatic','voice_id':voice['id']}
-            payload = dict(script_id=script['id'], voice_id=voice['id'], source_ids=run['inputs'].get('source_ids'),
+            # Freeze the exact validated inventory used by this edit, including
+            # sources acquired while script and voice were already in flight.
+            # Ten is the acquisition-pool goal. A manual Studio selection may
+            # use fewer clips and must never silently include excluded footage.
+            source_ids = run['inputs'].get('source_ids', goal['source_ids'])
+            run['inputs']['source_ids'] = source_ids
+            payload = dict(script_id=script['id'], voice_id=voice['id'], source_ids=source_ids,
                            changes=run['inputs'].get('changes',[]), base_edit_id=run['inputs'].get('base_edit_id'))
-        elif not edit.get('draft_path') and not edit.get('export_verified'):
-            stage, status, message, payload = 'register', 'registering', 'CapCut 프로젝트 등록 중', {'edit_id':edit['id'], 'launch':False}
+        elif not edit.get('draft_path') and not edit.get('export_verified') and not edit.get('registration_deferred'):
+            stage, status, message, payload = 'register', 'registering', 'CapCut 프로젝트 등록 대기', {'edit_id':edit['id'], 'launch':False}
         elif not edit.get('export_path'):
-            stage, status, message, payload = 'export', 'exporting', 'CapCut 최종 MP4 내보내기 중', {'edit_id':edit['id']}
+            stage, status, message, payload = 'export', 'exporting', 'CapCut 최종 MP4 내보내기 대기', {'edit_id':edit['id']}
         else:
+            from .studio_sources import sync_ready_source_status
+            sync_ready_source_status(s, db, self.settings.source_min_usable)
             run.update(status='completed', completed=time.time())
             s['latest_completed_run_id'] = run['id']
             s['automation'].update(stage='completed', completed_at=time.time())
@@ -382,7 +434,11 @@ class WorkflowMixin:
                        'web_render':'최종 MP4 내보내기 완료 · 웹 렌더링으로 복구'}.get(edit.get('export_kind'), 'CapCut 최종 영상 내보내기 완료')
             s.update(status='completed', message=message, progress=100, error='')
             return
-        self.store.enqueue(db, s['id'], stage, payload, stage+':'+key)
+        queue_key = stage+':'+key+(':personal' if stage=='voice' and wrong_automatic_voice else '')
+        existing = db.execute('SELECT status FROM jobs WHERE key=?', (queue_key,)).fetchone()
+        if existing and existing['status'] == 'failed' and s.get('error'):
+            return
+        self.store.enqueue(db, s['id'], stage, payload, queue_key)
         if s['automation'].get('stage') != stage:
             self.store.event(db, s['id'], 'automatic_stage', {'stage':stage, 'message':message})
         s['automation']['stage'] = stage
@@ -396,6 +452,9 @@ class WorkflowMixin:
             reason = json.loads(hold.read_text(encoding='utf-8')).get('reason', '소스 검증 미완료')
             raise RuntimeError('편집 소스 재검토 필요: ' + str(reason)[:400])
         checkpoint = job['checkpoint']
+        if edit.get('registration_deferred') and not edit.get('draft_path'):
+            checkpoint.setdefault('native_export_unavailable', edit.get('registration_note', 'CapCut 프로젝트 등록 대기'))
+            self.store.checkpoint(job['id'], checkpoint)
         if not checkpoint.get('native_export_unavailable'):
             try:
                 result = AutoCapcutAdapter(self.settings).export(job_id=job['id'], draft_name=edit['draft_name'], draft_path=Path(edit['draft_path']))
@@ -426,6 +485,10 @@ class WorkflowMixin:
     def render_feedback(self, state, job, plan):
         """Rebind scene IDs by source identity and narration, never by list position."""
         import difflib
+        if state.get('creation_mode') == 'self_shot':
+            # Select within the existing process boundary, then publish evidence
+            # of reuse in the common saved plan and resulting detail screen.
+            plan['footage_policy'] = 'owned-only-reuse-v1'
         changes = copy.deepcopy(job['payload'].get('changes', []))
         if not changes: return self._process(state, job, 'render', {'plan':plan})
         base = next(e for e in state['edits'] if e['id']==job['payload']['base_edit_id'])
@@ -456,14 +519,26 @@ class WorkflowMixin:
         return {**plan_revision(self.settings, plan, p['request'], start, end), 'base_edit_id':edit['id'], 'feedback_hash':p['feedback_hash']}
 
     def pipeline(self, state):
+        jobs = state.get('jobs')
+        if jobs is None:
+            jobs = self.store.jobs(state['id'])
+        production_jobs = [j for j in jobs if j['kind'] in {
+            'prepare', 'collect_sources', 'refresh_sources', 'rewrite', 'voice', 'edit', 'revision', 'revise',
+            'edit_request', 'register', 'export'}]
+        # A saved stage is a checkpoint, not evidence that a worker is running.
+        execution = ('running' if any(j['status']=='running' for j in production_jobs)
+                     else 'queued' if any(j['status']=='queued' for j in production_jobs)
+                     else 'failed' if state.get('error')
+                     else 'blocked' if state.get('production_blockers') or state.get('source_acquisition', {}).get('hold')
+                     else 'paused' if state.get('automation', {}).get('paused_by_user')
+                     else 'waiting')
         runs = copy.deepcopy(state.get('runs', []))
         if not runs:
             runs = [dict(id='legacy', number=1, status='legacy', artifacts={
                 **{k:state.get(k) for k in ('script_id','voice_id','edit_id','original_text','transcript_path')}, 'sources':state['sources']})]
         for run in runs:
             if run['id']==state.get('run_id') and run['status'] not in {'completed','superseded'}:
-                if state.get('error'): run['status']='failed'
-                elif state['status'] in {'waiting_capcut','retry_wait','paused'}: run['status']='waiting'
+                run['status'] = execution
             a = run['artifacts']
             script = next((v for v in state['scripts'] if v['id']==a.get('script_id')), {})
             voice = next((v for v in state['voices'] if v['id']==a.get('voice_id')), {})
@@ -478,13 +553,29 @@ class WorkflowMixin:
             run['steps'] = []
             for key, label in STEPS:
                 status = 'completed' if available[key] else 'pending'
-                if run['id'] == state.get('run_id') and key == active_key and not available[key]:
-                    status = 'failed' if state.get('error') else 'waiting' if state['status'] in ('waiting_capcut','retry_wait','paused') else 'running'
+                current = run['id'] == state.get('run_id') and not run.get('video_url') and run.get('status') != 'completed'
+                if current and key == 'sources':
+                    from .studio_sources import source_goal
+                    status = 'completed' if source_goal(state,self.settings.source_min_usable)['ready'] else 'pending'
+                if current and status != 'completed':
+                    stage_kinds = {'sources':{'collect_sources','refresh_sources'}, 'transcript':{'prepare'}, 'script':{'prepare','rewrite'}, 'voice':{'voice'},
+                                   'project':{'edit','revision','revise','edit_request','register'}, 'export':{'export'}}
+                    step_jobs = [j for j in production_jobs if j['kind'] in stage_kinds.get(key, set())]
+                    status = ('running' if any(j['status']=='running' for j in step_jobs)
+                              else 'queued' if any(j['status']=='queued' for j in step_jobs)
+                              else 'failed' if step_jobs and step_jobs[0]['status']=='failed'
+                              else execution if key==active_key and execution not in {'running','queued'} else 'pending')
+                    if key == 'sources' and state.get('source_acquisition', {}).get('hold') and status not in {'running','queued'}:
+                        status = 'blocked'
                 if run['status']=='superseded' and status=='pending': status='superseded'
                 run['steps'].append(dict(key=key,label=label,status=status,
                     download_url=f"/api/studio/{state['id']}/download?run={run['id']}&asset={key}" if available[key] else None))
             if not a.get('top_pick'):
                 run['steps'][2]['label'] = '제작 대본 · 기존 선택'
+            if state.get('creation_mode') == 'self_shot':
+                run['steps'][0]['label'] = '내 촬영 영상'
+                run['steps'][1]['label'] = '제작 정보 준비'
+                run['steps'][2]['label'] = '직접 입력 대본' if state['self_shot']['script_mode'] == 'manual' else '자동 집필 대본'
             run['preview_url'] = self.media_url(state['id'], edit['preview_path']) if edit.get('preview_path') and Path(edit['preview_path']).is_file() else None
             run['video_url'] = self.media_url(state['id'], edit['export_path']) if available['export'] else None
         return runs

@@ -2,7 +2,7 @@
 import json
 import re
 
-DEFAULTS = dict(detection='all', period=336, kind='all', tier=1, sort='rank', assessment='all', account='')
+DEFAULTS = dict(detection='today', period=24, kind='all', tier=1, sort='rank', assessment='all', account='')
 CHOICES = dict(detection=('all', 'today'), period=(24, 72, 168, 336, 720),
                kind=('all', 'video', 'image'), tier=(0, 1, 2, 3),
                sort=('rank', 'views', 'comments', 'likes', 'recent'),

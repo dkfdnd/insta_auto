@@ -141,46 +141,47 @@ def test_each_criteria_gate_controls_real_tier(field, value):
     assert score_account([target,*peers],settings,now=now,criteria=values,followers=10000)[0].tier==0
 
 
-def test_script_validation_rejects_invented_personal_testimony():
-    from hotpost.script_rewriter import validate_variants
-    text="매일 바쁘시죠?\n가방을 직접 써보니 정말 가볍더라고요.\n출근길마다 이것저것 챙기느라 바쁘실 때 짐을 담아 보세요.\n댓글 남겨주세요?"
-    with pytest.raises(ValueError,match="경험"):
-        validate_variants({"variants":[{"text":text},{"text":text}]},"원본")
-
-
 def test_recipe_research_does_not_treat_comparison_brand_as_manufacturer():
     from hotpost.script_rewriter import research_subject
     assert research_subject({'caption':'허니콤보 좋아하시면 집에서 만들어보세요. 닭다리살에 전분을 입혀 구우면 돼요.'}) == 'recipe'
     assert research_subject({'caption':'아디다스 나일론 백팩, 넉넉한 수납공간'}) == 'product'
 
 
-def test_recipe_rewrite_rejects_unverified_texture_guarantee():
-    from hotpost.script_rewriter import validate_variants
-    text = ('치킨 집에서 만드는 법 아세요?\n이 조합만 알면 바삭한 닭구이가 완성되거든요.\n'
-            '닭다리살에 전분을 얇게 입혀 구우면 육즙은 갇히고 겉은 바삭해지죠.\n'
-            '달콤한 마늘간장 소스를 입혀도 눅눅해지지 않네요.\n댓글 남겨주세요?')
-    with pytest.raises(ValueError, match='보장'):
-        validate_variants({'variants':[{'text':text},{'text':text}]}, 'source')
+def test_script_writing_uses_shared_service_even_with_gemini_key(monkeypatch):
+    from hotpost import script_rewriter, studio_adapter, studio_services
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-only')
+    monkeypatch.setattr(studio_services, 'ensure_local', lambda *a: None)
+    monkeypatch.setattr(studio_adapter.StudioAdapter, 'editorial', lambda self, *a: {'shared': True})
+    import requests
+    monkeypatch.setattr(requests, 'post', lambda *a, **kw: pytest.fail('bypassed shared rules'))
+    assert script_rewriter._generate(Settings(), 'rewrite', {'purpose':'script_revision'}) == {'shared': True}
 
 
-def test_high_review_score_with_unresolved_issues_cannot_publish_script(tmp_path, monkeypatch):
+def test_legacy_rewrite_uses_shared_contract_and_keeps_advisory_findings(tmp_path, monkeypatch):
     from hotpost import script_rewriter as writer
     settings = Settings(data_dir=tmp_path, auto_capcut_root=tmp_path)
-    (tmp_path/'SCRIPT_ENGINE_SPEC.md').write_text('Spoken factual narration only.')
-    transcript = tmp_path/'transcript.json'; transcript.write_text('{"speech":[{"text":"source"}]}')
+    transcript = tmp_path/'transcript.json'; transcript.write_text('{"speech":[{"text":"source narration"}]}')
     manifest = tmp_path/'manifest.json'; manifest.write_text('{}')
-    monkeypatch.setattr(writer, 'validate_variants', lambda *_: [{'version':1,'text':'one'}, {'version':2,'text':'two'}])
-    def generate(_s, _instruction, data, **kwargs):
-        if kwargs.get('research'):
-            return {'text':'evidence'}
-        if 'variants' in data:
-            return {'passed':True, 'score':99, 'issues':['Unsupported popularity assertion']}
-        return {'variants':[]}
-    monkeypatch.setattr(writer, '_generate', generate)
-    with pytest.raises(RuntimeError, match='검토를 통과'):
-        writer.rewrite(settings, transcript, manifest, tmp_path/'out', lambda *_:None)
-    assert not (tmp_path/'out/scripts.json').exists()
-    assert not (tmp_path/'out/words-v1.txt').exists()
+    calls=[]
+    class Adapter:
+        def __init__(self, *a): pass
+        def submit(self, *args):
+            calls.append(args)
+            return {'id':'shared','state':'completed','result':{'scripts':[
+                {'text':'생성된 첫 번째 낭독문이에요.','angle':'같은 후킹 표현 1'},
+                {'text':'생성된 두 번째 낭독문이에요.','angle':'같은 후킹 표현 2'}], 'writing_contract':{'version':'shared'}}}
+    monkeypatch.setattr('hotpost.studio_adapter.StudioAdapter',Adapter)
+    monkeypatch.setattr('hotpost.studio_services.ensure_local',lambda *a:None)
+    monkeypatch.setattr('hotpost.studio_top_pick.choose',lambda *a:(1,{'issues':['낭독 호흡 보완'],'advisory_only':True}))
+    monkeypatch.setattr(writer,'_generate',lambda *a,**k:pytest.fail('old research/rules route'))
+    result=writer.rewrite(settings,transcript,manifest,tmp_path/'out',lambda *a:None)
+    assert calls[0][-1]['evidence_mode']=='benchmark'
+    assert result['variants'][0]['text']=='생성된 두 번째 낭독문이에요.'
+    assert result['writing_contract']['version']=='shared'
+    assert result['top_pick']['issues'] and (tmp_path/'out/words-v1.txt').is_file()
+    transcript.write_text('{"speech":[{"text":"corrected narration"}]}')
+    writer.rewrite(settings,transcript,manifest,tmp_path/'out',lambda *a:None)
+    assert calls[-1][2] == 'corrected narration'
 
 
 def test_pipeline_reuses_assets_and_produces_two_distinct_handoffs(tmp_path, monkeypatch):

@@ -12,7 +12,7 @@ def enrich_plan(settings, plan, caption, transcript, generate=None):
                 'screen_text': transcript.get('screen_text', '')}
     plan = {**plan, 'query_details': list(plan['query_details']), 'planning_notes': []}
     if generate is None:
-        # _generate already supports the local script_auto service without a Gemini key.
+        # _generate already supports the internal Codex adapter.
         from .script_rewriter import _generate
         generate = _generate
     try:

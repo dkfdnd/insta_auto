@@ -5,33 +5,30 @@
   const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   window.HotpostDisplay.theme($('#theme-toggle'));
   if(!document.documentElement.dataset.theme)document.documentElement.dataset.theme=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
-  let tasks=[], selectedId=null, requestedId=new URLSearchParams(location.search).get('work'), filter='all', tab='script', dirty=false, saving=false, timer, saveTimer, lastRevision=-1, activeEditId=null;
+  let tasks=[], selectedId=null, requestedId=new URLSearchParams(location.search).get('work'), requestedTab=new URLSearchParams(location.search).get('tab'), filter='all', listPage=1, listView=localStorage.getItem('studio-list-view')==='grid'?'grid':'board', lanePages={working:1,attention:1,finished:1}, tab='script', dirty=false, saving=false, timer, saveTimer, lastRevision=-1, activeEditId=null;
   const current=()=>tasks.find(t=>t.id===selectedId);
-  const board=window.StudioBoard.mount($('#work-list'),$('#overview'));
+  const board=window.StudioBoard.mount($('#work-list'),$('#overview'),$('#board-pagination'),$('#board-recent'));
   const updateJourney=window.StudioBoard.mountJourney($('#drawer-journey'));
-  $('#board-stages').innerHTML=[['attention','내가 확인할 영상'],['working','제작 중'],['finished','완성 영상']].map(([id,title],i)=>`<button data-jump-stage="${id}"><span>${String(i+1).padStart(2,'0')}</span>${title}</button>`).join('');
   const panels=new Map(), memories=new Map();
   let selecting=false;
   const description=t=>window.StudioBoard.describe(t);
-  const workspaceTab=value=>['original','script','voice'].includes(value)?'script':['edit','results','export'].includes(value)?'edit':value;
+  const workspaceTab=window.StudioWorkspace.route;
   document.addEventListener('production-draft',()=>{if(current())renderHero(current(),description(current()));});
   function updateDrawerHeader(){
     const t=current();if(!t)return;
     $('#drawer-title').textContent=window.StudioBoard.title(t);
-    $('#drawer-code').textContent='터진게시물 → 우리 영상 제작';
+    $('#drawer-code').textContent=t.creation_mode==='self_shot'?'내 촬영 영상 → 우리 쇼츠 제작':'터진게시물 → 우리 영상 제작';
     const d=description(t);
     $('#drawer-status').textContent=`${d.phase} · ${d.stageName} · ${d.label}`;
     updateJourney(t);applyDetailTab();$('#journey-current').textContent=d.phase;renderHero(t,d);
   }
   function renderHero(t,d){
-    const local=JSON.parse(localStorage.getItem('production-feedback-'+t.id)||'{}');const pending=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|voice-profile$|source:|caption:|start:|end:)/.test(k))||Object.keys(t.feedback||{}).length;
-    const next=d.steps.find((s,i)=>i>d.currentIndex&&s.state!=='done');
-    const empty=d.stage==='sources'&&!t.sources.length;
-    const title=d.complete&&pending?'기존 영상 완성 · 수정 내용 반영 전':d.complete?'완성 영상을 확인하세요':empty?'영상만 넣으면, 다음 단계로':d.stage==='sources'?'준비된 영상으로 이어가세요':d.stage==='script'?'우리만의 대본을 다듬을 차례':d.stage==='voice'?'목소리와 발음을 확인할 차례':d.stage==='edit'?'장면과 자막을 완성할 차례':d.stage==='export'?'완성 영상을 준비하고 있어요':'원본 내용을 확인하고 있어요';
-    const action=empty?'＋ 직접 영상 넣기':d.complete?'완성 영상 보기 →':d.stage==='sources'?'영상 선택하고 이어가기 →':'현재 단계 작업하기 →';
-    const html=`<div class="hero-stage-ring" style="--stage-angle:${d.done/6*360}deg" aria-label="6단계 중 ${d.done}단계 완료"><span><strong>${d.complete?'✓':{sources:1,script:2,edit:3}[workspaceTab(d.tab)]}</strong><small>${d.complete?'제작 완료':'/ 3 작업'}</small></span></div><div class="hero-copy"><div class="hero-state"><span class="hero-status ${d.state}">${d.state==='running'?'<i class="activity-dot" aria-hidden="true"></i>':''}${esc(d.complete&&pending?'수정 중 · 이전 영상 보관됨':d.label)}</span><span>${esc(d.stageName)}</span></div><h3>${title}</h3><p role="status">${esc(d.message)}</p><div class="hero-actions"><button class="primary" data-focus-current>${action}</button>${t.error&&!empty?'<button class="secondary" data-action="retry">다시 시도</button>':''}<span class="hero-next">${next?'다음 → '+esc(next.label):'마지막 단계 · 완성본 확인'}</span></div></div><details class="hero-controls"><summary aria-label="제작 제어">⋯</summary>${t.automation&&t.status!=='completed'?`<button class="secondary" data-action="${t.automation.active?'pause-auto':'resume-auto'}">${t.automation.active?'자동 진행 중지':'자동 진행 재개'}</button>`:'<span>제작 완료</span>'}</details>`;
-    const hero=$('#work-hero');
-    if(hero._markup!==html){const open=hero.querySelector('.hero-controls')?.open;hero.innerHTML=html;hero._markup=html;if(open)hero.querySelector('.hero-controls').open=true;}
+    const local=JSON.parse(localStorage.getItem('production-feedback-'+t.id)||'{}');
+    const pending=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|voice-profile$|source:|caption:|start:|end:)/.test(k))||Object.keys(t.feedback||{}).length;
+    const title=d.complete&&pending?'완성 영상 보관 중 · 수정 내용 반영 전':d.complete?'영상 제작 완료':d.stageName+' · '+d.label;
+    const html=`<div class="hero-copy"><div class="hero-state"><span class="hero-status ${d.state}">${d.steps.some(s=>s.live)?window.StudioBoard.activityMarkup(true):''}${esc(d.label)}</span><span>${d.done} / 6 단계 완료</span></div><h3>${esc(title)}</h3>${d.complete?'<button type="button" class="sd-secondary" data-focus-current>완성 영상 보기</button>':''}${t.error&&!d.steps.some(s=>s.live)?'<button type="button" class="sd-secondary" data-action="retry">중단 단계부터 재시도</button>':''}</div>`;
+    const hero=$('#work-hero');hero.dataset.productionLive=String(d.steps.some(s=>s.live));
+    if(hero._markup!==html){hero.innerHTML=html;hero._markup=html;}
   }
   function applyDetailTab(panel=$('#detail')){
     if(panel!==$('#detail'))return;
@@ -39,20 +36,26 @@
     const stage=description(current());
     $('#detail-tabs').querySelectorAll('button').forEach((b,i)=>{
       b.setAttribute('aria-pressed',String(b.dataset.detailTab===tab));
-      const steps=stage.steps.filter(s=>workspaceTab(s.tab)===b.dataset.detailTab),active=steps.some(s=>s.current),done=steps.every(s=>s.state==='done');
-      b.dataset.state=active?'current':done?'done':'pending';b.dataset.activity=active?stage.state:'';
-      if(active)b.setAttribute('aria-current','step');else b.removeAttribute('aria-current');
+      const state=window.StudioWorkspace.tabState(stage.steps,b.dataset.detailTab),active=state==='current',done=state==='done';
+      b.dataset.state=state;b.dataset.activity=active?stage.state:'';
+      const live=stage.steps.some(s=>workspaceTab(s.tab)===b.dataset.detailTab&&s.live);
+      b.dataset.live=String(live);b.setAttribute('aria-busy',String(live));
+      if(b.dataset.detailTab===tab)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');
       const status=b.querySelector('.glass-step-status');if(status)status.textContent=active?stage.label:done?'완료':'예정';
+      const number=b.querySelector('.glass-step-number');if(number)number.textContent=done?'✓':String(i+1).padStart(2,'0');
     });
+    const nav=$('#detail-tabs');
+    if(nav.dataset.selected!==tab){const button=nav.querySelector('[aria-pressed=true]'),bounds=nav.getBoundingClientRect(),item=button?.getBoundingClientRect();if(item){if(item.left<bounds.left)nav.scrollLeft-=bounds.left-item.left;else if(item.right>bounds.right)nav.scrollLeft+=item.right-bounds.right;}nav.dataset.selected=tab;}
     $('#work-drawer').dataset.view=tab;
     panel.querySelectorAll('[data-pf-section], [data-legacy-section]').forEach(el=>{el.hidden=workspaceTab(el.dataset.pfSection||el.dataset.legacySection)!==tab;});
     if(current()?.automation?.protocol===2){
       const summary=panel.querySelector('.pf-summary'), editor=panel.querySelector('.pf-editor');
-      if(summary)summary.hidden=tab!=='edit';if(editor)editor.hidden=false;
-      const actionbar=panel.querySelector('.pf-actionbar');if(actionbar)actionbar.hidden=tab==='edit'||tab==='sources'&&['sources','transcript'].includes(description(current()).stage);
+      if(summary)summary.hidden=tab!=='results';if(editor)editor.hidden=false;
+      const actionbar=panel.querySelector('.pf-actionbar');if(actionbar)actionbar.hidden=['edit','results'].includes(tab)||tab==='sources'&&['sources','transcript'].includes(description(current()).stage);
     }
-    const flow=panel.querySelector('#legacy-flow');if(flow)flow.hidden=tab!=='edit';
+    const flow=panel.querySelector('#legacy-flow');if(flow)flow.hidden=tab!=='results';
     panel.querySelectorAll('video,audio').forEach(m=>{if(m.closest('[hidden]'))m.pause();});
+    window.StudioDetail.fitScriptInputs(panel);
   }
   function rememberPanel(){
     if(!selectedId)return;
@@ -60,8 +63,8 @@
     panels.set(selectedId,panel);memories.set(selectedId,{tab,activeEditId,lastRevision,scroll:$('#drawer-scroll').scrollTop});
   }
   function showCompletedVideo(){
-    tab='edit';applyDetailTab();
-    const output=$('.pf-summary > video');if(output){output.scrollIntoView({block:'start'});output.focus({preventScroll:true});}
+    tab='results';applyDetailTab();
+    const output=$('[data-result-preview]');if(output){output.scrollIntoView({block:'start'});output.focus({preventScroll:true});}
   }
   async function openWork(id){
     if(selecting||!tasks.some(t=>t.id===id))return;
@@ -74,11 +77,15 @@
         const old=$('#detail'),panel=panels.get(id)||document.createElement('section');
         panel.id='detail';panel.setAttribute('aria-label','작업 상세');old.replaceWith(panel);
         selectedId=id;const memory=memories.get(id);
-        tab=memory?.tab||description(current()).tab;activeEditId=memory?.activeEditId||null;lastRevision=memory?.lastRevision??-1;dirty=false;
+        tab=memory?.tab||(['sources','script','voice','edit','results'].includes(requestedTab)?requestedTab:description(current()).tab);requestedTab=null;activeEditId=memory?.activeEditId||null;lastRevision=memory?.lastRevision??-1;dirty=false;
         if(!panel.childNodes.length||lastRevision!==current().revision&&!panel._legacyEditing)renderDetail();
         applyDetailTab();restoreScroll=memory?.scroll||0;
       }
-      $('#work-drawer').hidden=false;$('#journey-panel').open=!matchMedia('(max-width:750px)').matches;updateDrawerHeader();syncDrawerMode();
+      $('#work-drawer').hidden=false;
+      // Hidden drawers have no usable menu bounds. Recalculate after opening,
+      // including when the remembered tab matches the previously selected tab.
+      $('#detail-tabs').dataset.selected='';
+      $('#journey-panel').open=false;updateDrawerHeader();syncDrawerMode();
       if(restoreScroll!==null)$('#drawer-scroll').scrollTop=restoreScroll;
       const url=new URL(location.href);url.searchParams.set('work',id);history.replaceState(null,'',url);
       renderList();$('#drawer-title').focus({preventScroll:true});
@@ -95,18 +102,26 @@
     }catch(e){toast(e.message);}finally{selecting=false;}
   }
   function syncDrawerMode(){
-    const drawer=$('#work-drawer'),modal=!drawer.hidden&&(drawer.classList.contains('expanded')||matchMedia('(max-width:750px)').matches);
+    const drawer=$('#work-drawer'),modal=!drawer.hidden;
+    $('#work-backdrop').hidden=!modal;
     $('main').inert=modal;$('.rail').inert=modal;
     document.body.style.overflow=modal?'hidden':'';
     drawer.setAttribute('role',modal?'dialog':'complementary');
     if(modal)drawer.setAttribute('aria-modal','true');else drawer.removeAttribute('aria-modal');
   }
+  $('#work-backdrop').addEventListener('click',closeWork);
+  window.addEventListener('resize',()=>{window.StudioDetail.fitScriptInputs($('#detail'));if(current()){$('#detail-tabs').dataset.selected='';applyDetailTab();}});
   const revision=(t, collection, id)=>t[collection].find(r=>r.id===id);
   const time = n => `${Math.floor(n/60).toString().padStart(2,'0')}:${(n%60).toFixed(1).padStart(4,'0')}`;
   const date = n => new Date(n*1000).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
   function toast(message){$('#toast').textContent=window.StudioBoard.message(message);$('#toast').hidden=false;clearTimeout(timer);timer=setTimeout(()=>$('#toast').hidden=true,4500);}
   async function api(path,body){const r=await fetch('/api/studio'+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const data=await r.json();if(!r.ok)throw new Error(window.StudioBoard.message(data.error,'요청을 처리하지 못했어요. 잠시 후 다시 시도하세요.'));return data;}
   function updateTask(t){const index=tasks.findIndex(x=>x.id===t.id);if(index>=0)tasks[index]=t;else tasks.unshift(t);renderList();updateDrawerHeader();}
+  document.addEventListener('studio-self-shot-created',async event=>{
+    updateTask(event.detail);filter='all';listPage=1;$('#search').value='';
+    $('#filters').querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('selected',b.dataset.filter==='all'));
+    await openWork(event.detail.id);tab='sources';renderDetail();applyDetailTab();
+  });
   async function action(kind,data={},options={}){
     const t=current();if(!t)return;
     try{const result=await api(`/${t.id}/${kind}`,{revision:t.revision,...data});updateTask(result);if(!options.quiet){toast(options.message||'저장했습니다.');renderDetail();}return result;}
@@ -114,13 +129,17 @@
   }
   function renderList(){
     $('#total-count').textContent=tasks.length;$('#rail-count').textContent=tasks.length;
-    const n=board.render(tasks,{selectedId,filter,query:$('#search').value});
+    const n=board.render(tasks,{selectedId,filter,query:$('#search').value,page:listPage,view:listView,lanePages});
+    listPage=Number($('#work-list').dataset.page)||1;lanePages=JSON.parse($('#work-list').dataset.lanePages||JSON.stringify(lanePages));
+    $('#board-views').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.listView===listView)));
+    $('#filters').querySelectorAll('[data-filter]').forEach(b=>{b.classList.toggle('selected',b.dataset.filter===filter);b.setAttribute('aria-pressed',String(b.dataset.filter===filter));});
     $('#board-empty').hidden=n>0;
-    $('#board-empty').textContent=tasks.length?'조건에 맞는 작업이 없습니다. 검색어나 필터를 바꿔보세요.':'아직 제작 중인 영상이 없습니다. 소재 탐색에서 영상을 추가하세요.';
+    $('#board-empty').textContent=tasks.length?(filter==='running'&&!$('#search').value?'현재 진행 중인 작업이 없습니다. 확인이 필요한 작업은 ‘확인 필요’ 탭에서 볼 수 있어요.':'조건에 맞는 작업이 없습니다. 검색어나 필터를 바꿔보세요.'):'내 촬영 영상으로 새 제작을 시작하거나 터진게시물에서 소재를 추가하세요.';
   }
   function renderDetail(){
     const t=current();const panel=$('#detail');panel.hidden=!t;if(!t)return;
-    if(t.automation?.protocol===2){lastRevision=t.revision;window.ProductionFlow.mount(panel,t,{editor:true,onUpdate:updateTask,onRender:()=>applyDetailTab(panel),onTab:next=>{tab=next;applyDetailTab(panel);$('#drawer-scroll').scrollTop=0;}});applyDetailTab(panel);return;}
+    const requestedRun=new URLSearchParams(location.search).get('run');
+    if(t.automation?.protocol===2){lastRevision=t.revision;window.ProductionFlow.mount(panel,t,{editor:true,selectedRun:requestedRun,onUpdate:updateTask,onRender:()=>applyDetailTab(panel),onTab:next=>{tab=next;applyDetailTab(panel);$('#drawer-scroll').scrollTop=0;}});applyDetailTab(panel);return;}
     panel._legacyEditing=false;
     const openDetails=Array.from(panel.querySelectorAll('details[open]')).map(d=>d.querySelector('summary')?.textContent);
     lastRevision=t.revision;
@@ -131,6 +150,7 @@
     <div id="legacy-flow"></div><div data-legacy-section="results">${automationPanel(t)}</div>
     <div data-legacy-section="sources"><div class="panel"><h3>직접 영상 넣기</h3><div data-upload-widget></div><button class="primary" data-action="use-sources" ${t.sources.length&&['sources','transcript'].includes(description(t).stage)?'':'disabled'}>보유 영상으로 제작 이어가기 →</button></div>${sourceSearchPanel(t)}<div class="panel"><h3>확보한 소스 ${t.sources.length}개</h3><div class="source-strip">${t.sources.map(src=>`<video src="${esc(src.url)}" controls preload="none"></video>`).join('')}</div></div></div>
     <div data-legacy-section="original" class="panel">${window.ProductionFlow.originalPanel(t,true).replace('data-pf="save-original"','data-action="save-original"')}</div><div data-legacy-section="script">${scriptPanel(t)}</div><div data-legacy-section="voice">${voicePanel(t)}</div><div data-legacy-section="edit">${editPanel(t,selectedEdit)}</div>`;
+    window.StudioDetail.simplifyLegacy(panel,t);
     window.ProductionFlow.mount($('#legacy-flow'),t,{onUpdate:updateTask});
     window.SourceUpload.bind(panel,t,result=>{updateTask(result);},()=>{panel._legacyEditing=false;renderDetail();});
     panel.querySelectorAll('details').forEach(d=>{if(openDetails.includes(d.querySelector('summary')?.textContent))d.open=true;});
@@ -155,9 +175,9 @@
   }
   function scriptPanel(t){
     const s=revision(t,'scripts',t.script_id);
-    if(!s)return `<div class="panel pending"><span class="spinner"></span><h3>자료와 추천 대본을 준비하고 있어요</h3>자료 확보가 완료되면 여기에서 대본을 검토할 수 있습니다.</div>`;
+    if(!s)return `<div class="panel pending">${description(t).steps.some(step=>step.live)?'<span class="spinner"></span>':''}<h3>대본이 아직 없습니다</h3>자료 확보와 대본 생성이 끝나면 여기에 표시됩니다.</div>`;
     const proposals=t.proposals.filter(p=>p.script_id===s.id);
-    return `<div class="detail-grid"><div class="panel"><h3>원본과 참고 자료</h3><p class="muted">원본의 매력을 참고하되 새로운 문장으로 구성합니다.</p><p>원본 발화는 2단계에서 확인하고 교정할 수 있어요.</p><div class="source-strip">${t.sources.map((src,i)=>`<video src="${esc(src.url)}#t=1" controls preload="metadata" title="소스 ${i+1}"></video>`).join('')}</div><a class="muted" href="https://www.instagram.com/p/${encodeURIComponent(t.shortcode)}/" target="_blank" rel="noopener">원본 게시물 보기 ↗</a><div class="subsection"><h3>대본 버전</h3><div class="version-list">${t.scripts.slice().reverse().map((v,i)=>`<div class="version-item"><div>버전 ${t.scripts.length-i} ${v.id===s.id?'<span class="pill draft_review">현재</span>':''}<br><small>${date(v.created)} · ${{manual:'직접 수정',recommended:'AI 추천',automatic_script_auto:'자동 선택 대본',ai_proposal:'AI 수정',restored:'이전 버전 복원'}[v.origin]||v.origin}</small></div><button data-restore="${v.id}" ${v.id===s.id?'disabled':''}>복원</button></div>`).join('')}</div></div></div>
+    return `<div class="detail-grid"><div class="panel"><h3>원본과 참고 자료</h3><p class="muted">원본의 매력을 참고하되 새로운 문장으로 구성합니다.</p><p>원본 발화는 2단계에서 확인하고 교정할 수 있어요.</p><div class="source-strip">${t.sources.map((src,i)=>`<video src="${esc(src.url)}#t=1" controls preload="metadata" title="소스 ${i+1}"></video>`).join('')}</div><a class="muted" href="https://www.instagram.com/p/${encodeURIComponent(t.shortcode)}/" target="_blank" rel="noopener">원본 게시물 보기 ↗</a><div class="subsection"><h3>대본 버전</h3><div class="version-list">${t.scripts.slice().reverse().map((v,i)=>`<div class="version-item"><div>버전 ${t.scripts.length-i} ${v.id===s.id?'<span class="pill draft_review">현재</span>':''}<br><small>${date(v.created)} · ${{manual:'직접 수정',recommended:'AI 추천',automatic_script_auto:'자동 선택 대본',automatic_codex:'Codex 자동 집필',ai_proposal:'AI 수정',restored:'이전 버전 복원'}[v.origin]||v.origin}</small></div><button data-restore="${v.id}" ${v.id===s.id?'disabled':''}>복원</button></div>`).join('')}</div></div></div>
     <div class="panel"><div class="row"><h3>추천 대본</h3><span class="pill ${t.approved_script_id===s.id?'draft_review':'script_review'}">${t.approved_script_id===s.id?(t.automation?.script_selection?.script_id===s.id?'자동 선택':'승인 완료'):'검토 대기'}</span></div><p class="muted">대본을 수정하면 음성과 편집을 다시 만들어야 합니다. 이전 대본은 버전 목록에 보존됩니다.</p><textarea id="script-editor" aria-label="대본 편집">${esc(s.text)}</textarea><div class="editor-footer"><small id="save-status">저장됨 · ${s.text.length}자</small><button class="quiet" data-action="save-script">저장</button><button class="primary" data-action="approve-script" ${t.approved_script_id===s.id?'disabled':''}>대본 승인 · 음성 생성 →</button></div>
     <button class="quiet" data-action="check-script">현재 문장 검사</button><div id="script-review" aria-live="polite"></div>
     <div class="subsection"><h3>AI와 함께 다듬기</h3><p class="muted">수정안을 비교한 뒤 적용합니다. 직접 고친 대본은 보존됩니다.</p><textarea class="request" id="script-request" placeholder="예: 첫 문장을 더 궁금하게, 설명은 자연스러운 말투로 바꿔줘" aria-label="대본 AI 수정 요청"></textarea><div class="editor-footer"><small>${t.jobs.some(j=>j.kind==='proposal'&&['queued','running'].includes(j.status))?'AI가 수정안을 준비 중입니다…':''}</small><button class="secondary" data-action="propose-script">수정안 만들기</button></div></div>
@@ -165,7 +185,7 @@
   }
   function voicePanel(t){
     const s=revision(t,'scripts',t.script_id),v=revision(t,'voices',t.voice_id);
-    const busy=t.status==='voice_generating';
+    const busy=description(t).steps.some(step=>step.id==='voice'&&step.live);
     return `<div class="detail-grid"><div class="panel"><h3>${t.automation?.script_selection?.script_id===s?.id?"자동 선택 대본":"승인 대본"}</h3><p class="muted">이 버전의 대본으로 생성한 음성입니다.</p><div class="reference-box">${esc(s?.text||'대본을 먼저 승인해 주세요.')}</div><div class="subsection"><h3>음성 이력 · 전후 비교</h3><div class="version-list">${t.voices.slice().reverse().map((a,i)=>`<div class="version-item" style="display:block"><div class="row"><b>음성 ${t.voices.length-i}</b><small>${a.script_id===t.script_id?'현재 대본':'이전 대본'} · ${a.duration.toFixed(1)}초</small></div><audio controls preload="none" src="${esc(a.path_url)}" style="width:100%;height:34px;margin-top:10px"></audio></div>`).join('')||'<p class="muted">생성된 음성이 여기에 보관됩니다.</p>'}</div></div></div>
     <div class="panel"><div class="row"><h3>내 목소리 확인하기</h3><span class="pill voice_review">${busy?'음성 생성 중':v?(t.automation?.voice_selection?.voice_id===v.id?'자동 선택 · 청취 가능':'청취 후 승인'):'대본 준비 대기'}</span></div><p class="muted">목소리와 발음, 문장 사이의 호흡을 확인해 주세요.</p>
     ${busy?'<div class="pending"><span class="spinner"></span><h3>내 목소리로 읽고 있어요</h3>창을 닫아도 작업은 계속됩니다. 다른 대본을 먼저 검토해도 됩니다.</div>':v?`<div class="voice-player"><div class="waveform">${Array.from({length:42},(_,i)=>`<i style="height:${10+Math.abs(Math.sin(i*1.8))*34}px"></i>`).join('')}</div><audio id="voice-player" controls preload="metadata" src="${esc(v.path_url)}"></audio><h4>음성 ${t.voices.indexOf(v)+1} · ${v.duration.toFixed(1)}초</h4><p>최종 사용 음성 · ${v.speed.toFixed(2)}배속 · 선택한 음성 속도로 편집합니다</p></div><div class="editor-footer"><small>${t.approved_voice_id===v.id?'이 음성으로 편집 중이거나 초안이 준비되었습니다.':'괜찮다면 영상 편집을 시작하세요.'}</small><button class="primary" data-action="approve-voice" ${t.approved_voice_id===v.id?'disabled':''}>음성 승인 · 영상 편집 →</button></div>`:'<div class="pending">대본을 승인하면 음성 생성이 시작됩니다.</div>'}
@@ -173,7 +193,7 @@
   }
   function editPanel(t,e){
     if(!e)return `<div class="panel pending">${t.status==='editing'?'<span class="spinner"></span><h3>자막과 장면을 맞추고 있어요</h3>선택한 음성에 맞춰 싱크와 강조를 구성합니다.':'<h3>음성을 승인하면 초안을 만들어요</h3>대본과 음성 검토를 먼저 완료해 주세요.'}</div>`;
-    const p=e.plan,busy=t.status==='editing',historical=e.id!==t.edit_id;
+    const p=e.plan,busy=description(t).steps.some(step=>step.id==='project'&&step.live),historical=e.id!==t.edit_id;
     return `<div class="preview-grid"><div class="preview-player"><video id="preview-video" src="${esc(e.preview_url)}" controls playsinline preload="metadata" poster="${esc(e.cover_url)}"></video><p>첫 프레임 썸네일 포함 · ${e.duration.toFixed(1)}초<br>초안 ${t.edits.indexOf(e)+1} / ${t.edits.length} · ${e.review_count}개 장면 확인 필요</p><a class="button secondary" href="${esc(e.preview_url)}" download="shorts-preview.mp4" style="display:block;text-align:center">영상 다운로드 ↓</a></div><div class="panel"><div class="row"><h3>초안 검토</h3><select id="edit-version" aria-label="편집 버전">${t.edits.map((a,i)=>`<option value="${a.id}" ${a.id===e.id?'selected':''}>초안 ${i+1} · ${date(a.created)} ${a.id===t.edit_id?'(현재)':'(이전)'}</option>`).join('')}</select></div>
     ${historical?'<div class="notice">이전 버전을 보고 있습니다. 구간 수정은 현재 버전에서 할 수 있습니다.</div>':''}
     ${busy?'<div class="notice"><span class="spinner"></span> 새 버전을 만드는 동안 현재 초안을 계속 볼 수 있습니다.</div>':''}
@@ -188,12 +208,15 @@
   document.addEventListener('click',async event=>{const el=event.target.closest('button');
     if(!el){const card=event.target.closest('[data-work-card]');if(card&&!event.target.closest('a,input,select,video,audio,details'))await openWork(card.dataset.workCard);return;}
     try{
-    if(el.hasAttribute('data-focus-current')){tab=description(current()).tab;applyDetailTab();$('#drawer-scroll').scrollTop=0;if(description(current()).complete){const output=$('.pf-summary > video');if(output){output.scrollIntoView({block:'start'});output.focus({preventScroll:true});}return;}const upload=$('[data-upload-open]');if(tab==='sources'&&upload){const choice=$('[data-field^="source:"]');if(current().sources.length&&choice)choice.focus();else upload.focus();}else $('#detail').querySelector('[data-pf-section="'+tab+'"] textarea, [data-pf-section="'+tab+'"] button')?.focus();return;}
+    if(el.hasAttribute('data-focus-current')){tab=description(current()).complete?'results':description(current()).tab;applyDetailTab();$('#drawer-scroll').scrollTop=0;if(description(current()).complete){const output=$('[data-result-preview]');if(output){output.scrollIntoView({block:'start'});output.focus({preventScroll:true});}return;}const upload=$('[data-upload-open]');if(tab==='sources'&&upload){const choice=$('[data-field^="source:"]');if(current().sources.length&&choice)choice.focus();else upload.focus();}else $('#detail').querySelector('[data-pf-section="'+tab+'"] textarea, [data-pf-section="'+tab+'"] button')?.focus();return;}
     if(el.dataset.jumpStage){const lane=$(`[data-stage="${el.dataset.jumpStage}"]`);$('#work-list').scrollTo({left:lane.getBoundingClientRect().left-$('#work-list').getBoundingClientRect().left+$('#work-list').scrollLeft,behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'instant':'smooth'});return;}
     if(el.dataset.work){await openWork(el.dataset.work);if(current()&&description(current()).complete)showCompletedVideo();return;}
     if(el.id==='close-work'){await closeWork();return;}
     if(el.id==='expand-work'){$('#work-drawer').classList.toggle('expanded');const full=$('#work-drawer').classList.contains('expanded');el.textContent=full?'패널로 축소':'전체화면';el.setAttribute('aria-pressed',String(full));syncDrawerMode();return;}
-    if(el.dataset.filter){filter=el.dataset.filter;$('#filters').querySelectorAll('button').forEach(b=>b.classList.toggle('selected',b===el));renderList();return;}
+    if(el.dataset.filter){filter=el.dataset.filter;listPage=1;lanePages={working:1,attention:1,finished:1};renderList();return;}
+    if(el.dataset.listView){listView=el.dataset.listView;localStorage.setItem('studio-list-view',listView);renderList();return;}
+    if(el.dataset.lanePage){lanePages[el.dataset.lane]=Number(el.dataset.lanePage);renderList();const lane=$('[data-stage="'+el.dataset.lane+'"]');lane.querySelector('.column-cards').scrollTop=0;lane.querySelector('[data-lane-page]:not(:disabled)')?.focus({preventScroll:true});return;}
+    if(el.dataset.boardPage){listPage=Number(el.dataset.boardPage);renderList();$('#work-list').scrollIntoView({block:'start'});$('#board-pagination button:not(:disabled)')?.focus({preventScroll:true});return;}
     if(el.dataset.detailTab||el.dataset.tab){if(dirty)await saveScript();tab=el.dataset.detailTab||el.dataset.tab;applyDetailTab();$('#drawer-scroll').scrollTop=0;return;}
     if(el.dataset.referenceSeek){const video=$('[data-reference-preview]');if(video)video.currentTime=Number(el.dataset.referenceSeek);return;}
     if(el.dataset.seek){$('#preview-video').currentTime=Math.ceil(Number(el.dataset.seek)*30)/30+.001;}
@@ -226,7 +249,7 @@
     else if(kind==='request-edit')await action(kind,{edit_id:current().edit_id,request:$('#edit-request').value,start:Number($('#selection-start').value),end:Number($('#selection-end').value)},{message:'선택한 구간의 수정 요청을 처리합니다.'});
     el.disabled=false;
   }catch(_){el.disabled=false;}});
-  document.addEventListener('input',event=>{if(event.target.dataset.field==='original'&&current()?.automation?.protocol!==2)localStorage.setItem('studio-original-'+current().id,event.target.value);if(event.target.closest('#detail')&&current()?.automation?.protocol!==2&&event.target.id!=='script-editor')$('#detail')._legacyEditing=true;if(event.target.id==='script-editor'){if($('#script-review'))$('#script-review').textContent='대본이 바뀌었어요. 다시 검사해 주세요.';dirty=true;const t=current();localStorage.setItem('studio-draft-'+t.id,JSON.stringify({base:t.script_id,text:event.target.value}));$('#save-status').textContent='수정 중 · 자동 저장 대기';$('[data-action="approve-script"]').disabled=false;clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveScript().catch(()=>{}),1200);}if(event.target.id==='search')renderList();});
+  document.addEventListener('input',event=>{if(event.target.dataset.field==='original'&&current()?.automation?.protocol!==2)localStorage.setItem('studio-original-'+current().id,event.target.value);if(event.target.closest('#detail')&&current()?.automation?.protocol!==2&&event.target.id!=='script-editor')$('#detail')._legacyEditing=true;if(event.target.id==='script-editor'){if($('#script-review'))$('#script-review').textContent='대본이 바뀌었어요. 다시 검사해 주세요.';dirty=true;const t=current();localStorage.setItem('studio-draft-'+t.id,JSON.stringify({base:t.script_id,text:event.target.value}));$('#save-status').textContent='수정 중 · 자동 저장 대기';$('[data-action="approve-script"]').disabled=false;clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveScript().catch(()=>{}),1200);}if(event.target.id==='search'){listPage=1;lanePages={working:1,attention:1,finished:1};renderList();}});
   document.addEventListener('change',async event=>{try{if(event.target.dataset.emphasis)await action('revise-edit',{edit_id:current().edit_id,changes:[{beat_id:event.target.dataset.emphasis,emphasis:Number(event.target.value)}]});if(event.target.id==='edit-version'){activeEditId=event.target.value;renderDetail();}}catch(_){}});
   $('#close-candidates').onclick=()=>$('#candidate-dialog').close();$('#close-script-dialog').onclick=()=>$('#script-dialog').close();
   document.addEventListener('dragover',event=>{if(event.dataTransfer?.types.includes('Files'))event.preventDefault();});
@@ -248,12 +271,12 @@
   async function refresh(){
     if(refreshing)return;refreshing=true;
     try{
-      const data=await api('');tasks=data.tasks;$('#connection').hidden=true;$('#work-list').classList.remove('board-stale');renderList();updateDrawerHeader();
+      const data=await api('');tasks=data.tasks;$('#board-loading').hidden=true;document.documentElement.dataset.studioConnection='live';$('#connection').hidden=true;$('#work-list').classList.remove('board-stale');renderList();updateDrawerHeader();
       if(requestedId){const id=requestedId;requestedId=null;if(tasks.some(t=>t.id===id))await openWork(id);else toast('요청한 작업을 찾을 수 없습니다.');}
       const t=current();
       if(t&&(t.automation?.protocol===2||t.revision!==lastRevision&&!dirty&&!document.activeElement.matches('textarea,input,select')&&!$('#detail')._legacyEditing&&!$('#detail')._uploading&&![...$('#detail').querySelectorAll('video,audio')].some(m=>!m.paused)))renderDetail();
       if(selectedId&&!t)await closeWork();
-    }catch(e){$('#work-list').classList.add('board-stale');$('#connection').textContent='서버와 연결되지 않았습니다. 마지막으로 확인한 상태이며 입력 내용은 보존됩니다. ';$('#connection').hidden=false;}
+    }catch(e){$('#board-loading').hidden=true;document.documentElement.dataset.studioConnection='stale';$('#work-list').classList.add('board-stale');$('#connection').textContent='서버와 연결되지 않았습니다. 마지막으로 확인한 상태이며 입력 내용은 보존됩니다. ';$('#connection').hidden=false;}
     finally{refreshing=false;}
   }
   refresh();setInterval(refresh,3000);

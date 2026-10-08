@@ -39,6 +39,7 @@ class StudioStore:
                   detail TEXT NOT NULL, created REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS automatic_runs (
                   run_key TEXT PRIMARY KEY, selection TEXT NOT NULL, created REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS jobs_task_activity ON jobs(task_id,status,kind);
             """)
         # Existing daily automatic tasks adopt the shared workflow without
         # launching new work or changing manually selected studio tasks.
@@ -72,7 +73,7 @@ class StudioStore:
         finally:
             db.close()
 
-    def create(self, code, title, automation=None):
+    def create(self, code, title, automation=None, *, initial=None, prepare=True):
         with self.transaction() as db:
             row = db.execute("SELECT state FROM tasks WHERE shortcode=?", (code,)).fetchone()
             if row:
@@ -83,6 +84,10 @@ class StudioStore:
                          script_id=None, approved_script_id=None, voice_id=None,
                          approved_voice_id=None, edit_id=None, original_text="",
                          created=time.time(), updated=time.time())
+            from .source_policy import current_policy
+            state['source_policy'] = current_policy()
+            if initial:
+                state.update(copy.deepcopy(initial))
             if automation:
                 state['automation'] = automation
                 if automation.get('protocol') == 2:
@@ -90,7 +95,8 @@ class StudioStore:
                     init_run(state)
             db.execute("INSERT INTO tasks VALUES (?,?,?,?,?)", (
                 state["id"], code, 0, json.dumps(state, ensure_ascii=False), state["updated"]))
-            self.enqueue(db, state["id"], "prepare", {}, "prepare:" + state["id"])
+            if prepare:
+                self.enqueue(db, state["id"], "prepare", {}, "prepare:" + state["id"])
             self.event(db, state["id"], "created", {})
             return state, True
 
@@ -153,21 +159,41 @@ class StudioStore:
                    (job_id, task_id, kind, key, json.dumps(payload, ensure_ascii=False), time.time(), time.time()))
         return job_id
 
-    def claim(self):
+    def claim(self, lane=None, *, task_id=None):
         with self.transaction() as db:
+            self.consume_previous_daily(db)
             self.pause_queued(db)
             # Finish an already-prepared video's downstream stages before the
             # next slow source search, so the first review becomes ready sooner.
+            lane_filter = (" AND kind IN ('collect_sources','refresh_sources')" if lane == 'sources' else
+                           " AND kind IN ('rewrite','proposal')" if lane == 'scripts' else
+                           " AND kind NOT IN ('collect_sources','refresh_sources','rewrite','proposal')" if lane == 'media' else
+                           " AND kind NOT IN ('collect_sources','refresh_sources')" if lane == 'production' else '')
+            parameters = [time.time()]
+            if task_id is not None:
+                lane_filter += ' AND task_id=?'
+                parameters.append(task_id)
             row = db.execute("""SELECT * FROM jobs WHERE status='queued'
                 AND COALESCE(json_extract(checkpoint,'$.not_before'),0)<=?
-                ORDER BY CASE WHEN kind<>'prepare' AND EXISTS (
+                AND (jobs.kind IN ('collect_sources','refresh_sources','proposal') OR NOT EXISTS (
+                  SELECT 1 FROM jobs AS running WHERE running.task_id=jobs.task_id
+                  AND running.status='running'
+                  AND running.kind NOT IN ('collect_sources','refresh_sources','proposal')
+                ))
+                """ + lane_filter + """
+                ORDER BY COALESCE((SELECT json_extract(tasks.state,'$.automation.priority')
+                  FROM tasks WHERE tasks.id=jobs.task_id),0) DESC,
+                CASE WHEN kind<>'prepare' AND EXISTS (
                   SELECT 1 FROM tasks WHERE tasks.id=jobs.task_id
                   AND json_extract(tasks.state,'$.automation.active')=1
-                ) THEN 0 ELSE 1 END,created LIMIT 1""", (time.time(),)).fetchone()
+                ) THEN 0 ELSE 1 END,created LIMIT 1""", parameters).fetchone()
             if row is None:
                 return None
             db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (time.time(), row["id"]))
             state = self.get(row['task_id'], db)
+            if row['kind'] == 'collect_sources':
+                state['source_search'] = {'status':'running','message':'소스 영상을 자동으로 확보하는 중','progress':0}
+                self.save(db,state)
             stages = {'prepare':('preparing','자료 준비'), 'rewrite':('rewriting','대본 재가공'),
                       'voice':('voice_generating','음성 제작'), 'edit':('editing','장면·자막 편집'),
                       'revision':('editing','구간 수정'), 'register':('registering','프로젝트 등록'),
@@ -176,10 +202,30 @@ class StudioStore:
                 status, label = stages[row['kind']]
                 state.update(status=status, error='', message=label+' 다시 진행 중')
                 self.save(db, state)
+            elif state.get('automation', {}).get('active') and row['kind'] in stages:
+                status, label = stages[row['kind']]
+                state.update(status=status, message=label+' 진행 중')
+                self.save(db, state)
             result = dict(row)
             result["payload"] = json.loads(result["payload"])
             result["checkpoint"] = json.loads(result["checkpoint"])
             return result
+
+    def consume_previous_daily(self, db):
+        """Consume legacy daily picks; full batches keep processing after midnight."""
+        from .daily_hot import date_key
+        today = date_key(time.time())
+        rows = db.execute("SELECT state FROM tasks WHERE json_extract(state,'$.automation.selection_mode')='automatic' AND json_extract(state,'$.automation.active')=1 AND COALESCE(json_extract(state,'$.automation.finish_selected_batch'),0)<>1").fetchall()
+        for row in rows:
+            state = json.loads(row[0])
+            auto = state['automation']
+            day = auto.get('selection_date_kst') or date_key(auto.get('selected_at', state['created']))
+            if day and day < today and state['status'] != 'completed':
+                auto.update(active=False, consumed_by_daily_policy=True)
+                db.execute("UPDATE jobs SET status='paused' WHERE task_id=? AND status='queued' AND kind NOT IN ('proposal','refresh_sources','suggest_edit') AND COALESCE(json_extract(payload,'$.launch'),0)<>1", (state['id'],))
+                state.update(status='paused', message='이전 감지일 · 소모 처리 · 명시적 재개 시 이어집니다')
+                self.save(db, state)
+                self.event(db, state['id'], 'daily_policy_consumed', {'selection_date_kst':day, 'today_kst':today})
 
     def checkpoint(self, job_id, value):
         with self.transaction() as db:
@@ -188,14 +234,18 @@ class StudioStore:
 
     @staticmethod
     def pause_queued(db):
+        db.execute("""UPDATE jobs SET status='paused' WHERE status='queued' AND kind='collect_sources'
+            AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=jobs.task_id
+                AND json_extract(tasks.state,'$.source_acquisition.hold') IS NOT NULL)""")
         db.execute("""UPDATE jobs SET status='paused' WHERE status='queued'
             AND kind NOT IN ('proposal','refresh_sources','suggest_edit')
             AND COALESCE(json_extract(payload,'$.launch'),0)<>1
             AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=jobs.task_id
                 AND json_extract(tasks.state,'$.automation.protocol')=2
-                AND json_extract(tasks.state,'$.automation.paused_by_user')=1)""")
+                AND (json_extract(tasks.state,'$.automation.paused_by_user')=1
+                     OR json_extract(tasks.state,'$.automation.consumed_by_daily_policy')=1))""")
 
-    def defer(self, job, message, seconds, waiting=False):
+    def defer(self, job, message, seconds, waiting=False, waiting_status=None):
         with self.transaction() as db:
             state = self.get(job['task_id'], db)
             checkpoint = job['checkpoint']
@@ -203,17 +253,21 @@ class StudioStore:
             if not waiting:
                 checkpoint['auto_retries'] = checkpoint.get('auto_retries',0)+1
                 checkpoint['retry_requested'] = True
-            state.update(status='waiting_capcut' if waiting else 'retry_wait', error='',
-                         message=message if waiting else f"일시적 오류 · 자동 재시도 {checkpoint['auto_retries']}/2 대기: {message}")
-            if state.get('pending_reproduction'):
+            if job['kind'] == 'collect_sources':
+                state['source_search'] = {'status':'queued','message':'소스 자동 수집 재시도 대기','error':str(message)[:500], 'progress':0}
+            else:
+                state.update(status=(waiting_status or 'waiting_capcut') if waiting else 'retry_wait', error='',
+                             message=message if waiting else f"일시적 오류 · 자동 재시도 {checkpoint['auto_retries']}/2 대기: {message}")
+            if state.get('pending_reproduction') and job['kind'] != 'collect_sources':
                 # The deferred job is no longer running; let the worker consume it
                 # once and transition at its boundary without losing the request.
                 checkpoint['not_before'] = 0
             db.execute("UPDATE jobs SET status='queued',checkpoint=?,updated=? WHERE id=?",
                        (json.dumps(checkpoint),time.time(),job['id']))
-            if state.get('automation', {}).get('paused_by_user') and job['kind'] not in {'proposal','refresh_sources','suggest_edit'} and not job['payload'].get('launch'):
+            if (state.get('automation', {}).get('paused_by_user') or state.get('automation', {}).get('consumed_by_daily_policy')) and job['kind'] not in {'proposal','refresh_sources','suggest_edit'} and not job['payload'].get('launch'):
                 db.execute("UPDATE jobs SET status='paused' WHERE id=?", (job['id'],))
                 state.update(status='paused', message='자동 진행 중지 · 재개하면 중단 단계부터 이어집니다')
+                if job['kind'] == 'collect_sources': state['source_search']['status'] = 'paused'
             self.save(db,state)
 
     def recover(self):
@@ -239,10 +293,10 @@ class StudioStore:
         with self.transaction() as db:
             state = self.get(job["task_id"], db)
             payload = job.get("payload", {})
-            if job['kind'] == 'refresh_sources':
+            if job['kind'] in {'refresh_sources','collect_sources'}:
                 state['source_search'] = {'status': 'failed', 'message': str(error)[:500], 'progress': 0}
             current = payload.get("script_id", state["script_id"]) == state["script_id"]
-            current &= job['kind'] != 'refresh_sources'
+            current &= job['kind'] not in {'refresh_sources','collect_sources'}
             if job['kind'] in {'proposal','suggest_edit'} and state.get('automation', {}).get('protocol')==2:
                 current = False
                 state['feedback_message'] = '수정안 생성 실패: '+str(error)[:500]

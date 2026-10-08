@@ -1,5 +1,5 @@
 (function () {
-  const defaults = {detection:'all',period:336,kind:'all',tier:1,sort:'rank',assessment:'all',account:''};
+  const defaults = {detection:'today',period:24,kind:'all',tier:1,sort:'rank',assessment:'all',account:''};
   async function request(options) {
     const response=await fetch('/api/display-settings',{cache:'no-store',...options});
     const data=await response.json();
@@ -7,9 +7,9 @@
     return data.values;
   }
   function describe(s) {
-    return [s.detection==='today'?'오늘 감지':({24:'24시간',72:'3일',168:'7일',336:'14일',720:'30일'}[s.period])+' · 전체 감지일',
+    return [s.detection==='today'?'오늘 발견 · 한국 시간 00시부터':'최근 '+({24:'24시간',72:'3일',168:'7일',336:'14일',720:'30일'}[s.period])+' 내 발견',
       {all:'전체 유형',video:'릴스',image:'사진'}[s.kind],s.tier?'🔥'.repeat(s.tier)+' 이상':'전체 등급',
-      {rank:'급상승순',views:'조회수순',comments:'댓글순',likes:'좋아요순',recent:'최신순'}[s.sort],
+      {rank:'급상승순',views:'조회수순',comments:'댓글순',likes:'좋아요순',recent:'최근 발견순'}[s.sort],
       {all:'모든 판정',confirmed:'성과 확인',provisional:'잠정 후보'}[s.assessment],s.account?'@'+s.account:'모든 계정'].join(' · ');
   }
   function theme(button) {

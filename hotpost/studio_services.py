@@ -10,24 +10,26 @@ import requests
 
 
 def ensure_local(settings, kind):
-    script = kind == 'script'
-    url = settings.studio_url if script else settings.voicebench_url
+    if kind == 'script':
+        from .writing.codex_writer import executable
+        executable()
+        return
+    url = settings.voicebench_url
     parsed = urlsplit(url)
     # Remote deployments remain managed by their owner.
     if parsed.scheme != 'http' or parsed.hostname not in ('127.0.0.1', 'localhost') or parsed.path not in ('', '/'):
         return
-    root = settings.studio_root if script else settings.voicebench_root
+    root = settings.voicebench_root
     session = requests.Session()
     session.trust_env = False
     headers = {}
     environment = os.environ.copy()
-    if not script:
-        from .voicebench_adapter import VoiceBenchAdapter
-        key = VoiceBenchAdapter(settings)._api_key()
-        headers['Authorization'] = 'Bearer ' + key
-        environment['VOICEBENCH_EXTERNAL_API_KEY'] = key
-    path = '/api/health' if script else '/v1/health'
-    expected = 'shortform-studio' if script else 'VoiceBench External TTS API'
+    from .voicebench_adapter import VoiceBenchAdapter
+    key = VoiceBenchAdapter(settings)._api_key()
+    headers['Authorization'] = 'Bearer ' + key
+    environment['VOICEBENCH_EXTERNAL_API_KEY'] = key
+    path = '/v1/health'
+    expected = 'VoiceBench External TTS API'
 
     def ready():
         try:
@@ -50,7 +52,7 @@ def ensure_local(settings, kind):
         if not python.is_file():
             raise RuntimeError(f'{kind} 서비스 실행 환경이 없습니다. 해당 프로젝트의 설치 절차를 완료하세요.')
         port = str(parsed.port or 80)
-        args = ['run.py', '--host', '127.0.0.1', '--port', port] if script else ['-m', 'voicebench', '--host', '127.0.0.1', '--port', port]
+        args = ['-m', 'voicebench', '--host', '127.0.0.1', '--port', port]
         with (settings.data_dir / f'{kind}-service.log').open('a', encoding='utf-8') as log:
             subprocess.Popen([str(python), '-X', 'utf8', *args], cwd=root, env=environment,
                              stdout=log, stderr=log, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

@@ -1,0 +1,63 @@
+/* The reference's moving color edge and three dots, gated by real worker activity.
+   Registered angle animates just the border; the card and its text stay still. */
+@property --studio-working-angle {
+  syntax:'<angle>';inherits:false;initial-value:0deg;
+}
+:root {--working-blue:#4285f4;--working-violet:#9561db;--working-teal:#1b9d93}
+[data-theme=dark] {--working-blue:#8ab4f8;--working-violet:#c7a1fa;--working-teal:#6fdbc9}
+html :is(.pf-current[data-live=true],.pf-steps li[data-live=true],.detail-tabs button[data-live=true],.work-hero[data-production-live=true],.work-card[data-production-live=true] .current-work) {
+  position:relative;isolation:isolate;
+}
+html :is(.pf-current[data-live=true],.pf-steps li[data-live=true],.detail-tabs button[data-live=true],.work-hero[data-production-live=true],.work-card[data-production-live=true] .current-work)::before {
+  content:'';position:absolute;inset:-1px;padding:2px;border-radius:inherit;
+  background:conic-gradient(from var(--studio-working-angle),var(--working-blue),var(--working-violet),var(--working-teal),var(--working-blue));
+  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;
+  pointer-events:none;animation:studio-working-orbit 3.2s linear infinite;
+}
+/* A slim halo helps the active stage stand out without washing out status colors. */
+html :is(.pf-steps li[data-live=true],.detail-tabs button[data-live=true]) {
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--working-blue) 12%,transparent)!important;
+}
+html .studio-working-dots {
+  display:inline-flex;align-items:center;justify-content:center;gap:4px;
+  min-width:36px;height:22px;padding:0 7px;border-radius:999px;
+  background:var(--status-info-fg);color:var(--status-info-bg);flex-shrink:0;
+  vertical-align:middle;line-height:1;
+}
+html .studio-working-dots[hidden] {display:none!important}
+html .production-flow .pf-current .studio-working-dots,
+html .studio-glass .hero-status .studio-working-dots {color:var(--status-info-bg)!important}
+html .studio-working-dots i {
+  display:block;width:4px;height:4px;border-radius:50%;background:currentColor;
+  animation:studio-working-dot 1.3s ease-in-out infinite;
+}
+html .studio-working-dots i:nth-child(2) {animation-delay:.16s}
+html .studio-working-dots i:nth-child(3) {animation-delay:.32s}
+html .hero-status .studio-working-dots {height:18px;min-width:30px;margin-right:6px;padding:0 6px}
+html :is(.pf-steps,.milestone-progress,.journey-list) [data-live=true] :is(.pf-step-number,.step-node,.journey-node) {
+  position:relative;animation:none!important;box-shadow:none!important;
+}
+html :is(.pf-steps,.milestone-progress,.journey-list) [data-live=true] :is(.pf-step-number,.step-node,.journey-node)::after {
+  content:'';position:absolute;inset:-5px;border-radius:50%;border:2px solid transparent;
+  border-top-color:var(--working-blue);border-right-color:var(--working-violet);
+  animation:studio-working-spin 1.15s linear infinite;pointer-events:none;
+}
+html .pf-progress[data-state=running] .pf-progress-track>div {background:var(--status-success-solid)!important}
+@keyframes studio-working-orbit {to {--studio-working-angle:360deg}}
+@keyframes studio-working-spin {to {transform:rotate(360deg)}}
+@keyframes studio-working-dot {
+  0%,65%,100% {transform:translateY(0);opacity:.55}
+  30% {transform:translateY(-2px);opacity:1}
+}
+html[data-studio-connection=stale] .studio-working-dots {display:none!important}
+html[data-studio-connection=stale] :is(.pf-current,.pf-steps li,.detail-tabs button,.work-hero,.current-work)::before,
+html[data-studio-connection=stale] :is(.pf-step-number,.step-node,.journey-node)::after {animation:none!important;content:none!important}
+@media (prefers-reduced-motion:reduce) {
+  html .studio-working-dots i,
+  html :is(.pf-current[data-live=true],.pf-steps li[data-live=true],.detail-tabs button[data-live=true],.work-hero[data-production-live=true],.work-card[data-production-live=true] .current-work)::before,
+  html :is(.pf-steps,.milestone-progress,.journey-list) [data-live=true] :is(.pf-step-number,.step-node,.journey-node)::after,
+  html .pf-spinner {animation:none!important}
+  html .studio-working-dots i {opacity:1;transform:none}
+}

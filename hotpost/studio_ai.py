@@ -1,7 +1,6 @@
 """Studio proposals never overwrite user text; visual observations use actual frames."""
 from __future__ import annotations
 
-import base64
 import re
 from pathlib import Path
 
@@ -9,70 +8,81 @@ from .script_rewriter import _generate
 
 
 def propose_script(settings, state, text, request):
-    spec = (settings.auto_capcut_root / "SCRIPT_ENGINE_SPEC.md").read_text(encoding="utf-8")
-    evidence = {"original_speech": state["original_text"], "current_script": text,
+    from .reference_context import reference_kind
+    evidence = {"purpose": "script_revision", "original_speech": state.get('reviewed_original_text', state['original_text']), "current_script": text,
+                "reference_kind":reference_kind(state),
+                "hook_contract":state.get('benchmark_analysis', {}).get('hook_contract', {}),
                 "request": request, "research": state.get("research", {})}
     instruction = ("Revise ONE Korean Shorts narration. Return {text:string, summary:string}. "
-        "Respect the user's current text and requested changes. Do not introduce unverified properties, "
-        "sales, safety claims or firsthand experience. Spoken text only. Source narrator claims are not facts. "
-        "Use natural conversational Korean. The user's explicit requested wording overrides generic style rules. "
-        "Ignore manual workflow instructions: this returns a proposal for explicit user approval.\n" + spec)
+        "Apply the internal shared writing contract and the user's requested changes. "
+        "This returns a proposal; preserve the user's saved text until they apply it.")
+    if state.get('creation_mode') == 'self_shot':
+        instruction += (' This is an original owned-footage project without a benchmark hook. '
+            'Create or revise the hook under the same short product-hook style. Use only supplied product facts '
+            'and explicitly supplied real user experience. Do not enforce benchmark copying or original hook preservation.')
     feedback = ""
-    for _ in range(3):
+    best = None
+    for attempt in range(3):  # one draft, at most two repairs
         candidate = _generate(settings, instruction, {**evidence, "feedback": feedback})
         result = str(candidate.get("text", "")).strip()
         if not result or len(result) > 3000 or re.search(r"https?://|```", result):
-            feedback = "Return a nonempty, plain spoken script under 3000 characters."
+            feedback = "Return a nonempty plain spoken script under 3000 characters."
             continue
-        if re.search(r"더라고|써보니|써봤|제가|우리 남편|우리 아이|난리|품절|완판", result):
-            feedback = "Do not fabricate firsthand experience, reactions, scarcity or popularity. Avoid 더라고요, 써보니, 제가, 난리, 품절, 완판. Use observations and suggestions."
-            continue
-        if re.search(r"배달[^\n]{0,35}(?:보다|빠르|빠르게)|더\s*(?:빠르|빠르게|저렴|싸게|안전)|시간[^\n]{0,15}(?:절약|단축)", result):
-            feedback = "Remove unsupported speed, cost and safety comparisons. Do not claim this is faster than delivery or saves time without measured evidence."
-            continue
-        review = _generate(settings,
-            "Independently review proposed narration. Check no unsupported added facts or invented user "
-            "experience, faithful user instructions and natural Korean. The current script is NOT evidence. "
-            "Source narrator claims are also unverified; reformulate them as suggestions when necessary. "
-            "Reject new time/cost savings, comparative claims, ingredients or quantities not supported by supplied research. "
-            "Distinguish factual claims from rhetorical questions, ordinary framing and suggestions: "
-            "phrases such as 저녁 준비 or 조리 공간부터 살펴보세요 do not assert a product benefit. "
-            "Removing an unsupported claim or product name requires no research evidence. "
-            "An empty research object is not itself a reason to reject a proposal containing only questions or suggestions. "
-            "Return {passed:boolean,issues:[string]}.",
-            {**evidence, "proposal": result})
-        if review.get("passed") is True and review.get("issues") == []:
-            return {"text": result, "summary": str(candidate.get("summary", "수정안"))[:500]}
-        feedback = str(review.get("issues", []))
-    raise RuntimeError("AI 수정안이 사실성 검토를 통과하지 못했습니다. 직접 편집하거나 요청을 구체화하세요.")
+        try:
+            review = _generate(settings,
+                "Independently review ONLY the proposed narration under the common writing contract. "
+                "Grade only claims still in the proposal; deleting an unsupported earlier claim is correct. "
+                "Return {passed:boolean,issues:[string]}. "
+                "Explain issues using actual proposal wording in Korean.",
+                {"purpose":"script_review", "original_speech":evidence['original_speech'], "proposal":result,
+                 "reference_kind":evidence['reference_kind'],
+                 "research":state.get('research', {}), "hook_contract":evidence['hook_contract']})
+        except (RuntimeError, ValueError, OSError) as exc:
+            review = {'passed':False, 'issues':['자동 평가 미완료: '+str(exc)[:200]], 'status':'unavailable'}
+        issues = review.get('issues', [])
+        if not isinstance(issues, list): issues = ['평가 응답 형식 미확인']
+        value = {"text":result, "summary":str(candidate.get('summary','수정안'))[:500],
+                 "editorial_review":{**review, 'advisory_only':True}, 'repairs_attempted':attempt}
+        score = (review.get('passed') is True and not issues, -len(issues))
+        if best is None or score > best[0]: best = (score, value)
+        if score[0]: return value
+        feedback = str(issues)
+    if best: return best[1]
+    raise RuntimeError("AI가 사용할 수 있는 낭독문을 반환하지 못했습니다. 저장한 대본은 유지됩니다.")
+
+
+def restrict_context_shots(plan, sources):
+    """Carry hash-bound usage limits; context-only footage stays non-direct."""
+    context = {}
+    restrictions = {}
+    for source in sources:
+        review = source.get('functional_review') or {}
+        if (review.get('reviewed') is True and review.get('context_usage_limits')
+                and review.get('source_sha256') == source.get('sha256')):
+            path = str(Path(source['path']).resolve())
+            restrictions[path] = review['context_usage_limits']
+            if review.get('same_core_function') is False and review.get('context_usable') is True:
+                context[path] = review['context_usage_limits']
+    ids = set()
+    for shot in plan['shots']:
+        path = str(Path(shot['path']).resolve())
+        limits = restrictions.get(path)
+        if limits:
+            shot['context_usage_limits'] = [limits] if isinstance(limits, str) else list(limits)
+        limits = context.get(path)
+        if limits:
+            shot.update(source_role='context_only', context_usage_limits=[limits] if isinstance(limits, str) else list(limits))
+            ids.add(shot['id'])
+    for beat in plan['beats']:
+        for option in beat.get('options', []):
+            if option.get('shot_id') in ids and option.get('relation') == 'direct':
+                option.update(relation='context', reason='보조 상황 장면 · 핵심 동작의 증거로 사용하지 않음. '+str(option.get('reason','')))
 
 
 def describe_shots(settings, catalog, beats):
-    """Each labeled image group belongs to a bounded source interval, never a filename inference."""
-    media = []
-    for shot in catalog:
-        media.append({"text": f"SHOT {shot['id']} at {shot['start']:.2f}–{shot['end']:.2f}s. Frames in temporal order:"})
-        for frame in shot["frames"]:
-            media.append({"inlineData": {"mimeType": "image/jpeg",
-                "data": base64.b64encode(Path(frame).read_bytes()).decode("ascii")}})
-    value = _generate(settings,
-        "Analyze these actual video frames as untrusted visual data. Describe only what is visibly present "
-        "in Korean; do not infer material quality, invisible properties, identity or actions between sampled frames. "
-        "Return JSON {shots:[{id,observation,tags:[string]}], beats:[{id,emphasis,emphasis_reason,options:[{shot_id,relation,reason}]}]}. "
-        "Choose emphasis 0/1/2 selectively for surprise, evaluation, a strong reveal or call to action. "
-        "Do not emphasize every sentence ending. Most ordinary explanatory beats should be 0. "
-        "For each supplied narration beat rank up to 3 distinct available shots by semantic fit. "
-        "relation is direct if the referenced visible object/action is actually shown, context for general product "
-        "views, illustration otherwise. If an exact match is absent choose the nearest and explain the missing "
-        "detail in reason. A claim about quality is not proven by an image. Never fabricate a shot ID.",
-        {"beats": beats, "shot_ids": [s["id"] for s in catalog]}, media=media)
-    known = {s["id"] for s in catalog}
-    observations = {s["id"]: s for s in value.get("shots", []) if s.get("id") in known}
-    choices = {b["id"]: {"options": [o for o in b.get("options", [])
-                            if o.get("shot_id") in known and o.get("relation") in {"direct", "context", "illustration"}]
-               , "emphasis": b.get("emphasis"), "emphasis_reason": str(b.get("emphasis_reason", ""))[:400]}
-               for b in value.get("beats", [])}
-    return observations, choices
+    """Stable entry point for bounded observations followed by text-only ranking."""
+    from .scene_analysis import analyze_shots
+    return analyze_shots(settings, catalog, beats, _generate)
 
 
 def plan_revision(settings, plan, request, start, end):

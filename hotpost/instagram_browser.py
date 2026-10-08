@@ -36,6 +36,8 @@ class InstagramBrowser:
                 str(folder), channel='chrome', headless=False, locale='ko-KR',
                 viewport={'width': 1200, 'height': 850},
             )
+            from .browser_profile import restore_platform_cookies
+            restore_platform_cookies(self.context, self.settings.data_dir, ['instagram'])
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.page.set_default_timeout(15000)
             return self

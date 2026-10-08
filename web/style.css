@@ -1,3 +1,13 @@
+.platform-logins { margin:0 0 20px;padding:18px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius); }
+.platform-login-heading { display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px; }
+.platform-login-heading h2 { font-size:15px; }
+.platform-login-heading p { margin:5px 0; }
+.platform-login-buttons { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px; }
+.platform-login-buttons>div { display:grid;gap:6px; }
+.platform-login-buttons small { color:var(--muted);font-size:11px; }
+.platform-login-buttons .connected { color:var(--accent); }
+#platform-session-message { margin:12px 0 0; }
+@media(max-width:600px) { .platform-login-buttons { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 :root {
   --bg: #f6f5f2; --panel: #ffffff; --panel-2: #f1efea; --line: #e6e2da;
   --text: #1c1b18; --muted: #6f6a60; --faint: #a39d92;
@@ -305,6 +315,15 @@ tr.acc.on td { background: var(--accent-soft); }
 .notification-item .btn { font-size:11px; padding:4px 8px; }
 .notification-empty { text-align:center; color:var(--muted); padding:25px; }
 .notification-panel { background:var(--panel); }
+.main-navigation{flex-wrap:wrap}
+.collection-notifications>.icon-button,.collection-notification-panel .icon-button{width:48px;height:48px}
+.collection-notification-panel{left:var(--collection-panel-left,auto);right:var(--collection-panel-right,0);top:calc(100% + 10px);width:420px;max-height:70vh;max-height:70dvh;overflow:auto;border-radius:16px}
+.collection-notification-panel .notification-head{justify-content:space-between}
+.collection-notification-panel #collection-health{margin:0;font-size:16px;line-height:1.65}
+.collection-notification-panel .notice-body{width:100%}
+.collection-notification-panel .notice-actions .btn{min-height:44px;display:inline-flex;align-items:center;white-space:normal;font-size:16px}
+.collection-notifications .notification-badge{background:#b91c1c;font-size:12px;top:-2px;right:-2px}
+@media(max-width:700px){.collection-notifications .collection-notification-panel{position:fixed;top:var(--collection-panel-top,150px);left:12px;right:12px;width:auto;max-height:calc(100vh - var(--collection-panel-top,150px) - 12px);max-height:calc(100dvh - var(--collection-panel-top,150px) - 12px)}}
 .notice { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:16px 18px; }
 .notice.info { color:var(--text); background:var(--panel-2); border-color:var(--line); }
 .notice-body { min-width:0; }

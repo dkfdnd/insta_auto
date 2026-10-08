@@ -27,7 +27,9 @@ class StudioHTTP:
             data = json.loads(self.rfile.read(length))
             if not isinstance(data, dict): raise ValueError("JSON 객체가 필요합니다.")
             parts = parsed.path.strip("/").split("/")
-            if len(parts) == 2:
+            if parts == ['api','studio','self-shot']:
+                self._json(studio.create_self_shot(data), 202)
+            elif len(parts) == 2:
                 codes = data.get("shortcodes", [])
                 if not isinstance(codes, list) or not 1 <= len(codes) <= 100:
                     raise ValueError("제작할 소재를 선택하세요. 한 번에 최대 100개씩 추가할 수 있습니다.")
@@ -64,6 +66,9 @@ class StudioHTTP:
             elif parts == ['api','studio','voices']:
                 from .voicebench_adapter import VoiceBenchAdapter
                 data=VoiceBenchAdapter(studio.settings).voices()
+                readiness=VoiceBenchAdapter(studio.settings).default_voice_status()
+                data['personal_default']={'available':bool(readiness.get('ready') and readiness.get('default_voice_kind')=='personal'),
+                                          'errors':readiness.get('errors',[])}
                 for voice in data.get('voices',[]):
                     if voice.get('preview_url'): voice['preview_url']='/api/studio/voices/'+voice['id']+'/preview'
                 self._json(data)

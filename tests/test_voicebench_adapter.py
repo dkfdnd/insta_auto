@@ -51,6 +51,40 @@ def _settings(tmp_path: Path) -> Settings:
                     voicebench_poll_interval=.01, voicebench_timeout=10)
 
 
+@pytest.mark.parametrize('status,data,expected', [
+    (200, {'status': 'released', 'released': True}, 'released'),
+    (200, {'status': 'busy', 'released': False, 'active_jobs': 1}, 'busy'),
+    (404, {}, 'unsupported'), (405, {}, 'unsupported'), (501, {}, 'unsupported'),
+])
+def test_idle_release_uses_authenticated_optional_api(tmp_path, status, data, expected):
+    class ResourceSession:
+        def post(self, url, **kwargs):
+            assert url.endswith('/v1/resources/release-idle')
+            assert kwargs['json'] == {}
+            assert kwargs['headers']['Authorization'] == 'Bearer secret'
+            assert kwargs['allow_redirects'] is False
+            return Response(data, status=status)
+    assert VoiceBenchAdapter(_settings(tmp_path), session=ResourceSession()).release_idle()['status'] == expected
+
+
+@pytest.mark.parametrize('status,data', [(401, {}), (500, {}), (302, {}), (200, {'status': 'unknown'})])
+def test_idle_release_does_not_hide_auth_or_invalid_response(tmp_path, status, data):
+    class ResourceSession:
+        def post(self, *a, **kw):
+            return Response(data, status=status)
+    with pytest.raises(RuntimeError):
+        VoiceBenchAdapter(_settings(tmp_path), session=ResourceSession()).release_idle()
+
+
+def test_script_only_installation_without_voice_key_skips_optional_release(tmp_path, monkeypatch):
+    monkeypatch.delenv('VOICEBENCH_API_KEY', raising=False)
+    settings = Settings(voicebench_api_key_file=tmp_path / 'not-configured')
+    class NoRequest:
+        def post(self, *a, **kw):
+            pytest.fail('No unauthenticated release request may be sent')
+    assert VoiceBenchAdapter(settings, session=NoRequest()).release_idle()['status'] == 'unconfigured'
+
+
 def test_voicebench_submits_once_and_downloads_wav(tmp_path):
     settings = _settings(tmp_path)
     wav = valid_wav()
@@ -85,6 +119,30 @@ def valid_wav():
         audio.setframerate(24000)
         audio.writeframes(b'\x01\x00' * 24000)
     return buffer.getvalue()
+
+
+@pytest.mark.parametrize('ready,kind', [(False,'personal'),(True,'official'),(True,None)])
+def test_automatic_personal_voice_never_falls_back_to_named_voice(tmp_path,ready,kind):
+    class Unready(Session):
+        def get(self,url,**kwargs):
+            assert url.endswith('/health')
+            return Response({'ready':ready,'default_voice_kind':kind,'errors':['참조 음성 준비 필요']})
+        def post(self,*a,**k):pytest.fail('No official/default replacement may be submitted')
+    target=_settings(tmp_path).data_dir/'personal.wav'
+    with pytest.raises(RuntimeError,match='복제 준비'):
+        VoiceBenchAdapter(_settings(tmp_path),session=Unready(valid_wav())).synthesize('실제 대본',target,require_personal_clone=True)
+    assert not target.exists()
+
+
+def test_automatic_clone_rejects_completed_legacy_named_request(tmp_path):
+    class Legacy(Session):
+        def get(self,url,**kwargs):
+            if url.endswith('/health'):return Response({'ready':True,'default_voice_kind':'personal'})
+            assert not url.endswith('/audio'), 'Wrong voice must not be downloaded'
+            return Response({'id':17,'status':'succeeded','voice_id':'qwen-sohee'})
+    settings=_settings(tmp_path)
+    with pytest.raises(RuntimeError,match='다른 목소리'):
+        VoiceBenchAdapter(settings,session=Legacy(valid_wav())).synthesize('실제 대본',settings.data_dir/'personal.wav',request_id=17,require_personal_clone=True)
 
 
 @pytest.mark.parametrize('returned_id', ['qwen-sohee', 'qwen-aiden', None])

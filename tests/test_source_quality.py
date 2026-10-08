@@ -43,7 +43,7 @@ def test_relevance_gate_and_reuse_gate_do_not_fill_to_twenty():
     assert selected == [clean]
     assert clean.selection_reason == "relevant_reusable_unique"
     assert "low_product_or_scene_similarity" in unrelated.rejection_reasons
-    assert "heavy_text_overlay" in captions.rejection_reasons
+    assert captions.blur_required
     assert "not_crop_friendly" in landscape.rejection_reasons
 
 

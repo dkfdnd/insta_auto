@@ -17,6 +17,9 @@ def test_focused_version_selector_switches_preview():
                 content_type='text/html', body='<div id="root"></div>'))
             page.goto('http://studio.test/')
             page.add_script_tag(path=str(Path(__file__).parents[1]/'web'/'studio-board.js'))
+            page.add_script_tag(path=str(Path(__file__).parents[1]/'web'/'studio-workspace.js'))
+            page.add_script_tag(path=str(Path(__file__).parents[1]/'web'/'studio-detail.js'))
+            page.add_script_tag(path=str(Path(__file__).parents[1]/'web'/'studio'/'source-view.js'))
             page.add_script_tag(path=str(Path(__file__).parents[1]/'web'/'production-flow.js'))
             page.evaluate("""() => ProductionFlow.mount(document.querySelector('#root'), {
                 id:'work-test', run_id:'v2', latest_completed_run_id:'v2',
@@ -27,10 +30,10 @@ def test_focused_version_selector_switches_preview():
             selector = page.locator('[data-pf-version]')
             selector.focus()
             selector.select_option('v1')
-            assert page.locator('.pf-summary > video').get_attribute('src') == '/video-1.mp4'
+            assert page.locator('[data-result-preview]').get_attribute('src') == '/video-1.mp4'
             selector.focus()
             selector.select_option('v2')
-            assert page.locator('.pf-summary > video').get_attribute('src') == '/video-2.mp4'
+            assert page.locator('[data-result-preview]').get_attribute('src') == '/video-2.mp4'
         finally:
             browser.close()
 
@@ -50,7 +53,10 @@ def flow_page():
         page.goto('http://studio.test/')
         web = Path(__file__).parents[1]/'web'
         page.add_style_tag(path=str(web/'production-flow.css'))
-        for name in ['studio-board.js', 'caption-editor.js', 'production-flow.js']:
+        page.add_style_tag(path=str(web/'studio-status.css'))
+        page.add_style_tag(path=str(web/'studio-activity.css'))
+        page.add_style_tag(path=str(web/'studio-detail.css'))
+        for name in ['studio-board.js', 'studio-workspace.js', 'studio-detail.js', 'caption-editor.js', 'studio/source-view.js', 'production-flow.js']:
             page.add_script_tag(path=str(web/name))
         page.evaluate('''() => {
             window.task = {id:'work-test', revision:1, run_id:'v2', latest_completed_run_id:'v1',
@@ -63,7 +69,7 @@ def flow_page():
                         status:n===1?'completed':i===0?'running':'pending'
                     }))}))};
             window.draw = () => ProductionFlow.mount(document.querySelector('#root'),task,{editor:true});
-            draw();
+            draw();document.querySelector('.pf-result-progress').open=true;
         }''')
         try:
             yield page
@@ -79,7 +85,8 @@ def test_current_step_order_real_activity_and_responsive_layout(flow_page):
     assert page.locator('[aria-current="step"] b').inner_text() == '1. 소스 확보'
     assert page.locator('.pf-current-message').inner_text() == '후보 다운로드/검증 3/20'
     assert page.locator('.pf-next').inner_text() == '다음 단계 · 2. 원본 대본 추출'
-    assert page.locator('.pf-spinner').count() == 2
+    assert page.locator('[data-live=true]').count() == 2
+    assert page.locator('.studio-working-dots').is_visible()
     # A previous completed video and task-local 100% must not fill the new run.
     assert page.locator('[role=progressbar]').get_attribute('aria-valuenow') == '0'
     boxes = page.locator('.pf-steps li').all()
@@ -88,13 +95,14 @@ def test_current_step_order_real_activity_and_responsive_layout(flow_page):
     assert boxes[0].bounding_box()['y'] < boxes[5].bounding_box()['y']
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     page.emulate_media(reduced_motion='reduce')
-    assert page.locator('.pf-spinner').first.evaluate('(el)=>getComputedStyle(el).animationName') == 'none'
+    assert page.locator('.studio-working-dots i').first.evaluate('(el)=>getComputedStyle(el).animationName') == 'none'
+    assert page.locator('[data-live=true] .pf-step-number').evaluate('(el)=>getComputedStyle(el,"::after").animationName') == 'none'
 
 
 @pytest.mark.parametrize('status,job,label', [
-    ('preparing','queued','실행 대기'), ('waiting_capcut','queued','외부 작업 대기'),
+    ('preparing','queued','실행 대기'), ('waiting_capcut','queued','제작 대기'),
     ('retry_wait','queued','재시도 대기'), ('paused','paused','일시중지'),
-    ('attention','failed','확인 필요'), ('script_review','done','검토 필요'),
+    ('attention','failed','확인 필요'), ('script_review','done','제작 대기'),
 ])
 def test_waiting_error_and_review_do_not_spin(flow_page,status,job,label):
     page = flow_page
@@ -103,7 +111,8 @@ def test_waiting_error_and_review_do_not_spin(flow_page,status,job,label):
         task.error=status==='attention'?'연결을 확인하고 재시도하세요.':''; draw();
     }''', [status,job])
     assert label in page.locator('.pf-phase').inner_text()
-    assert page.locator('.pf-spinner').count() == 0
+    assert page.locator('[data-live=true]').count() == 0
+    assert page.locator('.studio-working-dots').count() == 0
     if status == 'attention':
         assert page.locator('.pf-recovery [data-pf=retry]').count() == 1
 
@@ -122,10 +131,10 @@ def test_polling_preserves_draft_and_updates_stage_and_recovery(flow_page):
     assert page.locator('[aria-current=step] b').inner_text() == '4. TTS'
     assert page.locator('[role=progressbar]').get_attribute('aria-valuenow') == '3'
     assert '5. CapCut 프로젝트' in page.locator('.pf-next').inner_text()
-    page.evaluate('''()=>{window.spinner=document.querySelector('.pf-steps .pf-spinner'); draw();}''')
-    assert page.evaluate('spinner===document.querySelector(".pf-steps .pf-spinner")')
+    page.evaluate('''()=>{window.spinner=document.querySelector('.pf-steps [data-live=true] .pf-step-number'); draw();}''')
+    assert page.evaluate('spinner===document.querySelector(".pf-steps [data-live=true] .pf-step-number")')
     page.evaluate('''()=>{task.error='음성 서비스 연결 필요';task.status='attention';task.jobs=[];task.revision++;draw();}''')
-    assert page.locator('.pf-spinner').count() == 0
+    assert page.locator('[data-live=true]').count() == 0
     assert page.locator('.pf-recovery [data-pf=retry]').count() == 1
     assert page.locator('.pf-current-message').inner_text() == '음성 서비스 연결 필요'
     page.evaluate('''()=>{task.error='';task.status='completed';task.pipeline[1].steps.forEach(s=>s.status='completed');task.message='내보내기 완료';task.revision++;draw();}''')
@@ -142,6 +151,12 @@ def setup_editor(page):
         task.original_text='자동 인식 원문';task.reviewed_original_text='교정한 원본 발화';
         task.original_evidence={speech:[{start:1,text:'실제 발화'}],screen_text:[{text:'화면 광고 문구'}]};
         task.revision++;draw();window.requests=[];
+        // These regressions exercise advanced inputs; disclosure defaults are
+        // covered independently by studio_detail.test.cjs.
+        document.querySelectorAll('[data-detail-toggle]').forEach(button=>{
+            if(button.getAttribute('aria-expanded')==='false')button.click();
+        });
+        document.querySelector('#root')._detailOpens['sd-work-test-result-review-v1']=true;
         window.fetch=async(url,options={})=>{
             if(options.method!=='POST')return {ok:true,json:async()=>structuredClone(task)};
             const body=JSON.parse(options.body);requests.push({url,body});
@@ -247,6 +262,7 @@ def test_ai_status_updates_while_unsaved_input_survives(flow_page):
 
 def test_typing_during_save_keeps_new_input_and_other_sections(flow_page):
     page=flow_page;setup_editor(page)
+    page.evaluate("document.querySelectorAll('[data-pf-section=script] details').forEach(d=>d.open=true)")
     page.locator('[data-field=script]').fill('첫 번째 저장 요청')
     page.locator('[data-field=speed]').fill('1.15')
     page.evaluate('window.hold=true')
@@ -269,8 +285,11 @@ def test_evidence_separation_stale_voice_and_result_review_survive_poll(flow_pag
     }''')
     assert '수정사항 반영 전 음성' in page.locator('.pf-audio-card').inner_text()
     assert page.locator('[data-pf-section=original]').is_visible()
-    assert not page.locator('.pf-original').evaluate('(e)=>e.open')
-    page.locator('.pf-original > summary').click()
+    reference=page.locator('[data-detail-toggle$="-reference"]')
+    if reference.get_attribute('aria-expanded')=='true':
+        reference.click()
+    assert reference.get_attribute('aria-expanded')=='false'
+    reference.click()
     assert page.locator('[data-field=original]').input_value()=='교정한 원본 발화'
     assert '화면 속 글자 · 발화와 별도 자료' in page.locator('.pf-original').inner_text()
     page.locator('[data-review-check=speech]').check()
@@ -330,6 +349,7 @@ def test_caption_sync_controls_validate_bounds_preserve_draft_and_loop(flow_page
       Object.defineProperty(v,'duration',{get:()=>10});Object.defineProperty(v,'readyState',{get:()=>4});
       Object.defineProperty(v,'paused',{get:()=>false});v.play=()=>Promise.resolve();
     }''')
+    page.locator('.ce-cue details > summary').click()
     page.locator('[data-sync=earlier]').click()
     assert float(page.locator('[data-field="start:b1"]').input_value())==.1
     assert float(page.locator('[data-field="end:b1"]').input_value())==1.1
@@ -340,7 +360,6 @@ def test_caption_sync_controls_validate_bounds_preserve_draft_and_loop(flow_page
     page.locator('[data-sync=loop]').click()
     assert page.locator('[data-sync=loop]').get_attribute('aria-pressed')=='false'
     page.locator('[data-edit-preview]').evaluate('(v)=>v.currentTime=.6')
-    page.locator('.ce-cue details > summary').click()
     page.locator('[data-sync=start]').click()
     assert float(page.locator('[data-field="start:b1"]').input_value())==.6
     assert '0.60–1.10초' in page.locator('[data-sync-range]').inner_text()
@@ -348,6 +367,7 @@ def test_caption_sync_controls_validate_bounds_preserve_draft_and_loop(flow_page
     page.locator('[data-sync=end]').click()
     assert float(page.locator('[data-field="end:b1"]').input_value())==1.1
     assert '끝은 시작보다 뒤' in page.locator('.pf-sync-feedback').inner_text()
+    page.locator('.ce-advanced-tools > summary').click()
     page.locator('[data-pf=save-captions]').click()
     page.wait_for_function('requests.length===1')
     change=page.evaluate('requests[0].body.changes[0]')
@@ -373,6 +393,7 @@ def test_live_caption_shift_paints_without_render_and_exports_last_input(flow_pa
     canvas=page.locator('[data-caption-canvas]')
     assert canvas.get_attribute('data-active-cue')=='b1'
     assert canvas.evaluate('(c)=>c.getContext("2d").getImageData(0,0,1080,1920).data.some(v=>v>0)')
+    page.locator('.ce-cue details > summary').click()
     page.locator('[data-sync=later]').click()
     assert canvas.get_attribute('data-active-cue')==''
     assert page.evaluate('requests.length')==0
@@ -401,6 +422,8 @@ def test_undo_restores_clean_state_and_capcut(flow_page):
       Object.defineProperty(v,'duration',{get:()=>3});Object.defineProperty(v,'readyState',{get:()=>4});
     }''')
     original=page.locator('[data-pf=export-edit]').inner_text()
+    page.locator('.ce-cue details > summary').click()
+    page.locator('.ce-advanced-tools > summary').click()
     page.locator('[data-sync=later]').click()
     assert page.locator('[data-pf=open-capcut]').is_disabled()
     page.locator('[data-caption-undo]').click()
@@ -440,6 +463,7 @@ def test_caption_shift_presets_custom_bounds_and_export(flow_page):
       Object.defineProperty(v,'duration',{get:()=>10});Object.defineProperty(v,'readyState',{get:()=>4});
       v.currentTime=2.05;v.dispatchEvent(new Event('seeked'));
     }''')
+    page.locator('.ce-cue details > summary').click()
     start = page.locator('[data-field="start:b1"]')
     end = page.locator('[data-field="end:b1"]')
     amount = page.locator('[data-caption-shift]')

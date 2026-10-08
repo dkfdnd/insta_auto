@@ -36,7 +36,7 @@
     }
     return model;
   }
-  function show(el,model){
+  function show(el,model,{dismissible=true}={}){
     if(!el)return;
     const signature=JSON.stringify(model),key='hp-dismissed-notice:'+el.id;
     let dismissed=memory.get(key);try{dismissed=localStorage.getItem(key)||dismissed;}catch(_){}
@@ -52,6 +52,7 @@
       actions.append(button);
     }
     body.append(actions);el.append(body);
+    if(!dismissible){el.hidden=false;return;}
     const close=document.createElement('button');close.type='button';close.className='icon-button notice-close';close.textContent='×';close.setAttribute('aria-label','안내 닫기');
     close.onclick=()=>{memory.set(key,signature);try{localStorage.setItem(key,signature);}catch(_){}el.hidden=true;};
     el.append(close);el.hidden=dismissed===signature;

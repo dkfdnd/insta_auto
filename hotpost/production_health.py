@@ -4,15 +4,19 @@ import subprocess
 
 import requests
 
-from .studio_adapter import StudioAdapter
 from .voicebench_adapter import VoiceBenchAdapter
 
 
 def check(settings):
     checks = {}
+    from .writing.codex_writer import executable
+    try:
+        status=subprocess.run([executable(),'login','status'],capture_output=True,text=True,
+            encoding='utf-8',errors='replace',timeout=10,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        checks['studio']={'ready':status.returncode==0,'message':'내장 Codex 집필 준비됨' if status.returncode==0 else 'Codex 로그인을 확인하세요.'}
+    except (OSError,RuntimeError,subprocess.TimeoutExpired):
+        checks['studio']={'ready':False,'message':'Codex 설치·로그인을 확인하세요.'}
     endpoints = [
-        ('studio', settings.studio_url.rstrip('/') + '/api/status',
-         lambda: StudioAdapter(settings).headers()),
         ('voicebench', settings.voicebench_url.rstrip('/') + '/v1/health',
          lambda: VoiceBenchAdapter(settings)._headers()),
     ]

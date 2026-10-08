@@ -42,9 +42,10 @@ class Settings:
     voicebench_api_key_file: Path = field(default_factory=lambda: sibling_project('VoiceBench', 'Voice', 'voicebench/api.py') / '.runtime' / 'external-api-key.txt')
     voicebench_timeout: int = 14400
     voicebench_poll_interval: float = 5.0
+    # Legacy config keys are retained for file compatibility, never contacted.
     studio_url: str = "http://127.0.0.1:18765"
-    studio_root: Path = field(default_factory=lambda: sibling_project('script_auto', 'PersonalProject1', 'studio/app.py'))
-    studio_api_key_file: Path = field(default_factory=lambda: sibling_project('script_auto', 'PersonalProject1', 'studio/app.py') / 'data' / 'access-token.txt')
+    studio_root: Path = ROOT / 'data' / 'writing'
+    studio_api_key_file: Path = ROOT / 'data' / 'writing' / 'unused-legacy-key'
     studio_timeout: int = 7200
     acquisition_min_views_per_follower: float = 1.8
     acquisition_min_views: int = 1000
@@ -89,26 +90,30 @@ class Settings:
     source_max_attempts: int = 60      # 다운로드 실패 시 다음 후보로 보충하는 요청 상한
     source_probe_time_budget: int = 900  # 다운로드/검증 단계 시간 예산(초)
     source_platform_probe_budget: int = 300  # 한 플랫폼의 반복 실패가 전체 예산을 독점하지 않음
+    source_candidate_download_budget: int = 60  # 후보 하나의 재시도 포함 수신 상한; 남은 후보와 예산 공유
     source_queries_per_platform: int = 6
     source_candidates_per_platform: int = 12
     source_refine_max_candidates: int = 12  # 검증된 후보 제목으로 한 차례 추가 탐색
-    source_min_usable: int = 8         # 부족하면 남은 예산으로 한 차례 추가 탐색
-    source_tiktok_min_usable: int = 5  # 품질·중복 검사를 통과한 TikTok 소스 목표
+    source_min_usable: int = 10        # 플랫폼 합산 최소 수량; 자동 제작은 영속 큐에서 보충
+    source_no_progress_rounds: int = 3  # 제작 가능 소스·필수 플랫폼·핵심 장면이 개선되지 않으면 중지
+    source_collection_max_rounds: int = 12  # 명시적으로 재개한 한 수집 구간의 상한
+    source_collection_time_budget: int = 3600  # 구간 총시간(초); 실행 중 회차 결과는 보존
+    source_tiktok_min_usable: int = 5  # 새 수집은 TikTok 최소 5개; 전체 최소 10개와 함께 적용
     source_query_model_enabled: bool = True
     source_transcribe_reference: bool = True
     source_ytdlp_js_runtime: str = ""  # e.g. node:C:/Program Files/nodejs/node.exe
     source_long_video_max_seconds: int = 1800
     source_segment_seconds: int = 30
-    source_match_mode: str = "product"  # product: 같은 제품의 대체영상 / scene: 같은 장면
+    source_match_mode: str = "functional"  # reviewed core function; color/minor design may differ
     source_max_file_mb: int = 200
     source_google_vision_api_key: str = ""
     source_pexels_api_key: str = ""
     source_browser_search: bool = True
     source_browser_headless: bool = False
-    source_browser_frames: int = 4
+    source_browser_frames: int = 2  # 대표 장면만 역이미지 검색해 반복 업로드를 줄임
     source_browser_captcha_wait: int = 60
-    source_browser_search_interval: float = 15.0  # 검색·재시도 전 최소 휴식 시간
-    source_browser_block_cooldown: int = 1800  # CAPTCHA/429 이후 같은 공급자 검색 중지
+    source_browser_search_interval: float = 30.0  # 인증 확인·검색·재시도 전 최소 휴식 시간
+    source_browser_block_cooldown: int = 600  # 429 휴식은 최대 10분; CAPTCHA/로그인은 인증 확인 전 재접근 금지
     source_browser_timeout: int = 360  # 전체 브라우저 검색 제한; 추가 검색은 최대 180초
     source_use_openclip: bool = True
     source_openclip_model: str = "ViT-B-32-quickgelu"

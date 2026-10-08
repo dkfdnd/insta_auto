@@ -20,7 +20,7 @@ def setup_run(tmp_path):
     store.finish_run(run, 1, 0, 3)
     report = {'generated_at':time.time()+1, 'posts':[
         {'shortcode':code,'username':'account','caption':'테스트 영상','kind':'reel','tier':1,
-         'rank_score':score,'taken_at':now-3600,'views':12000,
+         'rank_score':score,'taken_at':now-3600,'hot_detected_at':now,'views':12000,
          'metric_status':{'views':'observed'},'assessment':{'last_observed_at':now}}
         for code,score in [('old',3),('new',2),('third',1)]]}
     settings.report_path.write_text(json.dumps(report), encoding='utf-8')
@@ -33,19 +33,19 @@ def test_registration_execution_and_new_candidates_are_separate(tmp_path):
     old = studio.create('old')
     studio.store.change(old['id'], lambda s,db:s.update(status='attention', error='GEMINI_API_KEY가 설정되지 않았습니다.'))
     rows = enqueue_top(settings, report, run)
-    assert [r['created'] for r in rows] == [False,True]
+    assert [r['created'] for r in rows] == [False,True,True]
     assert rows[0]['state']=='blocked'
-    assert '신규 등록 1개 · 기존 작업 1개' in intake_log(rows)
+    assert '신규 등록 2개 · 기존 작업 1개' in intake_log(rows)
     before = sum(len(studio.store.jobs(t['id'])) for t in studio.store.list())
     for _ in range(2):
         receipt = intake_status(studio)
-        assert (receipt['new_posts'],receipt['new_hot_videos'])==(2,2)
-        assert (receipt['created'],receipt['existing'],receipt['blocked'])==(1,1,1)
+        assert (receipt['new_posts'],receipt['new_hot_videos'])==(2,3)
+        assert (receipt['created'],receipt['existing'],receipt['blocked'])==(2,1,1)
         assert '키 없이 로컬 모델' in receipt['rows'][0]['solution']
-        assert [r['shortcode'] for r in receipt['candidates']]==['new','third']
-        assert receipt['candidates'][0]['task_id'] and receipt['candidates'][1]['task_id'] is None
+        assert [r['shortcode'] for r in receipt['candidates']]==['old','new','third']
+        assert receipt['candidates'][1]['task_id'] and receipt['candidates'][2]['task_id']
     again = enqueue_top(settings, report, run)
-    assert '신규 등록 0개 · 기존 작업 2개' in intake_log(again)
+    assert '신규 등록 0개 · 기존 작업 3개' in intake_log(again)
     assert sum(len(studio.store.jobs(t['id'])) for t in studio.store.list())==before
     assert 'automation' not in studio.store.get(old['id'])
     studio.store.change(old['id'], lambda s,db:s.update(status='completed',error=''))
@@ -62,14 +62,14 @@ def test_new_collection_does_not_show_previous_receipt(tmp_path):
     assert receipt['rows']==[] and receipt['candidates']==[]
 
 
-def test_ineligible_rank_is_reported_without_backfilling(tmp_path):
+def test_all_hot_videos_are_registered_even_with_a_metric_warning(tmp_path):
     settings, studio, report, run = setup_run(tmp_path)
     report['posts'][0]['metric_status']['views']='missing'
     result=enqueue_top(settings,report,run)
-    assert result[0]['outcome']=='skipped' and not result[0]['created']
+    assert result[0]['outcome']=='created' and result[0]['metric_warning']
     receipt=intake_status(studio)
-    assert receipt['skipped']==1 and receipt['created']==1
-    assert len(studio.store.list())==1
+    assert receipt['skipped']==0 and receipt['created']==3
+    assert len(studio.store.list())==3
 
 
 def test_new_candidate_post_never_restarts_existing_task(tmp_path):

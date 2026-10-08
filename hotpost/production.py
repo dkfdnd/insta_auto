@@ -162,7 +162,7 @@ class ProductionManager:
         if remote['state'] == 'completed':
             self.save(job, scripts_result=remote['result'], status='awaiting_selection', error='')
         elif remote['state'] in ('failed', 'cancelled', 'interrupted'):
-            raise ValueError('대본 작업이 중단되었습니다. PersonalProject1에서 결과를 확인하세요: '
+            raise ValueError('대본 작업이 중단되었습니다. 제작실에서 집필 결과를 확인하세요: '
                              + str(remote.get('error') or remote['state']))
         return remote
 
@@ -183,8 +183,8 @@ class ProductionManager:
             text = selected['text']
             if (review.get('script_sha256') != digest(text)
                     or review.get('reference_sha256') != digest(job['reference_script'])
-                    or review.get('status') != 'needs_editorial_review'):
-                raise ValueError('재가공 검사 결과가 없거나 통과하지 못했습니다. PersonalProject1에서 수정하세요.')
+                    or review.get('status') not in ('needs_editorial_review', 'advisory')):
+                raise ValueError('재가공 검사 결과가 없거나 통과하지 못했습니다. 제작실에서 검사 결과를 확인하세요.')
             plan = payload.get('transformation', {})
             if not isinstance(plan, dict) or any(
                     not isinstance(plan.get(key), str) or not 5 <= len(plan[key].strip()) <= 1500

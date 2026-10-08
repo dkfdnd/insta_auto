@@ -42,7 +42,10 @@ def test_target_reserves_five_verified_unique_sources_without_promoting_bad_sour
     assert len({c.file_sha256 for c in selected})==20
     searches=[dict(provider='tiktok',language=l,status='results') for l in ['en','ko','zh']]
     assert tiktok_coverage(pool,searches,5)['status']=='met'
-    assert tiktok_coverage(pool,searches[:1],5)['status']=='shortfall'
+    # Language coverage is diagnostic; five actual unique usable files meet
+    # the quantity requirement even if one search language found them all.
+    assert tiktok_coverage(pool,searches[:1],5)['status']=='met'
+    assert not tiktok_coverage(pool,searches[:1],5)['search_complete']
 
 
 def test_captcha_or_low_yield_is_shortfall_not_success():
@@ -56,15 +59,16 @@ def test_captcha_or_low_yield_is_shortfall_not_success():
 
 def test_browser_attempts_three_languages_even_with_small_candidate_cap(tmp_path,monkeypatch):
     from hotpost import browser_search as bs
-    monkeypatch.setattr(bs,'probe_platform_auth',lambda *_:'authenticated')
     monkeypatch.setattr(bs,'BROWSER_COOLDOWNS',{})
     page=SimpleNamespace(route=lambda *_:None,goto=lambda *a,**k:SimpleNamespace(status=200),
         wait_for_timeout=lambda _:None,mouse=SimpleNamespace(wheel=lambda *a:None),close=lambda:None)
     searcher=bs.BrowserSearcher(Settings(data_dir=tmp_path,source_queries_per_platform=1),tmp_path)
-    monkeypatch.setattr(searcher,'_pace',lambda _:None)
+    monkeypatch.setattr(searcher,'_pace',lambda *a, **kw:None)
     monkeypatch.setattr(searcher,'_check_block',lambda *a:False)
     monkeypatch.setattr(bs,'_embedded_candidates',lambda *a:[])
     monkeypatch.setattr(bs,'_anchors',lambda p,provider,q,kind:[{'url':f'https://www.tiktok.com/@a/video/{q}'}])
+    monkeypatch.setattr(searcher,'_wait_platform_results',
+                        lambda p,provider,q,audit,hits:bs._anchors(p,provider,q,'platform-search'))
     searcher._platforms(SimpleNamespace(new_page=lambda:page),['cabinet','진열장','展示柜'],1,providers={'tiktok'})
     assert [r['language'] for r in searcher.searches]==['en','ko','zh']
     assert len(searcher.candidates)==1

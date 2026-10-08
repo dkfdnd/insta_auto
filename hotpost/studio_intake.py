@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
+from .daily_hot import daily_state
+from .studio_automation import selection_key
 
 
 def task_status(task):
@@ -31,7 +34,7 @@ def task_status(task):
     if status == 'completed':
         return {'state':'completed', 'label':'제작 완료', 'reason':'기존 완성본이 있습니다', 'solution':'작업을 열어 완성 영상을 확인하세요.'}
     if status == 'paused' or task.get('automation', {}).get('paused_by_user'):
-        return {'state':'paused', 'label':'일시중지', 'reason':'사용자가 제작을 중지했습니다', 'solution':'계속 만들려면 작업에서 자동 진행 재개를 누르세요.'}
+        return {'state':'paused', 'label':'일시중지', 'reason':('이전 감지일의 영상은 소모 처리되어 자동 선정에서 제외됐습니다' if task.get('automation', {}).get('consumed_by_daily_policy') else '사용자가 제작을 중지했습니다'), 'solution':'계속 만들려면 작업에서 자동 진행 재개를 누르세요.'}
     jobs = task.get('jobs', [])
     if any(j['status']=='running' for j in jobs):
         return {'state':'running', 'label':'제작 중', 'reason':'제작 단계가 실행 중입니다', 'solution':'작업을 열어 현재 단계와 진행 상황을 확인하세요.'}
@@ -58,7 +61,7 @@ def intake_status(studio):
         report = {}
     ready = bool(run.get('finished_at') and report.get('generated_at', 0) >= run['finished_at'])
     with studio.store.connect() as db:
-        frozen = db.execute('SELECT selection,created FROM automatic_runs WHERE run_key=?', (str(run['id']),)).fetchone()
+        frozen = db.execute('SELECT selection,created FROM automatic_runs WHERE run_key=?', (selection_key(run['id']),)).fetchone()
         tasks = {r['shortcode']:json.loads(r['state']) for r in db.execute('SELECT shortcode,state FROM tasks')}
         active = {}
         for job in db.execute("SELECT task_id,status FROM jobs WHERE status IN ('running','queued')"):
@@ -84,7 +87,7 @@ def intake_status(studio):
     candidates = []
     if ready:
         for p in sorted(report.get('posts', []), key=lambda p:p.get('rank_score', 0), reverse=True):
-            if p['shortcode'] not in new_codes or p.get('tier', 0) < 1 or p.get('kind') not in ('reel','video'):
+            if not daily_state(p, time.time())['hot_today'] or p.get('kind') not in ('reel','video'):
                 continue
             task = tasks.get(p['shortcode'])
             candidates.append({'shortcode':p['shortcode'], 'username':p['username'],

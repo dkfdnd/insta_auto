@@ -103,11 +103,11 @@ def test_bilibili_deadline_prevents_long_retry(tmp_path, monkeypatch):
     c = Candidate('https://www.bilibili.com/video/BV1234567890', 'bilibili')
     assert download_candidate(c, tmp_path, 1, 50, deadline=110, js_runtime='node:C:/node.exe') is None
     assert seen == [10]
+    assert c.error == '다운로드 제한 시간(10초) 초과'
 
 
 def test_browser_failed_navigation_cannot_reuse_previous_results(tmp_path, monkeypatch):
     from hotpost import browser_search as bs
-    monkeypatch.setattr(bs, 'probe_platform_auth', lambda *_: 'unverified')
     monkeypatch.setattr(bs.time, 'sleep', lambda _: None)
     def fail(*_a, **_k): raise TimeoutError()
     page = SimpleNamespace(route=lambda *_: None, goto=fail, close=lambda: None)

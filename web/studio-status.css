@@ -1,0 +1,83 @@
+/* Shared semantic status palette. Carbon status guidance + WCAG: color,
+   checkmarks and readable labels together; navigation selection stays separate. */
+:root {
+  --status-success-fg:#176b3a; --status-success-bg:#e8f6ed;
+  --status-success-solid:#16703b; --status-success-on:#ffffff;
+  --status-info-fg:#174ea6; --status-info-bg:#eaf2ff;
+  --status-warning-fg:#805400; --status-warning-bg:#fff4d6;
+  --status-error-fg:#aa2431; --status-error-bg:#fff0f1;
+  --status-pending-fg:#586174; --status-pending-bg:#f0f2f5;
+}
+[data-theme=dark] {
+  --status-success-fg:#85e0ab; --status-success-bg:#173a2b;
+  --status-success-solid:#6bd89a; --status-success-on:#062c19;
+  --status-info-fg:#a4c7ff; --status-info-bg:#192f52;
+  --status-warning-fg:#ffd77a; --status-warning-bg:#44330e;
+  --status-error-fg:#ffadb6; --status-error-bg:#4a2029;
+  --status-pending-fg:#b8c0cd; --status-pending-bg:#292f3a;
+}
+/* Only verified completed milestones receive the success treatment. */
+html .production-flow .pf-steps li.completed,
+html .studio-glass .detail-tabs button[data-state=done],
+html .hero-checklist li[data-state=done] button {
+  background:var(--status-success-bg)!important;
+  border-color:var(--status-success-solid)!important;
+  color:var(--status-success-fg)!important;
+}
+html .production-flow .pf-steps li.completed :is(b,.pf-step-status,a),
+html .studio-glass .detail-tabs button[data-state=done] :is(strong,small,.glass-step-number,.glass-step-status),
+html .hero-checklist li[data-state=done] :is(span,strong,small),
+html .milestone-progress [data-step-state=done] .step-label,
+html .journey-list [data-step-state=done] :is(strong,.journey-state) {color:var(--status-success-fg)!important}
+html .production-flow .pf-steps li.completed .pf-step-number,
+html .milestone-progress [data-step-state=done] .step-node,
+html .journey-list [data-step-state=done] .journey-node {
+  background:var(--status-success-solid)!important;
+  border-color:var(--status-success-solid)!important;
+  color:var(--status-success-on)!important;
+}
+html .milestone-progress [data-step-state=done]::after,
+html .journey-list [data-step-state=done]::after,
+html .production-flow .pf-progress-track>div {background:var(--status-success-solid)!important}
+html .studio-glass .hero-stage-ring {background:conic-gradient(var(--status-success-solid) var(--stage-angle),var(--line) 0)}
+html .studio-glass .detail-tabs button[data-state=done][aria-pressed=true] {
+  outline:2px solid var(--status-info-fg);outline-offset:2px;box-shadow:none;
+}
+html .pf-progress[data-state=completed] .pf-current,
+html .work-card[data-state=completed] .current-work,
+html .studio-glass .hero-status.completed {background:var(--status-success-bg)!important;border-color:var(--status-success-solid)!important;color:var(--status-success-fg)!important}
+html .work-card[data-state=completed] .board-status,
+html .pf-progress[data-state=completed] .pf-current :is(strong,p,span) {color:var(--status-success-fg)!important}
+html .pf-progress:is([data-state=running],[data-state=queued]) .pf-current,
+html .production-flow .pf-steps li.current:is(.running,.queued),
+html .work-card:is([data-state=running],[data-state=queued]) .current-work,
+html .studio-glass .hero-status:is(.running,.queued) {background:var(--status-info-bg)!important;border-color:var(--status-info-fg)!important;color:var(--status-info-fg)!important}
+html .pf-progress:is([data-state=blocked],[data-state=review],[data-state=waiting],[data-state=paused],[data-state=retry]) .pf-current,
+html .production-flow .pf-steps li.current:is(.blocked,.review,.waiting,.paused,.retry),
+html .work-card:is([data-state=blocked],[data-state=review],[data-state=waiting],[data-state=paused],[data-state=retry]) .current-work,
+html .studio-glass .hero-status:is(.blocked,.review,.waiting,.paused,.retry) {background:var(--status-warning-bg)!important;border-color:var(--status-warning-fg)!important;color:var(--status-warning-fg)!important}
+html .pf-progress[data-state=error] .pf-current,
+html .production-flow .pf-steps li.current.error,
+html .work-card[data-state=error] .current-work,
+html .studio-glass .hero-status.error {background:var(--status-error-bg)!important;border-color:var(--status-error-fg)!important;color:var(--status-error-fg)!important}
+html .production-flow .pf-steps li.pending {background:var(--status-pending-bg)!important;color:var(--status-pending-fg)!important;border-color:var(--status-pending-fg)!important}
+html .production-flow .pf-steps li.pending :is(b,.pf-step-status,.pf-step-number) {color:var(--status-pending-fg)!important}
+html .production-flow .pf-steps li.pending .pf-step-number {background:var(--status-pending-bg)!important;border-color:var(--status-pending-fg)!important}
+html .production-flow .pf-guidance {padding:14px 16px;border:1px solid var(--status-info-fg);border-radius:12px;background:var(--status-info-bg);color:var(--status-info-fg);margin:12px 0;line-height:1.7}
+html .production-flow .pf-guidance:is([data-kind=blocked],[data-kind=paused]) {background:var(--status-warning-bg);color:var(--status-warning-fg);border-color:var(--status-warning-fg)}
+html .production-flow .pf-guidance :is(p,li,small,summary,a,.pf-text) {color:inherit!important;opacity:1;font-size:13px}
+html .production-flow .pf-guidance ul {padding-left:22px;margin:8px 0}
+html .production-flow .pf-guidance .pf-script-read {background:transparent!important;color:inherit;border-color:currentColor!important;padding:8px 10px!important;margin:8px 0}
+html .production-flow .pf-script-read summary {cursor:pointer;font-weight:700}
+html .production-flow .pf-guidance small {display:block}
+html .production-flow .pf-version-label {font-size:13px;color:var(--secondary,#586174)}
+html .production-flow .pf-version-help {margin:0 0 16px;line-height:1.7}
+html .studio-glass .hero-preparation {font-size:12px;line-height:1.6;color:var(--status-warning-fg);background:var(--status-warning-bg);border:1px solid currentColor;border-radius:8px;padding:8px 10px;margin-top:8px}
+html .pf-progress .pf-current :is(strong,p,span) {color:inherit!important}
+html .work-card:is([data-state=blocked],[data-state=waiting],[data-state=paused],[data-state=review],[data-state=retry]) .board-status {color:var(--status-warning-fg)!important}
+html .work-card[data-state=running] .board-status {color:var(--status-info-fg)!important}
+html .work-card[data-state=error] .board-status {color:var(--status-error-fg)!important}
+html .production-flow .pf-steps li.current .pf-step-number {color:inherit!important;background:transparent!important;border-color:currentColor!important}
+html .production-flow .pf-steps li.current :is(b,.pf-step-status) {color:inherit!important}
+html .studio-glass .detail-tabs button[data-activity=blocked] .glass-step-status {color:var(--status-warning-fg);background:var(--status-warning-bg);border-color:currentColor}
+html .work-card[data-state=blocked] [data-step-state=current] .step-node {color:var(--status-warning-fg);background:var(--status-warning-bg);border-color:currentColor;box-shadow:none}

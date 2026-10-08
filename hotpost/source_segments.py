@@ -34,7 +34,11 @@ def extract_relevant_segment(settings, video, meta, verifier, output, deadline):
         score = verifier.score(frames) if len(frames) == 3 else None
         if score is not None:
             scored.append((score, start))
-    if not scored or max(scored)[0] < .82 or deadline - time.monotonic() < 5:
+    # This proposes a short clip for the normal similarity/function/overlay
+    # checks; it does not approve it. Functional matching already permits
+    # visually reviewed color/design variants below product identity's .82.
+    minimum = .60 if settings.source_match_mode == 'functional' else .82
+    if not scored or max(scored)[0] < minimum or deadline - time.monotonic() < 5:
         return None
     score, start = max(scored)
     target = output / 'segment.mp4'

@@ -17,17 +17,27 @@
   function shiftControls(id,index){
     return `<div class="ce-shift-controls"><div class="ce-shift-options" role="group" aria-label="${index+1}번 자막 이동 간격"><span class="ce-shift-label">이동 간격</span>${[.1,.5,1].map(n=>`<button type="button" data-caption-step="${n}" aria-pressed="${n===.1}">${n}초</button>`).join('')}<label class="ce-shift-custom"><span>직접 입력</span><input type="number" data-caption-shift min="0.01" step="0.01" value="0.1" inputmode="decimal" aria-label="${index+1}번 자막 이동 간격(초)"><span>초</span></label></div><div class="ce-shift"><button data-sync="earlier" data-beat="${esc(id)}" aria-label="${index+1}번 자막 0.1초 앞당기기">← 0.1초 앞당기기</button><button data-sync="later" data-beat="${esc(id)}" aria-label="${index+1}번 자막 0.1초 늦추기">0.1초 늦추기 →</button></div><p class="ce-shift-help">이 자막의 시작·끝을 함께 이동합니다.</p></div>`;
   }
+  function timeline(e){
+    const duration=Number(e.duration)||Number(e.plan.duration)||0;
+    return `<section class="ce-timeline" aria-label="장면과 자막 타임라인"><header><div><h4>편집 타임라인</h4><p>장면이나 자막을 누르면 해당 위치로 이동합니다.</p></div><output data-timeline-time>0.00 / ${duration.toFixed(2)}초</output></header>
+      <label class="ce-scrubber">재생 위치<input data-timeline-seek type="range" min="0" max="${duration}" step="0.01" value="0" disabled></label>
+      <div class="ce-timeline-scroll"><div class="ce-timeline-content"><div class="ce-track-row ce-ruler"><span>시간</span><div><span>0초</span><span>${(duration/2).toFixed(1)}초</span><span>${duration.toFixed(1)}초</span></div></div>
+      <div class="ce-track-row"><strong>장면</strong><div class="ce-track ce-scenes"><div data-scene-track></div><i data-timeline-playhead aria-hidden="true"></i></div></div>
+      <div class="ce-track-row"><strong>자막</strong><div class="ce-track ce-subtitles"><div data-caption-track></div><i data-timeline-playhead aria-hidden="true"></i></div></div>
+      ${e.plan.voice?`<div class="ce-track-row"><strong>내레이션</strong><div class="ce-track ce-narration"><span style="width:${Math.max(0,Math.min(100,Number(e.plan.voice.duration||0)/Math.max(.01,duration)*100))}%">사용된 TTS · ${Number(e.plan.voice.duration||0).toFixed(1)}초</span></div></div>`:''}</div></div>
+      <details class="ce-scene-library"><summary>사용된 장면 · ${e.plan.beats.length}개</summary><div class="ce-scene-strip">${e.plan.beats.map((b,i)=>{const shot=e.plan.shots?.find(s=>s.id===b.selected_shot_id);return `<button type="button" data-timeline-scene="${i}" title="${esc(b.reason||b.text)}">${shot?.thumbnail_url?`<img src="${esc(shot.thumbnail_url)}" loading="lazy" alt="장면 ${i+1}">`:`<span class="ce-scene-placeholder">${i+1}</span>`}<strong>${i+1}. ${esc(b.text)}</strong><small>${Number(b.start).toFixed(1)}–${Number(b.end).toFixed(1)}초</small></button>`;}).join('')}</div></details></section>`;
+  }
   function markup(t,e){
-    if(!e?.plan)return '<section data-pf-section="edit"><div class="pf-empty"><b>미리보기를 준비하고 있어요</b><p>대본과 음성이 준비되면 이곳에서 영상을 확인하고 내보낼 수 있습니다.</p></div></section>';
+    if(!e?.plan)return '<section data-pf-section="edit" class="sd-stage"><div class="sd-empty"><h3>편집할 영상이 아직 없습니다</h3><p>대본과 음성 제작이 끝나면 장면과 자막을 확인할 수 있습니다.</p></div></section>';
     const f=t.feedback||{},conflict=f.changes?.length&&(f.base_edit_id!==e.id||f.changes.some(c=>Object.keys(c).some(k=>!['beat_id','text','start','end'].includes(k))));
-    return `<section data-pf-section="edit" class="ce-editor" data-caption-edit="${esc(e.id)}"><div class="pf-section-intro"><div><span class="pf-count">현재 편집본 · 변경은 새 출력으로 저장</span><h3>보고, 맞추고, 내보내세요</h3><p>자막 시간과 문구는 미리보기에 바로 반영됩니다. 실제 대사를 바꾸려면 대본·목소리로 돌아가세요.</p></div></div>
-      <p data-caption-state role="status"></p><div data-caption-stale hidden><p>이전 자막 입력은 이 기기에 보관되어 있습니다.</p><button data-pf="discard-local-edit">이전 자막 입력을 비우고 새 영상 보기</button></div>${conflict?`<details class="ce-saved-conflict" open><summary>이전 버전 또는 장면 수정이 보관돼 있어요</summary><p>아래 내용을 확인·복사한 뒤 비우고 새 영상에서 편집하세요.</p><p>${f.changes.map(c=>esc(c.text||'장면·강조 수정')+' '+esc(c.start??'')+'–'+esc(c.end??'')).join('<br>')}</p><button data-pf="discard-edit-feedback">보관한 구간 수정만 비우기</button></details>`:''}<div class="ce-toolbar"><button data-pf="save-captions">편집 저장</button><button data-caption-undo disabled>실행 취소</button><button data-pf="export-edit" class="ce-export">MP4 내보내기</button></div>
+    return `<section data-pf-section="edit" class="ce-editor sd-stage" data-caption-edit="${esc(e.id)}"><header class="sd-section-title"><h3>장면·자막 수정</h3><p>자막을 고친 뒤 ‘수정 영상 내려받기’를 누르면 영상에 반영됩니다. 장면 교체·효과는 아래 추가 도구의 CapCut에서 진행합니다.</p><p>편집 대상 · ${esc((t.pipeline||[]).find(r=>r.artifacts?.edit_id===e.id)?.number?'제작 버전 v'+(t.pipeline||[]).find(r=>r.artifacts?.edit_id===e.id).number:'현재 선택된 편집 영상')}</p></header>
+      <p data-caption-state role="status"></p><div data-caption-stale hidden><p>이전 자막 입력은 이 기기에 보관되어 있습니다.</p><button data-pf="discard-local-edit">이전 자막 입력을 비우고 새 영상 보기</button></div>${conflict?`<details class="ce-saved-conflict" open><summary>이전 버전 또는 장면 수정이 보관돼 있어요</summary><p>아래 내용을 확인·복사한 뒤 비우고 새 영상에서 편집하세요.</p><p>${f.changes.map(c=>esc(c.text||'장면·강조 수정')+' '+esc(c.start??'')+'–'+esc(c.end??'')).join('<br>')}</p><button data-pf="discard-edit-feedback">보관한 구간 수정만 비우기</button></details>`:''}<div class="ce-toolbar"><button data-caption-undo disabled>실행 취소</button><button data-pf="export-edit" class="ce-export">수정 영상 내려받기</button></div>
       <div class="ce-layout"><aside class="ce-monitor"><div class="ce-frame"><video data-edit-preview controls controlslist="nofullscreen nodownload" disablepictureinpicture playsinline preload="metadata" src="${esc(e.clean_preview_url||e.preview_url)}"></video><canvas data-caption-canvas width="1080" height="1920" aria-hidden="true"></canvas></div>
 
       <button data-pf="prepare-caption-preview" class="pf-secondary" ${e.clean_preview_url?'hidden':''}>편집 미리보기 준비</button>
-      <button class="pf-capcut-launch" data-pf="open-capcut" data-edit-id="${esc(e.id)}">↗ CapCut에서 정밀 편집</button><p class="pf-capcut-help">장면 교체·효과·정밀 편집은 CapCut에서 진행하세요. 웹의 미저장 자막은 먼저 내보내세요. CapCut에서 수정한 내용은 웹에 자동으로 돌아오지 않습니다.</p>
+      <details class="ce-advanced-tools"><summary>저장·추가 편집 도구</summary><div class="ce-extra-buttons"><button type="button" data-pf="save-captions">편집 내용만 저장 · 나중에 제작</button></div><button class="pf-capcut-launch" data-pf="open-capcut" data-edit-id="${esc(e.id)}">CapCut에서 편집하기 · 별도 앱</button><p class="pf-capcut-help">장면 교체·효과는 CapCut에서 진행할 수 있습니다. 웹에서 고친 자막은 먼저 영상으로 저장하세요. CapCut에서 바꾼 내용은 이 화면에 자동 반영되지 않습니다.</p><p>읽는 대사를 바꾸려면 ‘내 대본’ 탭을 사용하세요.</p></details>
       <span data-sync-caption hidden></span><output data-sync-range class="ce-time-readout"></output></aside>
-      <div class="ce-captions"><div class="ce-list-heading"><h4>자막 편집</h4><span>${e.plan.cues.length}개 구간 · 간격 선택 또는 직접 입력</span></div>${e.plan.beats.map((b,i)=>{const cue=e.plan.cues.find(c=>c.id===b.cue_id),d=(!conflict&&f.changes?.find(c=>c.beat_id===b.id))||{};return `<article class="pf-beat ce-cue" data-sync-beat="${esc(b.id)}" data-caption-card="${esc(b.id)}"><div class="ce-cue-heading"><button data-sync="loop" data-beat="${esc(b.id)}" aria-pressed="false">▷ ${i+1}. 앞뒤 함께 듣기</button><output data-sync-times></output></div><label>화면에 보일 자막<input maxlength="100" data-field="caption:${esc(b.id)}" value="${esc(d.text??cue.text)}"></label>${shiftControls(b.id,i)}<details><summary>시작·끝 시간 직접 맞추기</summary><div class="ce-times"><label>시작(초)<input type="number" step="0.01" min="0" data-field="start:${esc(b.id)}" value="${d.start??cue.start}"></label><label>끝(초)<input type="number" step="0.01" min="0" data-field="end:${esc(b.id)}" value="${d.end??cue.end}"></label></div><button data-sync="start" data-beat="${esc(b.id)}">현재 위치를 시작으로</button><button data-sync="end" data-beat="${esc(b.id)}">현재 위치를 끝으로</button></details><p class="pf-sync-feedback" role="status"></p></article>`;}).join('')}</div></div></section>`;
+      <div class="ce-captions"><div class="ce-list-heading"><h4>자막 고치기</h4><span>아래에서 고칠 자막을 고르세요. 반복 듣기로 내용을 확인할 수 있습니다.</span><p>여기서는 화면 글자만 바뀝니다. 읽는 말을 바꾸려면 대본을 수정하세요.</p><button type="button" class="sd-secondary" data-pf-tab="script">내 대본 수정하기</button></div>${e.plan.beats.map((b,i)=>{const cue=e.plan.cues.find(c=>c.id===b.cue_id),d=(!conflict&&f.changes?.find(c=>c.beat_id===b.id))||{};return `<article class="pf-beat ce-cue" data-sync-beat="${esc(b.id)}" data-caption-card="${esc(b.id)}"><div class="ce-cue-heading"><button data-sync="loop" data-beat="${esc(b.id)}" aria-pressed="false">${i+1}. 이 대사 반복해서 듣기</button><output data-sync-times></output></div><label>화면에 보일 자막<input maxlength="100" data-field="caption:${esc(b.id)}" value="${esc(d.text??cue.text)}"></label><details><summary>자막 나오는 시간 조정하기</summary>${shiftControls(b.id,i)}<div class="ce-times"><label>시작(초)<input type="number" step="0.01" min="0" data-field="start:${esc(b.id)}" value="${d.start??cue.start}"></label><label>끝(초)<input type="number" step="0.01" min="0" data-field="end:${esc(b.id)}" value="${d.end??cue.end}"></label></div><button data-sync="start" data-beat="${esc(b.id)}">현재 위치를 시작으로</button><button data-sync="end" data-beat="${esc(b.id)}">현재 위치를 끝으로</button></details><p class="pf-sync-feedback" role="status"></p></article>`;}).join('')}</div></div><details class="ce-timeline-disclosure"><summary>전체 장면·자막 흐름 보기</summary>${timeline(e)}</details></section>`;
   }
   function remember(root){
     const box=root.querySelector('[data-caption-edit]');if(!box)return;
@@ -48,7 +58,7 @@
     const dirty=Object.keys(local).some(k=>/^(caption|start|end):/.test(k));
     const other=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|voice-profile$|source:)/.test(k))||Object.keys(t.feedback||{}).some(k=>!['changes','base_edit_id','caption_only'].includes(k));
     const note=box.querySelector('[data-caption-state]');
-    note.textContent=!t.caption_editor_supported?'서버 업데이트 적용 후 편집할 수 있습니다. 기존 영상은 아래에서 확인하세요.':box.dataset.captionEdit!==e?.id?'새 영상이 준비됐어요. 이전 입력을 보관한 뒤 새 영상을 확인하세요.':!ok?'자막을 분리한 편집 미리보기를 준비해 주세요.':issue|| (other?'소스·대본·음성 변경을 먼저 저장·반영하거나 초기화하세요.':busy?'현재 버전 내보내기·제작 중 · 이후 수정은 다음 내보내기에 반영됩니다.':dirty?'미리보기 반영됨 · 내보내면 함께 저장됩니다.':t.feedback?.changes?.length?'편집 저장됨 · MP4에 반영하려면 내보내세요.':'편집 준비 완료 · 자막을 바꾸면 화면에서 바로 확인할 수 있어요.');
+    note.textContent=!t.caption_editor_supported?'편집 기능 연결이 아직 준비되지 않았습니다. 완성 영상 탭에서 기존 영상을 확인하세요.':box.dataset.captionEdit!==e?.id?'새 영상이 준비됐어요. 이전 입력을 보관한 뒤 새 영상을 확인하세요.':!ok?'아래 ‘편집 미리보기 준비’를 먼저 눌러주세요.':issue|| (other?'영상·대본·목소리 수정이 남아 있습니다. 해당 탭에서 ‘수정 내용으로 영상 만들기’를 먼저 누르거나 ‘이번 수정 취소’를 누르세요.':busy?'지금 영상을 만드는 중입니다. 완료된 뒤 다시 수정해 주세요.':dirty?'화면 글자가 바뀌었습니다. ‘수정 영상 내려받기’를 누르면 저장과 영상 제작을 함께 진행합니다.':t.feedback?.changes?.length?'편집 내용이 저장됐습니다. ‘수정 영상 내려받기’를 누르면 영상에 반영됩니다.':'자막을 고치면 미리보기 화면에서 바로 확인할 수 있습니다.');
     note.dataset.error=String(!!issue);box.querySelector('[data-caption-stale]').hidden=box.dataset.captionEdit===e?.id;
     for(const button of box.querySelectorAll('[data-pf="save-captions"],[data-pf="export-edit"]'))button.disabled=!ok||!!issue||other||busy||!!root._saving;
     for(const control of box.querySelectorAll('[data-sync],[data-caption-step],input'))control.disabled=!ok;
@@ -56,18 +66,15 @@
     box.querySelector('[data-pf="prepare-caption-preview"]').hidden=ok;
     box.querySelector('[data-pf="prepare-caption-preview"]').disabled=!t.caption_editor_supported||!!root._saving;
     box.querySelector('[data-pf="open-capcut"]').disabled=dirty||!!t.feedback?.changes?.length||busy||!!root._saving;
-    box.querySelector('[data-pf="export-edit"]').textContent=busy?'내보내기·제작 진행 중':!dirty&&!t.feedback?.changes?.length&&e?.export_url?'현재 MP4 다운로드':'수정본 MP4 내보내기';
+    box.querySelector('[data-pf="export-edit"]').textContent=busy?'영상 저장 중…':!dirty&&!t.feedback?.changes?.length&&e?.export_url?'현재 영상 내려받기':'수정 영상 내려받기';
     const video=box.querySelector('video');
     if(ok&&video.getAttribute('src')!==e.clean_preview_url){const position=video.currentTime;video.src=e.clean_preview_url;video.addEventListener('loadedmetadata',()=>{video.currentTime=position;},{once:true});}
-    box._paint?.();
+    box._timeline?.();box._paint?.();
   }
   function bind(root,t){
     const box=root.querySelector('[data-caption-edit]');if(!box)return;
     if(box._bound){refresh(root,t);return;}box._bound=true;
     const video=box.querySelector('video'),canvas=box.querySelector('canvas'),ctx=canvas.getContext('2d');
-    // Keep the external editor discoverable without covering mobile caption controls.
-    box.querySelector('.ce-toolbar').append(box.querySelector('[data-pf="open-capcut"]'));
-    const help=box.querySelector('.pf-capcut-help');box.querySelector('.ce-layout').before(help);
     const chooser=document.createElement('nav');chooser.className='ce-cue-picker';chooser.setAttribute('aria-label','수정할 자막 선택');
     const cards=fields(root);let selected=0;
     chooser.innerHTML='<button type="button" data-cue-prev aria-label="이전 자막">← 이전</button><select aria-label="수정할 자막">'+cards.map((c,i)=>`<option value="${i}">${i+1}. ${esc(input(c,'caption').value)}</option>`).join('')+'</select><button type="button" data-cue-next aria-label="다음 자막">다음 →</button>';
@@ -75,6 +82,31 @@
     chooser.querySelector('select').onchange=e=>choose(Number(e.target.value),true);
     chooser.querySelector('[data-cue-prev]').onclick=()=>choose(selected-1,true);chooser.querySelector('[data-cue-next]').onclick=()=>choose(selected+1,true);
     box.querySelector('.ce-captions').prepend(chooser);choose(0);
+    box.querySelector('.ce-layout').append(box.querySelector('.ce-timeline-disclosure'));
+    const slider=box.querySelector('[data-timeline-seek]');
+    const timelineEdit=()=>(root._task.edits||[]).find(e=>e.id===box.dataset.captionEdit);
+    const seek=at=>{if(window.StudioWorkspace.seek(video,at,Number(slider.max)))root._syncLoop=null;};
+    const updatePosition=()=>{
+      const duration=Number(slider.max),at=Math.max(0,Math.min(duration,video.currentTime||0));
+      slider.disabled=video.readyState<1||duration<=0;slider.value=at;
+      box.querySelector('[data-timeline-time]').textContent=`${at.toFixed(2)} / ${duration.toFixed(2)}초`;
+      slider.setAttribute('aria-valuetext',`${at.toFixed(2)}초 / ${duration.toFixed(2)}초`);
+      box.querySelectorAll('[data-timeline-playhead]').forEach(el=>el.style.left=(duration>0?at/duration*100:0)+'%');
+    };
+    const drawTimeline=()=>{
+      const e=timelineEdit(),duration=Number(e?.duration)||0;
+      const tracks=[['[data-scene-track]',e?.plan?.beats||[],'scene'],['[data-caption-track]',collect(root),'cue']];
+      for(const [selector,items,kind] of tracks){const el=box.querySelector(selector),html=window.StudioWorkspace.track(items,duration,kind,selected);if(el._markup!==html){el.innerHTML=html;el._markup=html;}}
+      updatePosition();
+    };box._timeline=drawTimeline;
+    slider.addEventListener('input',()=>seek(Number(slider.value)));
+    box.addEventListener('click',event=>{
+      const cue=event.target.closest('[data-timeline-cue]'),scene=event.target.closest('[data-timeline-scene]');
+      if(cue){const index=Number(cue.dataset.timelineCue);choose(index);seek(Number(input(cards[index],'start').value));drawTimeline();}
+      if(scene){const index=Number(scene.dataset.timelineScene);choose(index);seek(Number(timelineEdit().plan.beats[index].start));drawTimeline();}
+    });
+    chooser.addEventListener('click',drawTimeline);chooser.addEventListener('change',drawTimeline);
+    for(const event of ['loadedmetadata','durationchange','timeupdate','seeked','pause','emptied'])video.addEventListener(event,updatePosition);
     const paint=time=>{
       ctx.clearRect(0,0,1080,1920);
       if(!ready(root,root._task))return;

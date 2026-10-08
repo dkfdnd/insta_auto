@@ -13,13 +13,22 @@ from hotpost.studio_store import Conflict
 from hotpost.studio_workflow import snapshot, transient
 
 
+@pytest.fixture(autouse=True)
+def small_inventory_contract(monkeypatch):
+    # These queue/version tests use one dummy asset. Full production quotas,
+    # actual file inventory and legacy preservation are integration-tested in
+    # test_source_quota_policy.py and test_parallel_sources.py.
+    monkeypatch.setattr('hotpost.source_policy.current_policy', lambda settings=None: {
+        'version':2, 'minimum_total':getattr(settings, 'source_min_usable', 1), 'platform_minimums':{}})
+
+
 @pytest.fixture
 def prepared(tmp_path):
-    studio = Studio(Settings(data_dir=tmp_path), workers=False)
+    studio = Studio(Settings(data_dir=tmp_path, source_min_usable=1), workers=False)
     s,_ = studio.store.create('fixture','자동 제작',{'protocol':2,'active':True,'stage':'prepare'})
     folder=studio.folder(s['id']); source=folder/'source.mp4'; source.write_bytes(b'video')
     def prepare(s,db):
-        s.update(sources=[{'id':'source1','path':str(source),'sha256':hashlib.sha256(b'video').hexdigest()}],original_text='원본 발화')
+        s.update(sources=[{'id':'source1','path':str(source),'sha256':hashlib.sha256(b'video').hexdigest(), 'source_quality':'clean-source', 'functional_review':{'reviewed':True,'same_core_function':True,'source_sha256':hashlib.sha256(b'video').hexdigest(),'observed_actions':['fixture core action'],'evidence_frames':['fixture.jpg']}}],original_text='원본 발화')
         studio._script(s,'이 도구의 모양을 살펴보세요.','automatic_script_auto')
         snapshot(s)
         db.execute("UPDATE jobs SET status='done'")
@@ -34,7 +43,7 @@ def finish(studio,result):
     return job
 
 
-def complete(studio,task):
+def complete(studio,task, *, stop_after_edit=False):
     s=studio.store.get(task); folder=studio.folder(task)
     voice=folder/'test.wav';voice.write_bytes(b'audio')
     finish(studio,{'id':s['pending_voice_id'],'script_id':s['script_id'],'path':str(voice),'sha256':hashlib.sha256(b'audio').hexdigest(),'speed':1,'duration':3})
@@ -45,6 +54,8 @@ def complete(studio,task):
     result={'id':job['id'],'script_id':s['script_id'],'voice_id':s['voice_id'],'plan_path':str(plan),
             'preview_path':str(preview),'portable_draft_path':str(portable),'duration':3,'review_count':0}
     studio.store.finish(job,result,lambda s,db,r:studio._accept(s,job,r,db))
+    if stop_after_edit:
+        return
     finish(studio,{'draft_path':'external/CapCut','draft_name':'test'})
     assert studio.store.get(task)['status']=='exporting'
     final=folder/(job['id']+'-final.mp4');final.write_bytes(b'exported')
@@ -60,6 +71,125 @@ def test_export_is_completion_boundary_and_all_assets_download(prepared):
         path=studio.download(task,s['run_id'],step['key']);assert path.is_file()
     with zipfile.ZipFile(studio.download(task,s['run_id'],'sources')) as z: assert 'provenance.json' in z.namelist()
     with pytest.raises(ValueError): studio.download(task,'../../other','script')
+
+
+def test_resume_editorial_hold_keeps_voice_and_collects_missing_sources(prepared):
+    studio, task = prepared
+    def hold(s, db):
+        db.execute("UPDATE jobs SET status='done' WHERE task_id=?", (task,))
+        s.update(reference_video='reference.mp4', sources=[], status='attention', error='대본 검토',
+                 editorial_content_hold={'reason':'경험담 검토', 'auto_retry_allowed':False})
+        s['automation'].update(active=False, pause_reason='editorial_content_hold')
+        s['voices']=[{'id':'existing-voice','script_id':s['script_id']}]
+        s['voice_id']='existing-voice'
+    studio.store.change(task,hold)
+    studio.action(task,'resume-auto',{})
+    s=studio.store.get(task)
+    assert s['automation']['active'] and not s.get('editorial_content_hold') and not s['error']
+    assert s['voice_id']=='existing-voice' and s['editorial_review_history']
+    assert [j['kind'] for j in studio.store.jobs(task) if j['status']=='queued']==['collect_sources']
+    assert s['status']=='source_wait'
+
+
+def test_automatic_voice_does_not_inherit_legacy_sohee_override(prepared):
+    studio,task=prepared
+    def reschedule(s,db):
+        run=snapshot(s);run['inputs']['voice_profile_id']='qwen-sohee'
+        db.execute("UPDATE jobs SET status='superseded' WHERE task_id=?",(task,))
+        studio.advance_workflow(s,db)
+    studio.store.change(task,reschedule)
+    # The same idempotency key is already terminal; inspect the proposed
+    # enqueue payload rather than create a second actual production request.
+    captured=[]
+    original=studio.store.enqueue
+    studio.store.enqueue=lambda db,t,k,p,key:captured.append(p)
+    studio.store.change(task,lambda s,db:studio.advance_workflow(s,db))
+    studio.store.enqueue=original
+    assert captured[0]['voice_mode']=='personal_clone'
+    assert not captured[0].get('voice_profile_id')
+
+
+@pytest.mark.parametrize('job_status,blocked,expected', [
+    ('queued', False, 'queued'), ('running', False, 'running'),
+    ('done', False, 'waiting'), ('paused', False, 'paused'),
+    ('done', True, 'blocked')])
+def test_pipeline_reports_real_worker_state_not_saved_checkpoint(prepared, job_status, blocked, expected):
+    studio, task = prepared
+    def stop_at_checkpoint(s, db):
+        db.execute("UPDATE jobs SET status=? WHERE task_id=? AND kind='voice'", (job_status, task))
+        s.update(status='script_review', error='')
+        s['automation'].update(active=False, stage='voice', paused_by_user=job_status=='paused')
+        if blocked: s['production_blockers']=['personal_clone_unavailable','core_footage_gap']
+    studio.store.change(task, stop_at_checkpoint)
+    jobs_before=studio.store.jobs(task)
+    public=studio.public(studio.store.get(task))
+    run=next(r for r in public['pipeline'] if r['id']==public['run_id'])
+    assert run['status']==expected
+    assert next(step for step in run['steps'] if step['key']=='voice')['status']==expected
+    assert next(step for step in run['steps'] if step['key']=='script')['status']=='completed'
+    assert run['video_url'] is None
+    # Presentation derivation does not rewrite stored history or register work.
+    assert studio.store.get(task)['runs'][-1]['status']=='running'
+    assert studio.store.jobs(task)==jobs_before
+
+
+def test_top_pick_continues_to_personal_voice_without_human_script_approval(tmp_path):
+    studio=Studio(Settings(data_dir=tmp_path, source_min_usable=1), workers=False)
+    state,_=studio.store.create('top-pick-fixture','자동 선정',
+        {'protocol':2,'active':True,'stage':'prepare','needs_top_pick':True})
+    task=state['id']; source=studio.folder(task)/'source.mp4'; source.write_bytes(b'video')
+    def ready(s,db):
+        s.update(sources=[{'id':'source1','path':str(source),'sha256':hashlib.sha256(b'video').hexdigest(), 'source_quality':'clean-source', 'functional_review':{'reviewed':True,'same_core_function':True,'source_sha256':hashlib.sha256(b'video').hexdigest(),'observed_actions':['fixture core action'],'evidence_frames':['fixture.jpg']}}], original_text='원본 대사')
+        db.execute("UPDATE jobs SET status='done' WHERE task_id=?",(task,))
+        studio._advance_auto(s,db)
+    studio.store.change(task,ready)
+    finish(studio,{'text':'선정된 제작 대본입니다.','top_pick':{'reason':'자동 선정'},'selected_candidate':0})
+    after=studio.store.get(task)
+    assert after['status']=='voice_generating'
+    assert after['approved_script_id']==after['script_id']
+    assert not after['automation'].get('needs_top_pick')
+    voice=studio.store.claim(); assert voice['kind']=='voice'
+    assert voice['payload']['voice_mode']=='personal_clone'
+    assert not voice['payload'].get('voice_profile_id')
+
+
+@pytest.mark.parametrize('mode,expected_profile',[(None,None),('personal_clone',None),('manual','qwen-sohee')])
+def test_voice_worker_requires_personal_clone_unless_studio_explicitly_selected(prepared,monkeypatch,mode,expected_profile):
+    from hotpost import voicebench_adapter,studio_services
+    from tests.test_voicebench_adapter import valid_wav
+    studio,task=prepared;state=studio.store.get(task);captured=[]
+    released=[]
+    monkeypatch.setattr('hotpost.studio_runtime.generation.release_idle_voice',
+                        lambda settings, **kwargs: released.append(kwargs))
+    monkeypatch.setattr(studio_services,'ensure_local',lambda *a:None)
+    def synthesize(self,text,path,**kwargs):
+        captured.append(kwargs);path.write_bytes(valid_wav())
+        return {'voicebench_request_id':17,'voice_profile_id':kwargs.get('voice_profile_id')}
+    monkeypatch.setattr(voicebench_adapter.VoiceBenchAdapter,'synthesize',synthesize)
+    p={'script_id':state['script_id'],'voice_id':'voice-fixture','speed':1,'voice_profile_id':'qwen-sohee'}
+    if mode:p['voice_mode']=mode
+    studio._voice(state,{'id':'test-voice','payload':p,'checkpoint':{}})
+    assert captured[0]['require_personal_clone']==(expected_profile is None)
+    assert captured[0].get('voice_profile_id')==expected_profile
+    assert released==[{'best_effort':True}]
+
+
+@pytest.mark.parametrize('change',['same_sources','new_sources','new_script'])
+def test_reviewed_scene_binding_is_retained_only_for_matching_inputs(prepared,change):
+    studio,task=prepared;complete(studio,task)
+    before=studio.store.get(task);voice_id=before['voice_id'];rules=[{'source_sha256':'reviewed-hash','pattern':'.'}]
+    def reviewed(s,db):
+        s['reviewed_scene_rules']=rules
+        if change=='new_sources':s['sources'].append({**s['sources'][0],'id':'source2'})
+    studio.store.change(task,reviewed)
+    if change=='new_script':studio.action(task,'save-script',{'text':'새 동작을 설명하는 대본이에요.'})
+    else:studio.action(task,'save-feedback',{'source_ids':['source2' if change=='new_sources' else 'source1']})
+    studio.action(task,'reproduce',{})
+    state=studio.store.get(task)
+    assert bool(state.get('reviewed_scene_rules'))==(change=='same_sources')
+    assert before['run_id']==state['runs'][-1]['parent_id']
+    if change!='new_script':assert state['voice_id']==voice_id
+    if change!='same_sources':assert any(e['kind']=='reviewed_scenes_invalidated' for e in studio.store.events(task))
 
 
 def test_native_window_failure_recovers_same_plan_and_resumes_without_reopening(prepared, monkeypatch):
@@ -86,6 +216,31 @@ def test_native_window_failure_recovers_same_plan_and_resumes_without_reopening(
     with studio.store.transaction() as db:studio.advance_workflow(state,db)
     assert state['status']=='completed' and '웹 렌더링' in state['message']
     assert next(e for e in state['edits'] if e['id']==edit['id'])['draft_path']=='external/CapCut'
+
+
+def test_open_capcut_does_not_block_automatic_mp4_before_registration(prepared, monkeypatch):
+    from hotpost import editing_adapter
+    studio, task = prepared
+    complete(studio, task, stop_after_edit=True)
+    monkeypatch.setattr('hotpost.studio_runtime.lifecycle.capcut_running', lambda: True)
+    monkeypatch.setattr(studio, '_register', lambda *a: pytest.fail('must preserve open editor'))
+    monkeypatch.setattr(editing_adapter.AutoCapcutAdapter, 'export', lambda *a, **k: pytest.fail('must not touch native editor'))
+    output = studio.folder(task) / 'automatic-web-final.mp4'
+    output.write_bytes(b'v' * 2048)
+    monkeypatch.setattr(studio, '_process', lambda *a, **k: {'export_path': str(output), 'export_verified': True})
+    export = studio._export
+    def export_once(state, job):
+        result = export(state, job)
+        studio.stop.set()
+        return result
+    monkeypatch.setattr(studio, '_export', export_once)
+    studio._worker('production')
+    state = studio.store.get(task)
+    edit = next(e for e in state['edits'] if e['id'] == state['edit_id'])
+    assert state['status'] == 'completed'
+    assert edit['export_kind'] == 'web_render' and edit['export_verified']
+    assert edit['registration_deferred'] and not edit.get('draft_path')
+    assert (Path(edit['portable_draft_path']) / 'draft_content.json').is_file()
 
 
 def test_native_content_or_verification_errors_never_use_web_fallback(prepared,monkeypatch):
@@ -132,6 +287,29 @@ def test_make_video_invalid_setting_rolls_back_script_and_queue(prepared,invalid
     after=studio.store.get(task)
     assert after==before
     assert not [j for j in studio.store.jobs(task) if j['status']=='queued']
+
+
+@pytest.mark.parametrize('action',['make-video','reproduce','start-auto','resume-auto'])
+@pytest.mark.parametrize('already_consumed',[False,True])
+def test_explicit_production_survives_daily_rollover_and_collects_sources(prepared,action,already_consumed):
+    studio,task=prepared
+    studio.settings.source_min_usable=2
+    def yesterday(s,db):
+        s['runs'][-1]['source_policy']['minimum_total']=2
+        s['automation'].update(selection_mode='automatic',selected_at=time.time()-86400,
+                               active=False,paused_by_user=True,consumed_by_daily_policy=already_consumed)
+        db.execute("UPDATE jobs SET status='paused' WHERE task_id=? AND status='queued'",(task,))
+    studio.store.change(task,yesterday)
+    if action=='reproduce': studio.action(task,'save-script',{'text':'승인한 새 대본'})
+    studio.action(task,action,{'text':'승인한 새 대본'} if action=='make-video' else {})
+    source=studio.store.claim('sources')
+    production=studio.store.claim('production')
+    assert source and source['kind']=='collect_sources'
+    assert production and production['kind']=='voice'
+    state=studio.store.get(task)
+    assert state['automation']['selection_mode']=='manual_resume'
+    assert not state['automation'].get('consumed_by_daily_policy')
+    assert len([j for j in studio.store.jobs(task) if j['kind']=='voice' and j['status']=='running'])==1
 
 
 def test_voice_choice_rebuilds_voice_and_can_return_to_default(prepared,monkeypatch):
@@ -333,8 +511,8 @@ def test_claim_retry_restores_running_task_state(prepared):
     assert '다시 진행 중' in studio.store.get(task)['message']
 
 
-def test_failed_transcription_keeps_reference_and_stops_before_source_search(tmp_path,monkeypatch):
-    studio=Studio(Settings(data_dir=tmp_path),workers=False)
+def test_unverified_screen_reading_keeps_reference_and_stops_before_source_search(tmp_path,monkeypatch):
+    studio=Studio(Settings(data_dir=tmp_path, source_min_usable=1),workers=False)
     state,_=studio.store.create('speech-failure','발화 추출 실패',{'protocol':2,'active':True,'stage':'prepare'})
     folder=studio.settings.transcript_dir/'speech-failure-cache';folder.mkdir(parents=True)
     transcript=folder/'transcript.json';reference=folder/'reference.mp4';reference.write_bytes(b'video')
@@ -342,7 +520,9 @@ def test_failed_transcription_keeps_reference_and_stops_before_source_search(tmp
     monkeypatch.setattr('hotpost.transcript.extract_transcript',lambda *a:{'json_path':str(transcript)})
     def forbidden(*args,**kwargs):raise AssertionError('Do not search sources when speech extraction failed')
     monkeypatch.setattr('hotpost.source_finder.find_sources',forbidden)
-    with pytest.raises(ValueError,match='전사 도구 설치'):
+    def unverified(*args,**kwargs):raise ValueError('원본 화면 문구 검토를 완료하지 못했습니다')
+    monkeypatch.setattr('hotpost.reference_narrative.reference_text',unverified)
+    with pytest.raises(ValueError,match='화면 문구 검토'):
         studio._prepare(state,studio.store.claim())
     actual=studio.public(studio.store.get(state['id']))
     assert actual['original_text']==''
@@ -445,6 +625,7 @@ def test_upload_checks_video_and_deduplicates(prepared,monkeypatch):
 
 def test_top_pick_compares_candidates_and_rejects_missing_scores(prepared,monkeypatch):
     from hotpost.studio_top_pick import choose
+    monkeypatch.setattr('hotpost.studio_top_pick.refresh_local_reviews',lambda settings,reference,valid:valid)
     studio,task=prepared;s=studio.store.get(task)
     monkeypatch.setattr('hotpost.source_finder.extract_frames',lambda *a,**k:[])
     rows=[{'index':i,'eligible':True,'scores':dict(hook=n,grounding=5,narration=n,footage=n),'reason':str(i),'issues':[]} for i,n in [(0,2),(1,5)]]
@@ -453,8 +634,9 @@ def test_top_pick_compares_candidates_and_rejects_missing_scores(prepared,monkey
     assert index==1 and len(evaluation['evaluations'])==2
 
 
-def test_top_pick_uses_selected_sources_and_keeps_rejection_audit(prepared,monkeypatch):
+def test_top_pick_ignores_source_selection_and_keeps_advisory_audit(prepared,monkeypatch):
     from hotpost.studio_top_pick import choose
+    monkeypatch.setattr('hotpost.studio_top_pick.refresh_local_reviews',lambda settings,reference,valid:valid)
     from hotpost.studio_workflow import current_run
     studio,task=prepared;s=studio.store.get(task)
     s['sources'].append({'id':'unused-game','path':'absent.mp4','sha256':'unused'})
@@ -467,13 +649,13 @@ def test_top_pick_uses_selected_sources_and_keeps_rejection_audit(prepared,monke
                                'reason':'캠핑 대본과 수납장 영상이 맞지 않습니다','issues':['상품 불일치']}]}
     monkeypatch.setattr('hotpost.studio_top_pick._generate',reject)
     for _ in range(2):
-        with pytest.raises(ValueError,match='캠핑 대본과 수납장 영상'):
-            choose(studio.settings,s,[(0,{'text':'캠핑 대본'})])
-    assert len(calls)==2 and frames==['source.mp4','source.mp4']
-    assert [v['id'] for v in calls[0]['sources']]==['source1']
+        index, evaluation = choose(studio.settings,s,[(0,{'text':'캠핑 대본'})])
+        assert index == 0 and evaluation['advisory_only']
+    assert len(calls)==1 and frames==[]
+    assert 'sources' not in calls[0]
     receipts=list((studio.folder(task)/'top-pick').glob('*.json'))
-    assert len(receipts)==1 and receipts[0].name.endswith('.rejected.json')
-    assert json.loads(receipts[0].read_text('utf-8'))['status']=='rejected'
+    assert len(receipts)==1
+    assert json.loads(receipts[0].read_text('utf-8'))['evaluations'][0]['issues']==['상품 불일치']
 
 
 def test_feedback_revision_ignores_worker_progress_but_rejects_other_editor(prepared):
@@ -524,7 +706,7 @@ def test_frame_extraction_reuse_never_deletes_returned_scene_frame(tmp_path,monk
 
 @pytest.mark.parametrize('automatic',[True,False])
 def test_uploaded_sources_resume_without_search_and_preserve_concurrent_upload(tmp_path,monkeypatch,automatic):
-    studio=Studio(Settings(data_dir=tmp_path),workers=False)
+    studio=Studio(Settings(data_dir=tmp_path, source_min_usable=1),workers=False)
     auto={'protocol':2,'active':True,'stage':'prepare'} if automatic else None
     state,_=studio.store.create('upload-fixture','업로드로 이어가는 영상',auto)
     task=state['id'];failed=studio.store.claim();studio.store.fail(failed,'Source manifest contains no selected local videos.')
@@ -561,7 +743,7 @@ def test_uploaded_sources_resume_without_search_and_preserve_concurrent_upload(t
         public=studio.public(finished)
         active=next(r for r in public['pipeline'] if r['id']==public['run_id'])
         assert [v['id'] for v in active['artifacts']['sources']]==[chosen]
-        assert active['status']=='running'
+        assert active['status']=='queued'
     else:
         assert finished['status']=='script_review'
 

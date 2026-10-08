@@ -2,7 +2,7 @@
 (()=>{
  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const labels={'qwen-sohee':'소희 · 여성','qwen-aiden':'에이든 · 남성','qwen-ryan':'라이언 · 남성','qwen-serena':'세레나 · 여성','qwen-vivian':'비비안 · 여성','qwen-uncle_fu':'푸 · 남성','qwen-dylan':'딜런 · 남성','qwen-eric':'에릭 · 남성','qwen-ono_anna':'안나 · 여성','zonos-americanmale':'아메리칸 · 남성','zonos-americanfemale':'아메리칸 · 여성','zonos-britishfemale':'브리티시 · 여성'};
- const label=id=>id?(labels[id]||'선택한 목소리'):'내 목소리 · 기존 기본값';
+ const label=id=>id?(labels[id]||'선택한 목소리'):'내 목소리 복제 · 자동 제작 기본';
  function bind(root){
   const box=root.querySelector('[data-voice-picker]');if(!box)return;
   const field=box.querySelector('[data-field="voice-profile"]'),current=box.querySelector('[data-current-voice]');current.textContent=label(field.value);
@@ -15,14 +15,15 @@
    let rows=[],gender='all',model='';const audio=dialog.querySelector('audio'),note=dialog.querySelector('[data-voice-status]');
    const close=()=>{audio.pause();dialog.remove();box.querySelector('[data-choose-voice]')?.focus();};
    dialog.querySelector('[data-voice-close]').onclick=close;dialog.addEventListener('cancel',e=>{e.preventDefault();close();});
+   dialog.addEventListener('click',e=>{const r=dialog.getBoundingClientRect();if(e.target===dialog&&(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom))close();});
    const render=()=>{
     const filtered=rows.filter(v=>(gender==='all'||v.gender===gender)&&(!model||v.model===model));
     note.textContent=audio.dataset.voiceName&&!audio.paused?audio.dataset.voiceName+' · 미리듣기':filtered.length?'샘플의 대사는 예시입니다. 실제로는 입력한 대본을 읽습니다.':'이 조건에 맞는 목소리가 없습니다.';
-    dialog.querySelector('.voice-grid').innerHTML=filtered.map(v=>`<article class="voice-choice ${v.id===field.value?'selected':''}"><span class="voice-model">${esc(v.model||'기존 기본값')} · ${esc({male:'남성',female:'여성',personal:'내 목소리'}[v.gender]||'')}</span><h3>${esc(v.name)}</h3><p>${esc(v.description||'기존에 사용하던 목소리입니다.')}</p><small>${v.native_language?'음색 기준: '+esc(v.native_language):''} ${v.preview_kind==='reference'?'· 공식 참조 녹음':v.preview_kind==='generated'?'· 한국어 샘플':''}</small><div><button type="button" data-listen="${esc(v.id)}" ${v.preview_url?'':'disabled'}>${v.preview_url?'▷ 미리 듣기':'미리듣기 없음'}</button><button type="button" data-select-voice="${esc(v.id)}" ${v.available?'':'disabled'}>${!v.available?'설치 필요':v.id===field.value?'✓ 선택됨':'이 목소리 사용'}</button></div></article>`).join('');
+    dialog.querySelector('.voice-grid').innerHTML=filtered.map(v=>`<article class="voice-choice ${v.id===field.value?'selected':''}"><span class="voice-model">${esc(v.model||'기존 기본값')} · ${esc({male:'남성',female:'여성',personal:'내 목소리'}[v.gender]||'')}</span><h3>${esc(v.name)}</h3><p>${esc(v.description||'기존에 사용하던 목소리입니다.')}</p><small>${v.native_language?'음색 기준: '+esc(v.native_language):''} ${v.preview_kind==='reference'?'· 공식 참조 녹음':v.preview_kind==='generated'?'· 한국어 샘플':''}</small><div><button type="button" data-listen="${esc(v.id)}" ${v.preview_url?'':'disabled'}>${v.preview_url?'▷ 미리 듣기':'미리듣기 없음'}</button><button type="button" data-select-voice="${esc(v.id)}" ${v.available?'':'disabled'}>${!v.available?'준비 필요':v.id===field.value?'✓ 선택됨':'이 목소리 사용'}</button></div></article>`).join('');
    };
    const load=async()=>{note.textContent='목소리를 불러오는 중…';dialog.querySelector('[data-voice-reload]').hidden=true;try{
     const response=await fetch('/api/studio/voices',{cache:'no-store'});if(response.status===404)throw Error('새 목소리 선택 기능을 적용하려면 터진게시물 서버를 재시작해 주세요.');const data=await response.json();if(!response.ok)throw Error(data.error||'목소리를 불러오지 못했어요.');if(!dialog.isConnected)return;
-    rows=[{id:'',name:'내 목소리 · 기존 기본값',gender:'personal',available:true,description:'VoiceBench에 설정된 기존 목소리를 그대로 사용합니다.'},...data.voices];for(const v of rows)if(v.id)labels[v.id]=v.name;render();
+    rows=[{id:'',name:'내 목소리 복제 · 자동 제작 기본',gender:'personal',available:Boolean(data.personal_default?.available),description:data.personal_default?.available?'내 참조 녹음으로 복제한 목소리입니다. 자동 제작은 이 목소리를 사용합니다.':'본인 참조 녹음과 복제 모델 준비가 필요합니다. 다른 목소리로 자동 대체하지 않습니다.'},...data.voices];for(const v of rows)if(v.id)labels[v.id]=v.name;render();
    }catch(e){note.textContent=e.message;dialog.querySelector('[data-voice-reload]').hidden=false;}};
    dialog.querySelector('[data-voice-reload]').onclick=load;
    dialog.querySelector('[data-model]').onchange=e=>{model=e.target.value;render();};

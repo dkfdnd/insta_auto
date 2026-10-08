@@ -16,7 +16,7 @@ from hotpost.studio_automation import top_two, enqueue_top, rewrite, identify_su
 def report(now):
     return {'generated_at':now, 'posts':[
         {'shortcode':code, 'kind':'reel', 'tier':1, 'rank_score':score,
-         'taken_at':now-3600, 'views':12000, 'metric_status':{'views':'observed'},
+         'taken_at':now-3600, 'hot_detected_at':now, 'views':12000, 'metric_status':{'views':'observed'},
          'assessment':{'last_observed_at':now, 'status':'provisional'}}
         for code,score in [('third',1),('first',3),('second',2)]]}
 
@@ -31,27 +31,29 @@ def setup(tmp_path):
     return s,Studio(s,workers=False)
 
 
-def test_frozen_top_two_never_backfills_or_overwrites_manual_task(setup):
+def test_all_new_hot_videos_are_frozen_without_overwriting_manual_task(setup):
     settings,studio=setup
     manual=studio.create('first')
     r=report(time.time())
     rows=enqueue_top(settings,r,'run-1')
-    assert [x['shortcode'] for x in rows]==['first','second']
+    assert [x['shortcode'] for x in rows]==['first','second','third']
     assert 'automation' not in studio.store.get(manual['id'])
+    assert studio.store.get(rows[1]['task_id'])['automation']['finish_selected_batch']
     r['posts'][0]['rank_score']=99
-    assert [x['created'] for x in rows] == [False, True]
+    assert [x['created'] for x in rows] == [False, True, True]
     repeated = enqueue_top(settings,r,'run-1')
     assert [x['task_id'] for x in repeated] == [x['task_id'] for x in rows]
     assert all(x['outcome']=='existing' and not x['created'] for x in repeated)
-    assert len(studio.store.list())==2
-    assert sum(len(studio.store.jobs(t['id'])) for t in studio.store.list())==2
+    assert len(studio.store.list())==3
+    assert sum(len(studio.store.jobs(t['id'])) for t in studio.store.list())==3
 
 
-def test_stale_top_rank_does_not_turn_third_into_second():
+def test_metric_warning_does_not_remove_a_discovered_hot_video():
     now=time.time(); r=report(now)
     r['posts'][1]['assessment']['last_observed_at']=now-40*3600
     result=top_two(r,Settings(),now)
-    assert [(x['shortcode'],x['eligible']) for x in result]==[('first',False),('second',True)]
+    assert [(x['shortcode'],x['eligible']) for x in result]==[('first',True),('second',True),('third',True)]
+    assert result[0]['metric_warning'] and not result[1]['metric_warning']
     assert top_two({**r,'is_sample':True},Settings(),now)==[]
 
 
@@ -124,6 +126,17 @@ def test_pause_stops_advancement_and_failure_keeps_stage_for_retry(setup):
     assert studio.store.claim()['id']==job['id']
 
 
+def test_resume_with_uploaded_sources_finishes_prepare_before_rewrite(setup):
+    _, studio = setup
+    task = studio.create('first', automation={'active':True,'protocol':2,'stage':'prepare'})
+    studio.action(task['id'], 'pause-auto', {})
+    source = str(studio.folder(task['id'])/'source.mp4')
+    studio.store.change(task['id'], lambda s,db:s.update(sources=[{'id':'upload','path':source}]))
+    studio.action(task['id'], 'resume-auto', {})
+    assert [j['kind'] for j in studio.store.jobs(task['id'])] == ['prepare']
+    assert studio.store.claim()['kind'] == 'prepare'
+
+
 def test_rewrite_reuses_external_id_and_requires_verified_candidate(setup,monkeypatch):
     _,studio=setup
     state=studio.create('first',automation={'active':True})
@@ -136,8 +149,12 @@ def test_rewrite_reuses_external_id_and_requires_verified_candidate(setup,monkey
     monkeypatch.setattr(studio_adapter,'StudioAdapter',lambda s:SimpleNamespace(
         get=lambda job_id:{'state':'completed','result':{'scripts':[{'text':text,'rewrite_review':review}]}}))
     assert rewrite(studio,state,job)['text']==text
+    # Old cached rejections and new advisory reviews both continue production.
+    for status in ('blocked', 'advisory'):
+        review.update(status=status, reasons=['후킹 평가 미흡'])
+        assert rewrite(studio,state,job)['text']==text
     review['script_sha256']='wrong'
-    with pytest.raises(ValueError,match='검증'): rewrite(studio,state,job)
+    with pytest.raises(ValueError,match='버전'): rewrite(studio,state,job)
 
 
 def test_partial_collection_does_not_trigger_watcher(setup):
@@ -203,6 +220,27 @@ def test_explicit_retry_replaces_failed_remote_id_once(setup,monkeypatch):
     assert calls==['old'] and not job['checkpoint'].get('retry_requested')
 
 
+def test_retry_of_completed_but_rejected_generation_creates_new_identity(setup):
+    _,studio=setup
+    task=studio.create('first',automation={'protocol':2,'active':True})
+    def failed(s,db):
+        db.execute("UPDATE jobs SET status='done' WHERE task_id=?",(s['id'],))
+        jid=studio.store.enqueue(db,s['id'],'rewrite',{},'rejected-generation')
+        db.execute("UPDATE jobs SET status='failed',checkpoint=? WHERE id=?",
+                   (json.dumps({'studio_job_id':'completed-but-blocked','generation_key':'old-key'}),jid))
+        s.update(status='attention',error='All candidates rejected')
+    studio.store.change(task['id'],failed)
+    job=next(j for j in studio.store.jobs(task['id']) if j['kind']=='rewrite')
+    studio.action(task['id'],'retry',{'job_id':job['id']})
+    with studio.store.connect() as db:
+        row=db.execute('SELECT status,checkpoint FROM jobs WHERE id=?',(job['id'],)).fetchone()
+    checkpoint=json.loads(row['checkpoint'])
+    assert row['status']=='queued' and 'studio_job_id' not in checkpoint
+    assert checkpoint['generation_key'].startswith('rewrite-retry-')
+    assert checkpoint['previous_studio_job_ids']==['completed-but-blocked']
+    assert len([j for j in studio.store.jobs(task['id']) if j['kind']=='rewrite'])==1
+
+
 def test_open_registered_automatic_project_requests_launch(setup):
     _,studio=setup
     task=studio.create('first')
@@ -245,12 +283,9 @@ def test_explicit_rewrite_correction_preserves_old_result_and_queues_new_attempt
 def test_corrected_script_input_gets_new_idempotency_key(setup,tmp_path,monkeypatch):
     from hotpost.studio_adapter import StudioAdapter
     settings,_=setup;api=StudioAdapter(settings);video=tmp_path/'reference.mp4';video.write_bytes(b'video')
-    calls=[]
-    def request(method,path,**kwargs):
-        calls.append((path,kwargs['headers']['Idempotency-Key']))
-        return {'id':'upload' if path.endswith('uploads') else 'job'}
-    monkeypatch.setattr(api,'request',request)
+    monkeypatch.setattr(api,'writing_contract',lambda:{'sha256':'rules'})
+    keys=[]
+    monkeypatch.setattr(api.jobs,'start',lambda:None)
     for product,generation in [('피규어',''),('원목 진열장',''),('원목 진열장',''),('원목 진열장','attempt-2')]:
-        api.submit('task',video,'원본',{'product':product,'generation_key':generation})
-    keys=[key for path,key in calls if path=='/api/jobs']
+        keys.append(api.submit('task',video,'원본',{'product':product,'generation_key':generation})['id'])
     assert keys[0]!=keys[1] and keys[1]==keys[2] and keys[2]!=keys[3]

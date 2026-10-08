@@ -36,8 +36,8 @@ def platform_of(provider: str, url: str) -> str:
 def round_robin_candidates(items: list, limit: int) -> list:
     pools = defaultdict(deque)
     priority = {"visual-match": 0, "local-cache": 1, "cached-candidate": 1,
-                "platform-search": 2, "keyword": 3}
-    for item in sorted(items, key=lambda row: priority.get(row.match_kind, 4)):
+                "operator-shortlist": 1, "platform-search": 2, "keyword": 3}
+    for item in sorted(items, key=lambda row: (-(getattr(row,'discovery_score',None) or 0), priority.get(row.match_kind,4))):
         pools[platform_of(item.provider, item.url)].append(item)
     order = ("tiktok", "douyin", "xiaohongshu", "youtube", "bilibili", "stock", "other")
     result = []
@@ -83,8 +83,27 @@ def media_format_reasons(meta: dict, max_duration: float = 180) -> list[str]:
 def relevance_reasons(candidate, meta: dict, mode: str = 'scene') -> list[str]:
     reasons = media_format_reasons(meta)
     semantic, scene, combined = candidate.semantic_similarity, candidate.hash_similarity, candidate.similarity
+    review = getattr(candidate, 'functional_review', None) or {}
+    # A cooking context clip is useful footage without being proof of the
+    # reference action. Keep its restricted role and exact reviewed file.
+    if (mode == 'functional' and review.get('reviewed') is True
+            and review.get('same_core_function') is False and review.get('context_usable') is True
+            and review.get('context_usage_limits') and review.get('observed_actions')
+            and review.get('evidence_frames') and candidate.file_sha256
+            and review.get('source_sha256') == candidate.file_sha256):
+        return reasons
+    if mode == 'functional' and review.get('reviewed') is True and review.get('same_core_function') is False:
+        return [*reasons, 'different_core_function']
+    # A reviewed demonstration can establish the same function despite color,
+    # silhouette and camera changes. Category/title similarity alone cannot.
+    if (mode == 'functional' and review.get('reviewed') is True
+            and review.get('same_core_function') is True
+            and review.get('observed_actions') and review.get('evidence_frames')
+            and candidate.file_sha256
+            and review.get('source_sha256') == candidate.file_sha256):
+        return reasons
     # 같은 제품을 다른 구도로 촬영한 대체영상은 장면 지문이 달라도 의미 근거로 보존한다.
-    if mode == 'product' and semantic is not None and semantic >= .82:
+    if mode in {'product', 'functional'} and semantic is not None and semantic >= .82:
         return reasons
     if semantic is not None:
         if semantic < .70 or (scene or 0) < .56 or (combined or 0) < .67:
@@ -98,9 +117,22 @@ def relevance_reasons(candidate, meta: dict, mode: str = 'scene') -> list[str]:
 
 
 def reuse_reasons(candidate) -> list[str]:
-    if candidate.source_quality == "edited-with-text":
-        return ["heavy_text_overlay"]
+    if (candidate.source_quality == "edited-with-text"
+            or (getattr(candidate, 'watermark_frame_ratio', 0) or 0)>0
+            or (getattr(candidate, 'caption_frame_ratio', 0) or 0)>0):
+        # Retain the original source for masking; never relabel it as clean.
+        candidate.blur_required = True
     return []
+
+
+def editing_ready(item: dict) -> bool:
+    if not item.get('editing_eligible', True):
+        return False
+    if item.get('blur_required') or item.get('source_quality') == 'edited-with-text':
+        masks = item.get('watermark_masks')
+        return bool(isinstance(masks, list) and masks
+                    and all(isinstance(m, dict) and m.get('reviewed') is True for m in masks))
+    return item.get('source_quality') in {'clean-source', 'light-overlay'}
 
 
 def select_valid_candidates(candidates: list, limit: int, embeddings: dict | None = None) -> list:
@@ -128,6 +160,12 @@ def select_valid_candidates(candidates: list, limit: int, embeddings: dict | Non
             continue
         candidate.selected_for_zip = True
         candidate.selection_reason = (
+            "reviewed_context_only_requires_capcut_blur" if getattr(candidate, 'blur_required', False)
+            and (getattr(candidate, 'functional_review', None) or {}).get('same_core_function') is False
+            and (candidate.functional_review or {}).get('context_usable') is True else
+            "reviewed_context_only" if (getattr(candidate, 'functional_review', None) or {}).get('same_core_function') is False
+            and (candidate.functional_review or {}).get('context_usable') is True else
+            "relevant_unique_requires_capcut_blur" if getattr(candidate, 'blur_required', False) else
             "relevant_unique_overlay_unclassified"
             if candidate.source_quality == "unknown"
             else "relevant_reusable_unique"

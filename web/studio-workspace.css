@@ -1,0 +1,10 @@
+/* Result comparison is shared by the discovery page and the studio. */
+.pf-result-progress{margin:8px 0 18px}.pf-result-progress>summary{cursor:pointer;color:var(--secondary,var(--muted,#54647c))}
+.pf-comparison header p{color:var(--secondary,var(--muted,#54647c));margin:4px 0 14px}
+.pf-comparison-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.pf-comparison-grid article{min-width:0;background:var(--canvas,var(--panel-2,#f6f7fa));padding:12px;border:1px solid var(--line,#d6dfec);border-radius:12px}
+.pf-comparison-grid h5{font-size:15px;margin:0 0 10px}
+.production-flow .pf-comparison-grid video{width:100%;max-width:none;height:min(48vh,400px);background:#101827;object-fit:contain;border-radius:8px}
+.pf-comparison-grid a{display:inline-block;margin-top:10px;font-size:14px;min-height:36px}
+.pf-comparison-empty{min-height:240px;display:flex;flex-direction:column;justify-content:center;text-align:center;color:var(--secondary,var(--muted,#54647c));padding:20px}
+@media(max-width:750px){.pf-comparison-grid{gap:8px}.pf-comparison-grid article{padding:6px}.pf-comparison-grid h5{font-size:13px;min-height:36px}.production-flow .pf-comparison-grid video{height:240px}.pf-comparison-empty{padding:8px;font-size:12px}}

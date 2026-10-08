@@ -206,13 +206,31 @@ def make_handler(settings: Settings):
                     self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if path == "/api/platform-session":
-                self._json(sessions.start(), HTTPStatus.ACCEPTED); return
+                try:
+                    origin = self.headers.get('Origin')
+                    if origin and urlparse(origin).netloc != self.headers.get('Host'):
+                        self._json({'error':'다른 사이트에서의 로그인 요청은 허용되지 않습니다.'}, HTTPStatus.FORBIDDEN); return
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if length < 0 or length > 4096: raise ValueError('잘못된 요청 크기')
+                    payload = json.loads(self.rfile.read(length)) if length else {}
+                    if not isinstance(payload, dict): raise ValueError('JSON 객체가 필요합니다.')
+                    if 'verification_query' in payload:
+                        session = sessions.start(payload.get('platform'), payload['verification_query'])
+                    else:
+                        session = sessions.start(payload.get('platform'))
+                    self._json(session, HTTPStatus.ACCEPTED)
+                except (ValueError, TypeError) as exc:
+                    self._json({'error': str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             if path == "/api/platform-session/finish":
+                origin = self.headers.get('Origin')
+                if origin and urlparse(origin).netloc != self.headers.get('Host'):
+                    self._json({'error':'다른 사이트에서의 로그인 요청은 허용되지 않습니다.'}, HTTPStatus.FORBIDDEN); return
                 self._json(sessions.finish(), HTTPStatus.ACCEPTED); return
             if path not in ("/api/source-jobs", "/api/transcript-jobs"):
                 self.send_error(HTTPStatus.NOT_FOUND); return
             try:
-                if sessions.status()["active"]:
+                if sessions.status()["active"] and sessions.status().get('active_platform') == 'instagram':
                     self._json({"error": "플랫폼 로그인 창에서 확인 완료를 누른 뒤 다시 시도하세요."},
                                HTTPStatus.CONFLICT); return
                 length = int(self.headers.get("Content-Length", "0"))
@@ -230,6 +248,15 @@ def make_handler(settings: Settings):
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
         def do_GET(self) -> None:  # noqa: N802
+            if urlparse(self.path).path == '/api/report':
+                try:
+                    report = json.loads(settings.report_path.read_text(encoding='utf-8'))
+                    if not isinstance(report, dict) or not isinstance(report.get('posts'), list):
+                        raise ValueError('Invalid report')
+                    self._json(report)
+                except (OSError, ValueError):
+                    self._json({'error':'수집 결과를 아직 읽을 수 없습니다. 기존 화면을 유지합니다.'}, 503)
+                return
             if self.studio_get(studio): return
             path = urlparse(self.path).path
             if path == '/data.js' and settings.report_path.is_file():

@@ -73,7 +73,7 @@ def run_bounded(command, payload, checkpoint, timeout, progress=None):
     return result
 
 
-def isolated_search(settings, frames, queries, limit, debug_dir, previous_searches=None, progress=None):
+def isolated_search(settings, frames, queries, limit, debug_dir, previous_searches=None, progress=None, routes=None):
     debug_dir = Path(debug_dir)
     debug_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = debug_dir / f'search-checkpoint-{uuid.uuid4().hex}.json'
@@ -85,9 +85,10 @@ def isolated_search(settings, frames, queries, limit, debug_dir, previous_search
     public_settings['data_dir'] = str(settings.data_dir.resolve())
     payload = {'settings': public_settings, 'frames': [str(p.resolve()) for p in frames],
                'queries': queries, 'limit': limit, 'debug_dir': str(debug_dir.resolve()),
-               'checkpoint': str(checkpoint.resolve()), 'previous_searches': previous_searches or []}
+               'checkpoint': str(checkpoint.resolve()), 'previous_searches': previous_searches or [], 'routes':routes}
     timeout = max(15, settings.source_browser_timeout)
     if not frames: timeout = min(timeout, 180)
+    payload['budget_seconds'] = timeout
     python = Path(sys.executable)
     if os.name == 'nt' and python.with_name('python.exe').is_file():
         python = python.with_name('python.exe')
@@ -102,7 +103,11 @@ def main():
     payload = json.load(sys.stdin)
     payload['settings']['data_dir'] = Path(payload['settings']['data_dir'])
     searcher = BrowserSearcher(Settings(**payload['settings']), Path(payload['debug_dir']))
+    # Leave time to flush cookies/profile and close Chrome normally. The parent
+    # kill remains a last resort for an unresponsive browser, not routine pacing.
+    searcher.deadline = time.monotonic()+max(1,payload.get('budget_seconds',360)-10)
     searcher.previous_searches = payload['previous_searches']
+    searcher.routes = payload.get('routes')
     target = Path(payload['checkpoint'])
     def checkpoint(message):
         _atomic_json(target, {'message': message, 'candidates': [*searcher.visual_candidates, *searcher.candidates],

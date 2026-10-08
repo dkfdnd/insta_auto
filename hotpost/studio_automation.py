@@ -1,4 +1,4 @@
-"""Daily top-two selection and resumable handoffs into the existing studio."""
+"""Select every newly detected hot video and hand it off to the studio."""
 from __future__ import annotations
 
 import hashlib
@@ -7,27 +7,35 @@ import re
 import subprocess
 import sys
 import time
+from .daily_hot import daily_state, date_key
 
 
-def top_two(report, settings, now=None):
+def selection_key(run_key, now=None):
+    return f'{run_key}:daily-hot-all-v2:{date_key(time.time() if now is None else now)}'
+
+
+def all_today(report, settings, now=None):
     now = time.time() if now is None else now
     if report.get('is_sample') or now - report.get('generated_at', 0) > settings.metric_freshness_hours * 3600:
         return []
     rows = [p for p in report.get('posts', []) if p.get('kind') in ('reel', 'video')
-            and p.get('tier', 0) >= 1 and 0 <= now - p.get('taken_at', 0) <= 14 * 86400]
+            and daily_state(p, now)['hot_today'] and p.get('taken_at', 0) <= now]
     rows.sort(key=lambda p: (p.get('rank_score', 0), p.get('taken_at', 0)), reverse=True)
-    # Freeze the actual first and second places; an ineligible rank is not
-    # silently replaced by third/fourth place or by already-produced exclusions.
     result = []
-    for rank, p in enumerate(rows[:2], 1):
+    for rank, p in enumerate(rows, 1):
         observed = (p.get('assessment') or {}).get('last_observed_at') or 0
         eligible = (p.get('metric_status', {}).get('views') == 'observed'
                     and p.get('views') is not None
                     and 0 <= now - observed <= settings.metric_freshness_hours * 3600)
         result.append({'shortcode':p['shortcode'], 'rank':rank, 'rank_score':p.get('rank_score'),
-                       'assessment':p.get('assessment', {}), 'eligible':eligible,
-                       'reason':'' if eligible else '정확한 최신 조회수 미확인'})
+                       'assessment':p.get('assessment', {}), 'eligible':True, 'reason':'',
+                       'metric_warning':'' if eligible else '정확한 최신 조회수 미확인'})
     return result
+
+
+def top_two(report, settings, now=None):
+    """Compatibility entry point; the current policy selects all today's videos."""
+    return all_today(report, settings, now)
 
 
 def enqueue_top(settings, report, run_key):
@@ -35,7 +43,8 @@ def enqueue_top(settings, report, run_key):
         return []
     from .studio import Studio
     studio = Studio(settings, workers=False)
-    selection = studio.store.freeze_selection(run_key, top_two(report, settings))
+    daily_run_key = selection_key(run_key)
+    selection = studio.store.freeze_selection(daily_run_key, all_today(report, settings))
     results = []
     for row in selection:
         if not row['eligible']:
@@ -43,8 +52,10 @@ def enqueue_top(settings, report, run_key):
             continue
         task, created = studio.create(row['shortcode'], automation={
             **row, 'active':True, 'protocol':2, 'run_key':str(run_key), 'selected_at':time.time(),
-            'policy':'최근 14일 영상 · 기본 급상승순 상위 2개', 'stage':'prepare',
+            'selection_date_kst':date_key(time.time()),
+            'policy':'한국시간 오늘 최초 감지 핫 영상 전체 · 급상승순 제작 · 이전 감지일은 소모 처리', 'stage':'prepare',
             'selection_mode':'automatic', 'reviewed_by_user':False,
+            'finish_selected_batch':True,
         }, with_created=True)
         from .studio_intake import task_status
         status = task_status(task)
@@ -99,16 +110,20 @@ def rewrite(studio, state, job):
     request_id = checkpoint.get('studio_job_id')
     if not request_id:
         from pathlib import Path
+        from .reference_context import post_caption, reference_kind
         manifest_path = Path(state.get('manifest_path', ''))
         manifest = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.is_file() else {}
         product = state.get('product_override') or identify_subject(manifest, state['original_text'], state.get('product') or state['title'])
         studio.store.change(state['id'], lambda s, db: s.update(product=product))
-        remote = adapter.submit(state['id'], Path(state['reference_video']), state['original_text'],
+        # Benchmark the original narration, never replace its topic with B-roll.
+        rewrite_video = state['reference_video']
+        remote = adapter.submit(state['id'], Path(rewrite_video), state.get('reviewed_original_text', state['original_text']),
                                 {'product':product,
                                  'product_url':state.get('product_url_override',''),
-                                 'evidence_mode':state.get('evidence_mode','research'),
-                                 'notes':'관찰 가능한 특징과 원본 발화만 사용하세요. 확인되지 않은 제품 사양을 추가하지 마세요. '
-                                         '보관하는 물건과 보관함을 구별하세요. 동일 모델이 확인되지 않은 외부 자료의 가격·재질·치수를 가져오지 마세요. '
+                                 'evidence_mode':'benchmark',
+                                 'reference_caption':post_caption(studio.settings,state),
+                                 'reference_kind':reference_kind(state),
+                                 'notes':'공통 대본 계약으로 자동 제작합니다. '
                                          + state.get('rewrite_instructions',''),
                                  'generation_key':checkpoint.get('generation_key','')})
         request_id = remote['id']
@@ -128,31 +143,35 @@ def rewrite(studio, state, job):
             studio.store.checkpoint(job['id'], checkpoint)
         if remote['state'] == 'completed':
             _atomic_json(studio.folder(state['id']) / 'script-candidates.json', remote['result'])
+            studio.store.change(state['id'], lambda s, db: s.update(
+                script_candidates=remote['result']['scripts'],
+                benchmark_analysis=remote['result'].get('benchmark',{}).get('analysis',{})))
             candidates = remote['result'].get('scripts', [])
             valid = []
-            reference_hash = hashlib.sha256(state['original_text'].encode()).hexdigest()
+            reference_hash = hashlib.sha256(state.get('reviewed_original_text', state['original_text']).encode()).hexdigest()
             for index, item in enumerate(candidates):
                 text = item.get('text', '').strip()
                 review = item.get('rewrite_review') or {}
-                if (text and len(text) <= 3000 and review.get('status') == 'needs_editorial_review'
+                if (text and len(text) <= 3000
                         and review.get('script_sha256') == hashlib.sha256(item['text'].encode()).hexdigest()
                         and review.get('reference_sha256') == reference_hash):
                     valid.append((index, item))
             if not valid:
                 reasons = list(dict.fromkeys(reason for item in candidates
                     for reason in (item.get('rewrite_review') or {}).get('reasons', [])))
-                raise ValueError('대본 검사와 버전 검증을 통과한 재가공 대본이 없습니다. '
-                                 + '상품과 근거를 확인한 뒤 새 대본을 생성하세요. 원본으로 대체하지 않습니다. '
+                raise ValueError('사용 가능한 재가공 대본 또는 일치하는 버전 정보가 없습니다. '
                                  + ' / '.join(reasons)[:420])
             if state.get('automation', {}).get('protocol') == 2:
                 from .studio_top_pick import choose
-                index, evaluation = choose(studio.settings, state, valid)
+                index, evaluation = choose(studio.settings, {**state,
+                    'benchmark_analysis': remote['result'].get('benchmark',{}).get('analysis',{})}, valid)
                 item = next(item for i,item in valid if i == index)
             else:
                 index, item = valid[0]
-                evaluation = {'reason':'대본 검사와 해시 검증을 통과한 첫 번째 후보 자동 선택 · 최종 영상 검토 필요'}
+                evaluation = {'reason':'버전이 일치하는 첫 번째 후보 자동 선택 · 내용 판단은 완성 영상에서'}
             _atomic_json(studio.folder(state['id']) / 'script-candidates.json', remote['result'])
             return {'text':item['text'], 'script_candidates':candidates, 'studio_job_id':request_id,
+                    'benchmark_analysis':remote['result'].get('benchmark',{}).get('analysis',{}),
                     'selected_candidate':index, 'rewrite_review':item['rewrite_review'],
                     'top_pick':evaluation, 'selection_reason':evaluation['reason']}
         if remote['state'] in ('failed', 'cancelled', 'interrupted'):
@@ -163,7 +182,7 @@ def rewrite(studio, state, job):
             studio.store.change(state['id'], lambda s, db: s.update(message=message, progress=progress))
             checkpoint['_last_progress'] = (message, progress)
         time.sleep(2)
-    raise RuntimeError('대본 생성 대기 시간 초과. 재시도하면 기존 script_auto 작업을 조회합니다.')
+    raise RuntimeError('대본 생성 대기 시간 초과. 재시도하면 기존 내장 Codex 작업을 조회합니다.')
 
 
 def identify_subject(manifest, speech, fallback):

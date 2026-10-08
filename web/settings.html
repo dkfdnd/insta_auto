@@ -5,16 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>설정 · Hotpost</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-<link rel="stylesheet" href="style.css?v=8">
+<link rel="stylesheet" href="style.css?v=12-platform-login">
 </head>
 <body><header class="top"><div class="wrap top-inner"><div><h1>설정</h1><p class="sub">게시물 표시 조건과 판정 기준을 한곳에서 관리합니다.</p></div><nav class="top-right"><a class="btn ghost" href="/">터진 게시물</a><a class="btn ghost" href="accounts.html">레퍼런스 계정</a><button class="btn ghost" id="theme-toggle" aria-label="테마 전환">🌙</button></nav></div></header>
 <main class="wrap settings-page"><p class="banner" id="settings-status" role="status">설정을 불러오는 중…</p>
 <section class="section settings-panel"><h2>목록 표시</h2><p class="hint">저장한 조건은 이 서버의 터진 게시물 페이지에 공통으로 적용됩니다.</p>    <div class="toolbar">
-      <div class="setting-field"><span class="field-label">감지일</span><div class="seg" id="detection" data-key="detection" aria-label="핫 감지일 필터">
-        <button data-v="all" class="on">전체 감지일</button><button data-v="today">오늘 터진 게시물</button>
+      <div class="setting-field"><span class="field-label">발견 시각</span><div class="seg" id="detection" data-key="detection" aria-label="발견 시각 필터">
+        <button data-v="today" class="on">오늘</button><button data-v="all">최근 기간</button>
       </div></div>
-      <div class="setting-field"><span class="field-label">게시 후 기간</span><div class="seg" id="period" data-key="period">
-        <button data-v="24">24시간</button><button data-v="72">3일</button><button data-v="168">7일</button><button data-v="336" class="on">14일</button><button data-v="720">30일</button>
+      <div class="setting-field"><span class="field-label">발견한 기간</span><div class="seg" id="period" data-key="period" aria-label="현재 시각부터 계산한 발견 기간">
+        <button data-v="24" class="on">24시간</button><button data-v="72">3일</button><button data-v="168">7일</button><button data-v="336">14일</button><button data-v="720">30일</button>
       </div></div>
       <div class="setting-field"><span class="field-label">게시물 유형</span><div class="seg" id="kind" data-key="kind">
         <button data-v="all" class="on">전체</button><button data-v="video">릴스</button><button data-v="image">사진</button>
@@ -30,7 +30,7 @@
         <option value="views">조회수순</option>
         <option value="comments">댓글순</option>
         <option value="likes">좋아요순</option>
-        <option value="recent">최신순</option>
+        <option value="recent">최근 발견순</option>
       </select></label>
       <label class="setting-field"><span class="field-label">판정 상태</span><select id="assessment" aria-label="판정 상태">
         <option value="all">모든 판정 상태</option>
@@ -40,27 +40,31 @@
       <label class="setting-field"><span class="field-label">계정</span><select id="account"><option value="">모든 계정</option></select></label>
       <button class="btn ghost" id="display-reset">초기화</button>
     </div>
-    <p class="hint">핫 최초 감지일은 시스템이 처음 핫 기준을 통과한 것으로 기록한 날짜입니다. ‘오늘’은 한국시간 기준이며 잠정 후보를 포함합니다. 오늘 필터에서는 게시일 기간 제한을 적용하지 않습니다.</p>
+    <p class="hint">발견 시각은 터진게시물 기준 통과를 처음 확인한 시각입니다. ‘오늘’은 한국 시간 00시부터, ‘최근 기간’은 현재 시각부터 계산하며 잠정 후보도 포함합니다. 재수집해도 발견 시각은 바뀌지 않습니다. 상단 숫자는 항상 ‘오늘’ 기준입니다.</p>
 </section>
 <section class="section settings-panel"><h2>판정 기준</h2><div class="presets" id="presets"><button data-preset="default">기본</button><button data-preset="comments">댓글 중심</button><button data-preset="views">조회수 중심</button><button data-preset="strict">엄격</button><button data-preset="loose">느슨</button></div><p id="crit-summary" class="hint"></p><details><summary>세부 기준 조절</summary><div class="criteria-body" id="crit-body"></div></details></section>
 <section class="section settings-panel"><h2>판정 방법</h2><div class="method-body" id="method"></div></section>
-<section class="section settings-panel"><h2>연결</h2><button class="btn" id="platform-login">플랫폼 로그인 관리</button><a class="btn ghost" href="production.html">릴스 제작 작업실</a></section>
+<section class="section settings-panel"><h2>연결</h2><button class="btn" id="platform-login">플랫폼 로그인 관리</button><a class="btn ghost" href="studio.html">제작실</a></section>
 <div class="settings-save"><span>변경 후 저장하면 메인 화면에 반영됩니다.</span><button class="linkbtn" id="settings-save" disabled>설정 저장</button></div></main><div class="modal" id="session-modal" hidden>
   <div class="modal-backdrop" data-session-close></div>
   <div class="modal-card session-card" role="dialog" aria-modal="true" aria-labelledby="session-title">
     <button class="modal-close" data-session-close aria-label="닫기">✕</button>
     <div class="session-body">
       <h2 id="session-title">플랫폼 로그인 관리</h2>
-      <p class="hint">전용 Chrome에서 로그인하면 쿠키를 안전하게 저장해 실제 영상 다운로드에 연결합니다.</p>
-      <div class="session-platforms" id="session-platforms"></div>
-      <div class="source-status" id="session-status"></div>
-      <div class="detail-actions">
-        <button class="linkbtn" id="session-start">로그인 창 열기</button>
-        <button class="linkbtn secondary" id="session-finish" hidden>로그인 확인 완료</button>
+      <p class="hint">플랫폼을 선택해 로그인·인증을 마친 뒤 ‘세션 저장 완료’를 누르세요. 같은 브라우저 세션을 다음 수집에도 사용합니다. 인증 대기 중인 검색은 저장 후 다시 확인하며, 인증이 다시 나타나면 해당 플랫폼만 멈춥니다.</p>
+      <div class="platform-logins">
+        <div class="platform-login-buttons">
+          <div><button class="btn ghost" data-platform-login="google">Google 검색 인증</button><small data-platform-status="google">상태 확인 중</small></div>
+          <div><button class="btn ghost" data-platform-login="douyin">더우인 로그인</button><small data-platform-status="douyin">상태 확인 중</small></div>
+          <div><button class="btn ghost" data-platform-login="xiaohongshu">샤오홍슈 로그인</button><small data-platform-status="xiaohongshu">상태 확인 중</small></div>
+          <div><button class="btn ghost" data-platform-login="tiktok">TikTok 로그인</button><small data-platform-status="tiktok">상태 확인 중</small></div>
+          <div><button class="btn ghost" data-platform-login="instagram">Instagram 로그인</button><small data-platform-status="instagram">상태 확인 중</small></div>
+        </div>
+        <p id="platform-session-message" class="hint" role="status" aria-live="polite">저장된 세션을 확인합니다.</p>
+        <div class="detail-actions"><button class="linkbtn" id="platform-session-finish" hidden>세션 저장 완료</button></div>
       </div>
-      <p class="hint">TikTok·Douyin·Xiaohongshu·YouTube 탭이 열립니다. QR·문자 인증과 CAPTCHA는 브라우저에서 직접 완료하세요.</p>
     </div>
   </div>
 </div>
 
-<script src="data.js"></script><script src="display-settings.js?v=1"></script><script src="settings.js?v=1"></script></body></html>
+<script src="data.js"></script><script src="display-settings.js?v=discovery-20261005"></script><script src="settings.js?v=2-platform-menu"></script><script src="platform-logins.js?v=3-auth-gates"></script></body></html>

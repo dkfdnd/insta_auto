@@ -72,3 +72,23 @@ def test_browser_url_still_requires_instagram_cdn(tmp_path, monkeypatch):
     monkeypatch.setattr(sf.requests, 'get', lambda *a, **kw: pytest.fail('must reject URL'))
     with pytest.raises(RuntimeError, match='CDN'):
         sf._download_reference(Settings(data_dir=tmp_path), SimpleNamespace(shortcode='target'), tmp_path / 'video.mp4')
+
+
+def test_reset_never_reuses_an_old_reference(tmp_path, monkeypatch):
+    import json
+    import time
+    settings = Settings(data_dir=tmp_path, collection_source='browser')
+    cached = settings.transcript_dir/'target-old'/'reference.mp4'
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b'old-reference')
+    (tmp_path/'collection_reset.json').write_text(json.dumps({
+        'shortcodes':['target'],'cache_after':time.time()+1}), encoding='utf-8')
+    monkeypatch.setattr(sf, 'probe_video', lambda _: {'duration':12,'width':720})
+    calls=[]
+    monkeypatch.setattr(iv, 'browser_video_url', lambda s, code:calls.append(code) or 'https://s.cdninstagram.com/new.mp4')
+    response=SimpleNamespace(status_code=200,iter_content=lambda _: [b'new-reference'],close=lambda:None)
+    monkeypatch.setattr(sf.requests,'get',lambda *a,**k:response)
+    target=tmp_path/'new-reference.mp4'
+    sf._download_reference(settings, SimpleNamespace(shortcode='target'), target)
+    assert calls==['target'] and target.read_bytes()==b'new-reference'
+    assert cached.read_bytes()==b'old-reference'

@@ -12,8 +12,8 @@ def test_existing_checkout_aliases_resolve_services_and_keys(tmp_path, monkeypat
     settings = config.Settings()
     assert settings.voicebench_root == tmp_path / 'Voice'
     assert settings.voicebench_api_key_file == settings.voicebench_root / '.runtime/external-api-key.txt'
-    assert settings.studio_root == tmp_path / 'PersonalProject1'
-    assert settings.studio_api_key_file == settings.studio_root / 'data/access-token.txt'
+    assert 'PersonalProject1' not in str(settings.studio_root)
+    assert settings.studio_api_key_file.name == 'unused-legacy-key'
     assert settings.voicebench_url.endswith(':8765')
 
 

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>오늘의 터진 게시물</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-<link rel="stylesheet" href="style.css?v=11">
+<link rel="stylesheet" href="style.css?v=13-collection-bell">
 </head>
 <body>
 <header class="top">
@@ -14,8 +14,16 @@
       <h1>🔥 오늘의 터진 게시물</h1>
       <p class="sub" id="meta">데이터를 불러오는 중…</p>
     </div>
-    <div class="top-right">
+    <div class="top-right main-navigation">
       <a class="btn" href="studio.html">▣ 제작실</a>
+      <div class="notification-anchor collection-notifications" id="collection-notifications">
+        <button type="button" class="icon-button notification-bell" id="collection-notification-toggle" title="수집 알림" aria-label="수집 알림" aria-haspopup="dialog" aria-expanded="false" aria-controls="collection-notification-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M9 21h6"/></svg><span class="notification-badge" id="collection-notification-count" hidden>1</span></button>
+        <section class="notification-panel collection-notification-panel" id="collection-notification-panel" role="dialog" aria-labelledby="collection-notification-title" hidden>
+          <div class="notification-head"><h2 id="collection-notification-title">수집 알림</h2><button type="button" class="icon-button" id="collection-notification-close" aria-label="수집 알림 닫기">×</button></div>
+          <p id="collection-notification-loading" class="hint" role="status">수집 상태를 불러오는 중…</p>
+          <div id="collection-health" hidden></div>
+        </section>
+      </div>
       <span class="badge" id="source-badge"></span>
       <a class="btn ghost" href="accounts.html">👥 레퍼런스 계정</a>
       <a class="btn ghost" href="settings.html">설정</a>
@@ -27,9 +35,8 @@
 <main class="wrap" id="app">
   <div id="studio-selection" style="position:sticky;top:8px;z-index:20;background:#245f50;color:#fff;border-radius:10px;padding:12px 18px;display:flex;align-items:center;gap:14px;margin-bottom:12px" hidden><b id="studio-selected-count">0개 선택</b><span style="flex:1">선택한 소재를 준비하고 대본부터 검토합니다</span><button class="btn" id="studio-add-selected">제작실에 추가 →</button></div>
   <div id="banner" class="banner" hidden></div>
-  <div id="collection-health" class="banner" role="status" hidden></div>
 
-  <section class="stats" id="stats"></section>
+  <section class="stats" id="stats" aria-label="한국 시간 기준 오늘 처음 감지한 터진 게시물 통계"></section>
   <div class="discovery-overview">
   <section class="topic-panel" aria-labelledby="topics-title">
     <div class="section-head">
@@ -60,14 +67,27 @@
 </div>
 
 <script src="data.js?v=studio-top-two"></script>
-<script src="hot-detection.js?v=1"></script>
-<link rel="stylesheet" href="production-flow.css?v=8-search-actions">
-<script src="studio-board.js?v=novice-1"></script>
+<script src="hot-detection.js?v=discovery-20261005"></script>
+<link rel="stylesheet" href="production-flow.css?v=reference-20261005">
+<script src="studio-board.js?v=result-20261005"></script>
 <link rel="stylesheet" href="voice-picker.css?v=1">
-<script src="voice-picker.js?v=1"></script>
-<script src="production-flow.js?v=voices-1"></script>
-<script src="display-settings.js?v=1"></script>
-<script src="notices.js?v=1"></script>
-<script src="app.js?v=16-discovery-summary"></script>
+<script src="voice-picker.js?v=detail-refresh-20261008-final-2"></script>
+<script src="studio-workspace.js?v=detail-20261005"></script>
+<link rel="stylesheet" href="studio-workspace.css?v=reference-20261005">
+<script src="studio-detail.js?v=detail-refresh-20261008-final-2"></script>
+<script src="studio/source-view.js?v=detail-refresh-20261008-final-2"></script>
+<script src="production-flow.js?v=detail-refresh-20261008-final-2"></script>
+<script src="display-settings.js?v=discovery-20261005"></script>
+<script src="notices.js?v=2-collection-bell"></script>
+<script src="collection-notifications.js?v=1"></script>
+<script src="post-result.js?v=result-20261005-spinner2"></script>
+<script src="discovery/model.js?v=modules-20261006"></script>
+<script src="discovery/report-refresh.js?v=modules-20261006"></script>
+<script src="discovery/reference-jobs.js?v=modules-20261006"></script>
+<script src="app.js?v=modules-20261006"></script>
+<link rel="stylesheet" href="studio-status.css?v=status-20261005">
+<link rel="stylesheet" href="studio-activity.css?v=activity-20261005">
+<link rel="stylesheet" href="studio-detail.css?v=detail-refresh-20261008-final-2">
+<link rel="stylesheet" href="post-result.css?v=theme-20261006">
 </body>
 </html>

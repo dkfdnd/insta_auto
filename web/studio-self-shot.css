@@ -1,0 +1,13 @@
+.studio-entry-actions{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end;align-items:center}
+.pf-comparison[data-owned-output] .pf-comparison-grid{grid-template-columns:minmax(0,1fr)}
+.self-shot-dialog{width:min(650px,calc(100vw - 32px));max-height:90vh;padding:28px;border-radius:20px;border:1px solid var(--line,#d8dde8);background:var(--surface,#fff);color:var(--ink,#172033);box-shadow:0 24px 80px #0003}
+.self-shot-dialog::backdrop{background:#15213966;backdrop-filter:blur(5px)}
+.self-shot-form{display:grid;gap:18px}.self-shot-form .dialog-head{margin-bottom:0}.self-shot-form p{margin:0;line-height:1.6}
+.self-shot-form label{display:block;font-size:14px;font-weight:600;line-height:1.6}.self-shot-form input:not([type=radio]),.self-shot-form textarea{display:block;width:100%;box-sizing:border-box;margin-top:6px;padding:11px 13px;font:inherit;font-weight:400;color:inherit;background:var(--glass-input,#f7f9fc);border:1px solid var(--line,#d8dde8);border-radius:10px}.self-shot-form textarea{resize:vertical}
+.self-shot-form [data-own-auto],.self-shot-form [data-own-manual]{display:grid;gap:15px}.self-shot-form [hidden]{display:none!important}
+.self-shot-modes{display:flex;flex-wrap:wrap;gap:12px;border:0;padding:0;margin:0}.self-shot-modes legend{font-weight:600;margin-bottom:9px}.self-shot-modes label{padding:10px 14px;border:1px solid var(--line,#d8dde8);border-radius:10px}.self-shot-modes label:has(:checked){border-color:var(--accent,#3867d6);background:#3867d60c}
+.self-shot-optional{font-size:12px;font-weight:400;color:var(--muted,#627086);margin-left:6px}.self-shot-help{font-size:13px;color:var(--muted,#627086)}
+.self-shot-footer{display:flex;gap:10px;justify-content:flex-end}.self-shot-form [data-own-error]{color:#bf3246;background:#bf324610;border-radius:10px;padding:12px}
+.self-shot-extra{border-top:1px solid var(--line,#d8dde8);padding-top:12px}.self-shot-extra summary{cursor:pointer;font-size:14px;font-weight:600}.self-shot-extra>div{display:grid;gap:15px;margin-top:15px}
+.self-shot-brief{margin-bottom:20px;padding:18px;border:1px solid var(--line,#d8dde8);border-radius:14px}.self-shot-brief p{white-space:pre-wrap;overflow-wrap:anywhere}.self-shot-brief h4{margin:0 0 8px}.self-shot-brief button{margin-top:12px}
+@media(max-width:750px){.studio-entry-actions{justify-content:flex-start;width:100%}.studio-entry-actions>*{flex:1}.self-shot-dialog{padding:20px}.self-shot-footer>*{flex:1;white-space:nowrap}.self-shot-footer .primary{flex:2}}

@@ -1,4 +1,6 @@
 requests>=2.32
+psutil>=7.2
+jsonschema>=4.26
 pillow>=10
 instaloader>=4.13
 browser-cookie3>=0.19

@@ -5,7 +5,7 @@
   function bind(root,task,onUploaded,onIdle){
     const zone=root.querySelector('[data-upload-widget]');if(!zone)return;
     root._uploadQueue ||= [];
-    root._uploadCallbacks={onUploaded,onIdle,taskId:task.id};
+    root._uploadCallbacks={onUploaded,onIdle,taskId:task.id,task};
     function paint(){
       const list=root.querySelector('[data-upload-list]');if(!list)return;
       const markup=root._uploadQueue.map((f,i)=>`<li data-upload-state="${f.state}"><span class="upload-file-icon" aria-hidden="true">${f.state==='done'?'✓':f.state==='failed'?'!':'▷'}</span><div><strong>${esc(f.file.name)}</strong><span>${labels[f.state]}${f.state==='uploading'?` · ${f.percent}%`:''}${f.error?' · '+esc(f.error):''}</span><progress max="100" value="${f.percent}" aria-label="${esc(f.file.name)} 전송 진행"></progress></div>${f.state==='failed'&&f.retryable!==false?`<button type="button" data-upload-retry="${i}">재시도</button>`:''}</li>`).join('');
@@ -45,7 +45,10 @@
     function add(files){
       for(const file of files){
         if(root._uploadQueue.some(r=>r.file.name===file.name&&r.file.size===file.size&&r.file.lastModified===file.lastModified&&r.state!=='failed'))continue;
-        const error=!/\.(mp4|mov|webm)$/i.test(file.name)?'MP4, MOV, WEBM 파일을 선택하세요.':!file.size?'빈 파일은 사용할 수 없어요.':file.size>512*1024*1024?'파일 하나당 512MB 이하로 선택하세요.':'';
+        const current=root._uploadCallbacks.task;
+        const pending=root._uploadQueue.filter(r=>['queued','uploading','checking'].includes(r.state)).length;
+        const full=current.creation_mode==='self_shot'&&(current.sources.length+pending>=20);
+        const error=full?'내 촬영 영상은 작업 하나에 최대 20개까지 추가할 수 있습니다.':!/\.(mp4|mov|webm)$/i.test(file.name)?'MP4, MOV, WEBM 파일을 선택하세요.':!file.size?'빈 파일은 사용할 수 없어요.':file.size>512*1024*1024?'파일 하나당 512MB 이하로 선택하세요.':'';
         root._uploadQueue.push({file,state:error?'failed':'queued',percent:0,error,retryable:!error});
       }
       paint();drain();

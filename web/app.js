@@ -3,16 +3,16 @@
   'use strict';
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const R = window.HOTPOST_REPORT;
+  let R = window.HOTPOST_REPORT;
   async function loadCollectionHealth() {
     const el=$('#collection-health');if(!el)return;
     try{
       const responses=await Promise.all([fetch('/api/collection-status',{cache:'no-store'}),fetch('/api/accounts',{cache:'no-store'})]);
       if(responses.some(r=>!r.ok))throw new Error('수집 상태 조회 실패');
       const [data,accounts]=await Promise.all(responses.map(r=>r.json()));
-      window.HotpostNotices.show(el,window.HotpostNotices.collection(data,accounts.accounts,R||{}));
+      window.CollectionNotifications.update(window.HotpostNotices.collection(data,accounts.accounts,R||{}));
     }catch(_){
-      window.HotpostNotices.show(el,{title:'수집 상태를 확인하지 못했습니다.',tone:'warning',
+      window.CollectionNotifications.update({title:'수집 상태를 확인하지 못했습니다.',tone:'warning',
         solution:'서버 연결을 확인하고 상태를 다시 조회하세요. 계속 실패하면 서버 실행 상태를 확인하세요.',
         actions:[{label:'상태 다시 확인',run:loadCollectionHealth},{label:'서버 확인 방법',href:'accounts.html#help-server'}]});
     }
@@ -64,18 +64,20 @@
   }
 
   // ---------- 판정 기준 ----------
-  const S = R.settings;
-  const acctMap = Object.fromEntries((R.accounts || []).map((account) => [account.username, account]));
+  let acctMap = Object.fromEntries((R.accounts || []).map((account) => [account.username, account]));
   let POSTS=[];
   function recompute(){POSTS=R.posts.slice();}
   // ---------- 헤더 / 배너 ----------
-  $('#meta').textContent = `${R.generated_at_kst} 기준 · 판정 v${R.criteria.version} · ${R.summary.accounts}개 계정 · 최근 ${S.recent_days}일 게시물 ${R.posts.length}개 분석`;
-  const sb = $('#source-badge');
+  function renderReportMetadata(){
+  $('#meta').textContent = `${R.generated_at_kst} 기준 · 판정 v${R.criteria.version} · ${R.summary.accounts}개 계정 · 최근 ${R.settings.recent_days}일 게시물 ${R.posts.length}개 분석`;
+  const sb = $('#source-badge'); sb.classList.remove('sample','live');
   if (R.is_sample) { sb.textContent = '샘플 데이터'; sb.classList.add('sample'); }
   else { sb.textContent = { instaloader: '실데이터 · 세션 수집', web: '실데이터 · 웹 수집', dump: '실데이터 · 브라우저 덤프' }[R.source] || '실데이터'; sb.classList.add('live'); }
   if(R.is_sample)window.HotpostNotices.show($('#banner'),{title:'샘플 게시물이 표시되고 있습니다.',tone:'info',
     solution:'전용 Instagram 로그인 상태를 확인한 뒤 수집을 실행하면 실제 게시물로 바뀝니다.',
     actions:[{label:'실제 데이터 수집 방법',href:'accounts.html#help-collect'}]});
+  }
+  renderReportMetadata();
 
   // ---------- 상태 ----------
   let saved;
@@ -85,12 +87,12 @@
   function currentSettings(){
     const c=R.criteria.values;
     const icon=name=>`<svg viewBox="0 0 24 24" aria-hidden="true">${({filter:'<path d="M4 6h16M7 12h10M10 18h4"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 3v4m8-4v4M4 11h16"/>',sort:'<path d="M7 4v16m-4-4 4 4 4-4M14 5h7m-7 5h5m-5 5h3"/>',video:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4Z"/>',settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>'})[name]}</svg>`;
-    const period=state.detection==='today'?['오늘','감지']:state.period===24?['24','시간']:[state.period/24,'일'];
-    const sort={rank:'급상승순',views:'조회수순',comments:'댓글순',likes:'좋아요순',recent:'최신순'}[state.sort];
+    const period=state.detection==='today'?['오늘','']:state.period===24?['24','시간']:[state.period/24,'일'];
+    const sort={rank:'급상승순',views:'조회수순',comments:'댓글순',likes:'좋아요순',recent:'최근 발견순'}[state.sort];
     const full=window.HotpostDisplay.describe(state).split(' · ');
     const expanded=$('#current-settings details')?.open;
     $('#current-settings').innerHTML=`<div class="discovery-summary-head"><span>${icon('filter')}현재 보기</span><a href="settings.html" class="icon-button" aria-label="보기 설정 변경" title="보기 설정 변경">${icon('settings')}</a></div>
-      <div class="discovery-numbers"><div class="discovery-count"><span class="summary-label">표시 게시물</span><div><strong id="result-count" aria-live="polite">0</strong><span>개</span></div></div><div class="discovery-period"><span class="summary-label">${icon('calendar')}${state.detection==='today'?'감지일':'최근 기간'}</span><div><strong>${period[0]}</strong><span>${period[1]}</span></div></div></div>
+      <div class="discovery-numbers"><div class="discovery-count"><span class="summary-label">표시 게시물</span><div><strong id="result-count" aria-live="polite">0</strong><span>개</span></div></div><div class="discovery-period"><span class="summary-label">${icon('calendar')}${state.detection==='today'?'발견 시각':'발견 시각 · 최근'}</span><div><strong>${period[0]}</strong><span>${period[1]}</span></div></div></div>
       <div class="discovery-badges"><span>${icon('sort')}${sort}</span><span>${icon('video')}${{all:'전체 유형',video:'릴스',image:'사진'}[state.kind]}</span><span>${state.tier?'🔥'.repeat(state.tier)+' 이상':'전체 등급'}</span></div>
       <p id="result-context" class="result-context" hidden></p>
       <details class="discovery-conditions" ${expanded?'open':''}><summary>세부 조건</summary><div class="condition-tags">${full.map(v=>`<span>${esc(v)}</span>`).join('')}</div><div class="threshold-caption">급상승 등급 기준</div><ol class="threshold-scale" aria-label="급상승 등급 기준">${[1,2,3].map(n=>`<li class="${n===state.tier?'selected':''}"><span class="threshold-mark" aria-hidden="true"></span><strong>${esc(c['t'+n])}<small>배</small></strong><span>${'🔥'.repeat(n)}</span></li>`).join('')}</ol></details>`;
@@ -100,48 +102,11 @@
   $('#search-toggle').onclick=()=>{const open=$('#search-box').hidden;showSearch(open);if(!open){$('#q').value='';state.q='';renderAll();}};
   $('#q').addEventListener('keydown',e=>{if(e.key==='Escape'){e.stopPropagation();showSearch(false);$('#q').value='';state.q='';renderAll();$('#search-toggle').focus();}});
   let qt;$('#q').addEventListener('input',e=>{clearTimeout(qt);qt=setTimeout(()=>{state.q=e.target.value.trim().toLowerCase();renderAll();},150);});
-  window.addEventListener('focus',async()=>{try{const active=await (await fetch('/api/criteria',{cache:'no-store'})).json();if(active.version!==R.criteria.version){location.reload();return;}const fresh=await window.HotpostDisplay.load();Object.assign(state,fresh);if(linkedAccount)state.account=linkedAccount;currentSettings();renderAll();}catch(_){}});
-  // ---------- 필터 ----------
-  function baseFiltered() {   // 기간·유형·계정·검색 (등급/주제 제외) → 주제 계산용
-    const q = state.q;
-    return POSTS.filter((p) => {
-      if (state.detection === 'today') {
-        if (!window.HotpostDetection.isToday(p)) return false;
-      } else if (p.age_hours > state.period) return false;
-      if (state.kind === 'video' && !isVideo(p)) return false;
-      if (state.kind === 'image' && isVideo(p)) return false;
-      if (state.account && p.username !== state.account) return false;
-      if (q && !(p.caption.toLowerCase().includes(q) || p.username.includes(q) || p.hashtags.some((h) => h.includes(q.replace(/^#/, ''))))) return false;
-      return true;
-    });
-  }
-  function filtered(base) {
-    const list = base.filter((p) => {
-      if (p.tier < state.tier) return false;
-      if (state.assessment !== 'all' && p.assessment?.status !== state.assessment) return false;
-      if (state.topic) {
-        const t = state.topic;
-        const hit = (p.categories || ['생활·기타']).includes(t);
-        if (!hit) return false;
-      }
-      return true;
-    });
-    const key = { rank: (p) => p.rank_score, views: (p) => p.views || 0, comments: (p) => p.comments, likes: (p) => p.likes, recent: (p) => p.taken_at }[state.sort];
-    list.sort((a, b) => key(b) - key(a) || b.taken_at - a.taken_at);
-    return list;
-  }
-
-  // ---------- 주제 (클라이언트 재계산) ----------
-  function topics(base) {
-    const groups=new Map();
-    base.filter(p=>p.tier>=Math.max(1,state.tier)&&(state.assessment==='all'||p.assessment?.status===state.assessment)).forEach(p=>{
-      for(const label of p.categories||['생활·기타']){if(!groups.has(label))groups.set(label,{label,posts:0,score:0,accounts:new Set()});const g=groups.get(label);g.posts++;g.score+=p.tier;g.accounts.add(p.username);}
-    });
-    return [...groups.values()].sort((a,b)=>(a.label==='생활·기타')-(b.label==='생활·기타')||b.score-a.score).map(g=>({...g,accounts:g.accounts.size}));
-  }
+  // Query rules are independent of rendering and can be tested without a browser.
+  const discovery=window.HotpostDiscovery.create(window.HotpostDetection);
   const topicsEl = $('#topics');
   function renderTopics(base) {
-    const list = topics(base);
+    const list = discovery.topics(base,state);
     topicsEl.innerHTML = list.length ? '' : '<span class="hint">이 조건에서는 주제를 뽑을 만큼 핫 게시물이 없습니다.</span>';
     list.forEach((t) => {
       const el = document.createElement('button');
@@ -155,16 +120,17 @@
 
   // ---------- 통계 ----------
   function renderStats() {
-    const hot = POSTS.filter((p) => p.tier >= 1);
-    $('#stats').innerHTML = [
-      ['hot', '🔥 기준 통과', hot.length, `/ ${POSTS.length}개`],
-      ['hot', '성과 확인', hot.filter((p) => p.assessment?.status === 'confirmed').length, '개'],
-      ['hot', '잠정 후보', hot.filter((p) => p.assessment?.status !== 'confirmed').length, '개'],
-      ['', '분석 계정', R.summary.accounts, '개'],
-      ['', '릴스 비중', Math.round((POSTS.filter(isVideo).length / Math.max(1, POSTS.length)) * 100), '%'],
+    const summary=discovery.dailyStats(POSTS);
+    const stats=$('#stats');
+    stats.dataset.day=summary.day;
+    stats.innerHTML = [
+      ['hot', '🔥 오늘 기준 통과', summary.total, '개'],
+      ['hot', '오늘 성과 확인', summary.confirmed, '개'],
+      ['hot', '오늘 잠정 후보', summary.provisional, '개'],
+      ['', '오늘 발견 계정', summary.accounts, '개'],
+      ['', '오늘 릴스 비중', summary.videoPercent, '%'],
     ].map(([c, k, v, u]) => `<div class="stat ${c}"><div class="k">${k}</div><div class="v">${v}<small>${u}</small></div></div>`).join('');
   }
-
   // ---------- 카드 ----------
   const productionByCode = new Map();
   const studioByCode = new Map();
@@ -192,9 +158,9 @@
   }, true);
   function productionMarkup(code) {
     const work = studioByCode.get(code);
-    if (work) return `<a class="production-link" href="studio.html?work=${encodeURIComponent(work.id)}" onclick="event.stopPropagation()">${work.automation?'자동 제작 '+work.automation.rank+'위':'제작실 작업'} · 진행/영상 리뷰 →</a><br><small class="${work.error?'production-error':''}">${esc(work.error||work.message)}</small>`;
+    if (work) return `<a class="production-link" href="studio.html?work=${encodeURIComponent(work.id)}" onclick="event.stopPropagation()">${work.automation?.rank ? '자동 제작 '+work.automation.rank+'위' : work.automation ? '선택 영상 제작' : '제작실 작업'} · 진행/영상 리뷰 →</a><br><small class="${work.error?'production-error':''}">${esc(work.error||work.message)}</small>`;
     const job = productionByCode.get(code);
-    if (!job) return '<span class="hint">제작 선택으로 추가 · 수집 후 상위 2개는 자동 제작</span>';
+    if (!job) return '<span class="hint">제작 선택으로 추가 · 오늘 최초 감지 핫 영상 상위 2개는 자동 제작</span>';
     const source = job.source || {}, transcript = job.transcript || {};
     const link = (url, label) => url ? `<a class="production-link" href="${esc(url)}" onclick="event.stopPropagation()">${label}</a>` : `<span>${label}</span>`;
     const states = {queued:'대기',voice:'음성 생성 중',building:'프로젝트 생성 중',draft_ready:'프로젝트 완료',exporting:'내보내기 중',done:'완료',error:'실패 · 재시도 필요',missing:'결과 파일 없음'};
@@ -247,10 +213,11 @@
         <div class="rank">#${i + 1}</div>
       </div>
       <div class="body">
-        <div class="who"><span class="avatar">${initials(p.username)}</span><span class="name">@${esc(p.username)}</span><span class="time" title="${dateStr(p.taken_at)}">${ago(p.age_hours)}</span></div>
+        <div class="who"><span class="avatar">${initials(p.username)}</span><span class="name">@${esc(p.username)}</span><span class="time" title="업로드 ${dateStr(p.taken_at)}">업로드 ${ago(Math.max(0,Date.now()/1000-p.taken_at)/3600)}</span></div>
         <div class="metrics benchmark-metrics">
           ${isVideo(p) ? metric('조회수', p.views, p.ratios.views, p.views == null) : metric('좋아요', p.likes, p.ratios.likes, false)}
         </div>
+        ${p.tier >= 1 ? `<div class="hint">${window.HotpostDetection.isToday(p) ? '오늘 발견 · 제작 우선' : window.HotpostDetection.consumed(p) ? '이전 발견 · 소모 처리 (자동 선정 제외)' : '발견 시각 확인 필요'}</div>` : ''}
         <div class="cap">${esc(p.caption.replace(/#\S+/g, '').trim()) || '<span class="hint">(캡션 없음)</span>'}</div>
         ${isVideo(p) ? `<div class="production-status" data-code="${esc(p.shortcode)}">${productionMarkup(p.shortcode)}</div>` : ''}
         <div class="foot"><button class="card-open-production">${isVideo(p) ? '제작 진행 보기 →' : '게시물 보기 →'}</button><a href="${esc(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">원본 ↗</a></div>
@@ -259,11 +226,11 @@
   }
   let current = [];
   function render() {
-    const base = baseFiltered();
-    current = filtered(base);
+    const base = discovery.baseFiltered(POSTS,state);
+    current = discovery.filtered(base,state);
     $('#cards').innerHTML = current.map(card).join('');
     const emp = $('#empty'); emp.hidden = current.length > 0;
-    if (!current.length) emp.textContent = state.detection === 'today' ? '현재 필터에 맞는 오늘 최초 감지 핫 게시물이 없습니다. 데이터 기준 시각과 다른 필터도 확인하세요.' : state.tier > 0 ? '조건에 맞는 터진 게시물이 없습니다. 기간을 늘리거나 판정 기준을 낮춰 보세요.' : '조건에 맞는 게시물이 없습니다.';
+    if (!current.length) emp.textContent = state.detection === 'today' ? '오늘 새로 발견한 게시물 중 현재 조건에 맞는 게시물이 없습니다. 오늘은 한국 시간 00시부터입니다.' : '선택한 기간에 새로 발견한 게시물 중 현재 조건에 맞는 게시물이 없습니다. 설정에서 발견 기간이나 다른 조건을 확인하세요.';
     $('#result-count').textContent = current.length;
     $('#result-count').setAttribute('aria-label',`현재 표시 게시물 ${current.length}개`);
     const context=[state.topic,state.q?`검색: ${state.q}`:'',state.account?'@'+state.account:'',state.assessment!=='all'?{confirmed:'성과 확인',provisional:'잠정 후보'}[state.assessment]:''].filter(Boolean).join(' · ');
@@ -272,14 +239,14 @@
   }
   function renderAll() { recompute(); renderStats(); const base = render(); renderTopics(base); }
 
-  // ---------- 플랫폼 로그인 관리 ----------
   // ---------- 상세 모달 ----------
   const modal = $('#modal');
+  const {startSourceJob,startTranscriptJob}=window.ReferenceJobs.create({modal,esc});
   $('#cards').addEventListener('click', (e) => { const c = e.target.closest('.card'); if (c) openDetail(POSTS.find((p) => p.shortcode === c.dataset.code)); });
   modal.addEventListener('click', (e) => { if (e.target.dataset.close !== undefined) closeDetail(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });
   let flowTimer, flowCode;
-  function closeDetail() { clearTimeout(flowTimer); flowCode=null; modal.hidden = true; document.body.style.overflow = ''; }
+  function closeDetail() { clearTimeout(flowTimer); flowCode=null; modal.querySelectorAll('video,audio').forEach(v=>v.pause()); modal.hidden = true; document.body.style.overflow = ''; }
   async function refreshProduction(code) {
     clearTimeout(flowTimer);
     if(flowCode!==code||modal.hidden)return;
@@ -288,12 +255,12 @@
       const data=await window.ProductionFlow.api('');
       if(flowCode!==code)return;
       const task=data.tasks.find(t=>t.shortcode===code);
-      if(task)window.ProductionFlow.mount(root,task);
+      if(task)window.PostResult.mount(root,task);
       else {
         root.innerHTML='<section class="production-flow"><h3>자동 제작</h3><p>소스 확보 → 대본 → TTS → CapCut 프로젝트 → 최종 MP4</p><button id="begin-auto">자동 제작 시작</button></section>';
         $('#begin-auto',root).onclick=async e=>{e.target.disabled=true;try{await window.ProductionFlow.api('',{shortcodes:[code],automatic:true});refreshProduction(code);}catch(err){e.target.disabled=false;root.append(document.createTextNode(err.message));}};
       }
-    }catch(e){root.textContent='제작 상태를 불러오지 못했습니다: '+e.message;}
+    }catch(e){if(root._postId)window.PostResult.connectionError(root);else root.textContent='제작 상태를 불러오지 못했습니다. 잠시 후 다시 확인합니다.';}
     if(flowCode===code)flowTimer=setTimeout(()=>refreshProduction(code),3000);
   }
   function bar(label, val, base, ratio) {
@@ -326,7 +293,7 @@
           ${bar('댓글', p.comments, p.baseline.comments, p.ratios.comments)}
         </div>
         <div class="kv">
-          <div>핫 최초 감지일 (한국시간)<b>${window.HotpostDetection.dateKey(p.hot_detected_at) || (p.tier ? '기록 없음' : '미감지')}</b></div>
+          <div>처음 발견한 시각 (한국 시간)<b>${p.hot_detected_at == null ? (p.tier ? '기록 없음' : '미발견') : new Date(p.hot_detected_at*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})}</b></div>
           <div>팔로워<b>${fmt(a.followers)}</b></div>
           <div>비교 게시물<b>${p.baseline.peers}개</b></div>
           <div>반응 성숙도<b>${Math.round((R.criteria.values.maturity ? p.maturity : 1) * 100)}%</b></div>
@@ -348,6 +315,9 @@
         </div>
         ${isVideo(p) ? '<div class="source-status" id="source-status" hidden></div><div class="source-status transcript-status" id="transcript-status" hidden></div>' : ''}
       </div></details></div></div>`;
+    // Reference metadata belongs below the production result, inside its disclosure.
+    const benchmark=$('.benchmark-header',modal), info=$('.video-info-body',modal);
+    if(isVideo(p)&&benchmark&&info)info.prepend(benchmark);
     $$('.tags span', modal).forEach((s) => s.addEventListener('click', () => { closeDetail(); state.q = '#' + s.dataset.tag; $('#q').value = state.q; showSearch(true); renderAll(); }));
     const sourceBtn = $('#source-download', modal);
     if (sourceBtn) sourceBtn.addEventListener('click', () => startSourceJob(p.shortcode, sourceBtn));
@@ -357,84 +327,33 @@
     if(isVideo(p))refreshProduction(p.shortcode);
   }
 
-  async function startSourceJob(shortcode, button) {
-    const status = $('#source-status', modal);
-    button.disabled = true; status.hidden = false; status.classList.remove('error');
-    status.innerHTML = '<b>준비 중…</b><div class="source-progress"><i style="width:2%"></i></div><small>최대 20개의 소스 영상을 찾습니다. 후보 수에 따라 시간이 오래 걸릴 수 있습니다.</small>';
-    try {
-      const response = await fetch('/api/source-jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shortcode }) });
-      const job = await response.json();
-      if (!response.ok) throw new Error(job.error || '작업을 시작하지 못했습니다.');
-      pollSourceJob(job.id, button, status);
-    } catch (e) {
-      status.classList.add('error'); status.textContent = '실패: ' + e.message; button.disabled = false;
+  const reportRefresh=window.HotpostReportRefresh.create({
+    initial:R,
+    fetchReport:async()=>{
+      const response=await fetch('/api/report',{cache:'no-store'});
+      if(!response.ok)throw new Error('수집 결과 조회 실패');
+      return response.json();
+    },
+    onReport:report=>{
+      R=report;window.HOTPOST_REPORT=report;
+      acctMap=Object.fromEntries((R.accounts||[]).map(account=>[account.username,account]));
+      renderReportMetadata();
     }
+  });
+  async function refreshDashboard(refreshSettings=false){
+    const updates=[reportRefresh.refresh()];
+    if(refreshSettings)updates.push(window.HotpostDisplay.load().then(fresh=>{
+      Object.assign(state,fresh);if(linkedAccount)state.account=linkedAccount;
+    }));
+    // Failed fetches preserve the last verified report. Calendar filters still advance.
+    await Promise.allSettled(updates);
+    currentSettings();renderAll();
   }
-
-  async function pollSourceJob(id, button, status) {
-    try {
-      const response = await fetch('/api/source-jobs/' + encodeURIComponent(id));
-      const job = await response.json();
-      if (!response.ok) throw new Error(job.error || '상태를 확인하지 못했습니다.');
-      if (job.status === 'error') throw new Error(job.error || '탐색 작업이 실패했습니다.');
-      const notes = job.notes && job.notes.length ? `<small class="source-note">${job.notes.map(esc).join('<br>')}</small>` : '';
-      const qc = job.quality_counts || {};
-      const resultText = `${job.probe_attempts || job.probed_downloads || 0}개 시도 · ${job.probed_downloads || 0}개 수신 · 유효 후보 ${job.downloaded}개 · 클린 소스 ${qc['clean-source'] || 0} · 검토 필요 ${qc['light-overlay'] || 0} · OCR 미검증 ${qc.unknown || 0}`;
-      status.innerHTML = `<b>${esc(job.message)}</b><div class="source-progress"><i style="width:${job.progress || 0}%"></i></div><small>${job.status === 'done' ? `${resultText}. ZIP에서 유형별 폴더로 구분했습니다.` : '모달을 닫아도 서버에서 계속 진행됩니다.'}</small>${notes}`;
-      if (job.status === 'done') {
-        button.disabled = false; button.textContent = '다시 탐색';
-        const link = document.createElement('a'); link.className = 'linkbtn source-ready'; link.href = job.download_url;
-        link.textContent = `ZIP 다운로드 (${job.downloaded}개)`; status.appendChild(link); return;
-      }
-      setTimeout(() => pollSourceJob(id, button, status), 1500);
-    } catch (e) {
-      status.classList.add('error'); status.textContent = '실패: ' + e.message; button.disabled = false;
-    }
-  }
-
-  async function startTranscriptJob(shortcode, button) {
-    const status = $('#transcript-status', modal);
-    button.disabled = true; status.hidden = false; status.classList.remove('error');
-    status.innerHTML = '<b>대본 추출 준비 중…</b><div class="source-progress"><i style="width:2%"></i></div><small>영상의 실제 음성과 화면 글자를 별도로 분석합니다.</small>';
-    try {
-      const response = await fetch('/api/transcript-jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shortcode }) });
-      const job = await response.json();
-      if (!response.ok) throw new Error(job.error || '작업을 시작하지 못했습니다.');
-      pollTranscriptJob(job.id, button, status);
-    } catch (e) {
-      status.classList.add('error'); status.textContent = '실패: ' + e.message; button.disabled = false;
-    }
-  }
-
-  async function pollTranscriptJob(id, button, status) {
-    try {
-      const response = await fetch('/api/transcript-jobs/' + encodeURIComponent(id));
-      const job = await response.json();
-      if (!response.ok) throw new Error(job.error || '상태를 확인하지 못했습니다.');
-      if (job.status === 'error') throw new Error(job.error || '대본 추출에 실패했습니다.');
-      if (job.status === 'done') {
-        const lines = job.result.lines || [];
-        const clock = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-        status.innerHTML = `<b>대본 추출 완료 · 음성 ${job.result.speech.length}구간 · 화면 글자 ${job.result.screen_text.length}구간</b>
-          <small>자동 인식 결과입니다. 화면 글자는 음성 대사로 간주하지 않습니다.</small>
-          <div class="transcript-lines">${lines.length ? lines.map((line) => `<div class="transcript-line"><time>${clock(line.start)}</time><span class="transcript-tag">${line.source === 'speech' ? '음성' : '화면 글자'}</span><span>${esc(line.text)}</span></div>`).join('') : '<small>추출 가능한 대사나 화면 글자가 없습니다.</small>'}</div>
-          <div class="detail-actions"><a class="linkbtn source-ready" href="${job.download_txt_url}">TXT 다운로드</a><a class="linkbtn secondary source-ready" href="${job.download_json_url}">JSON 다운로드</a></div>
-          ${job.result.notes.map((note) => `<small class="source-note">${esc(note)}</small>`).join('')}`;
-        button.disabled = false; button.textContent = '다시 추출'; return;
-      }
-      status.innerHTML = `<b>${esc(job.message || '분석 중…')}</b><div class="source-progress"><i style="width:${job.progress || 0}%"></i></div><small>모달을 닫아도 서버에서 계속 진행됩니다.</small>`;
-      setTimeout(() => pollTranscriptJob(id, button, status), 1500);
-    } catch (e) {
-      status.classList.add('error'); status.textContent = '실패: ' + e.message; button.disabled = false;
-    }
-  }
-
+  window.addEventListener('focus',()=>refreshDashboard(true));
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshDashboard(true);});
   renderAll();
   const linkedPost = new URLSearchParams(location.search).get('post');
   if (linkedPost) openDetail(POSTS.find(p=>p.shortcode===linkedPost));
-  let detectionDay = window.HotpostDetection.dateKey(Date.now() / 1000);
-  setInterval(() => {
-    const day = window.HotpostDetection.dateKey(Date.now() / 1000);
-    if (day !== detectionDay) { detectionDay = day; renderAll(); }
-  }, 60000);
+  // Calendar and rolling discovery windows both advance while this page stays open.
+  setInterval(()=>refreshDashboard(), 60000);
 })();

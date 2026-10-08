@@ -10,12 +10,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Callable
 
-from .config import Settings
+from .config import ROOT, Settings
 from .source_finder import _download_reference, _post
 
 
@@ -115,6 +116,29 @@ def _speech(settings: Settings, audio: Path,
         segments.append({"source": "speech", "start": round(float(item.get("start") or 0), 2),
                          "end": round(float(item.get("end") or 0), 2), "text": text})
     return segments, str(result.get("language") or ""), "mlx-whisper"
+
+
+def _isolated_speech(settings: Settings, audio: Path, notes: list[str]):
+    """Keep Windows native ASR state out of the long-lived OCR/CLIP worker."""
+    with tempfile.TemporaryDirectory(prefix='speech-', dir=audio.parent) as temporary:
+        folder = Path(temporary)
+        request, result = folder / 'request.json', folder / 'result.json'
+        request.write_text(json.dumps({'audio': str(audio.resolve()),
+            'data_dir': str(settings.data_dir.resolve()),
+            'model': settings.transcript_faster_whisper_model}), encoding='utf-8')
+        process = subprocess.run([sys.executable, '-X', 'utf8', '-m', 'hotpost.speech_worker',
+            '--request', str(request), '--result', str(result)], cwd=ROOT,
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=180, check=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if not result.is_file():
+            raise RuntimeError(f'음성 전사 실행기가 결과를 반환하지 않았습니다 (exit {process.returncode}).')
+        value = json.loads(result.read_text(encoding='utf-8'))
+        if process.returncode or value.get('error'):
+            raise RuntimeError(value.get('error') or '음성 전사 실행 실패')
+        if not isinstance(value.get('speech'), list):
+            raise ValueError('음성 전사 결과 형식이 올바르지 않습니다.')
+        notes.extend(value.get('notes', []))
+        return value['speech'], value['language'], value['method']
 
 
 def _ocr_text(frame: Path, tessdata: Path) -> str:
@@ -257,7 +281,7 @@ def extract_transcript(settings: Settings, shortcode: str,
     audio = root / "audio.wav"
     if _audio(video, audio):
         try:
-            speech, language, speech_method = _speech(settings, audio, notes)
+            speech, language, speech_method = (_isolated_speech if sys.platform == 'win32' else _speech)(settings, audio, notes)
         except Exception as exc:  # OCR은 음성 모델 실패와 독립적으로 실행한다.
             notes.append(f"음성 전사 실패: {type(exc).__name__}: {str(exc)[:180]}")
     else:

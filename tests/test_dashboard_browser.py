@@ -59,6 +59,7 @@ def dashboard(tmp_path):
                     if n['id']==int(path.split('/')[3]):n['seen_at']=now
                 result={'seen':True}
             elif path=='/api/collection-status':result=state['health']
+            elif path=='/api/report':result=state['report']
             elif path=='/api/studio':result={'tasks':[]}
             elif path=='/api/jobs':result={'jobs':[]}
             elif path.startswith('/api/'):
@@ -83,7 +84,8 @@ def test_main_is_compact_and_search_and_category_filters_work(dashboard):
     page.wait_for_selector('.card')
     assert page.locator('#criteria,#period,#presets,#accounts,#method,#acquisition-candidates').count()==0
     assert not page.locator('#q').is_visible()
-    assert '14일' in page.locator('#current-settings').text_content()
+    assert '오늘' in page.locator('#current-settings').text_content()
+    assert '발견 시각' in page.locator('#current-settings').text_content()
     assert page.locator('#result-count').inner_text()=='2'
     assert page.locator('.listing-heading #current-settings,.listing-heading #result-count').count()==0
     topic_box=page.locator('.topic-panel').bounding_box()
@@ -109,10 +111,35 @@ def test_main_is_compact_and_search_and_category_filters_work(dashboard):
     page.locator('.card').first.click();assert page.locator('#modal').is_visible()
 
 
+def test_new_collection_refreshes_open_dashboard_without_replacing_modal_media(dashboard):
+    page,state=dashboard
+    page.goto('http://dashboard.test/')
+    page.wait_for_selector('.card')
+    assert page.locator('#result-count').inner_text()=='2'
+    page.locator('.card').first.click()
+    page.evaluate("""() => {
+        const player=document.createElement('video');player.id='refresh-player';
+        const input=document.createElement('textarea');input.id='refresh-draft';input.value='보존할 입력';
+        document.querySelector('.video-info-body').append(player,input);
+        window.refreshPlayer=player;
+    }""")
+    report=state['report']
+    newest=dict(next(p for p in report['posts'] if p['shortcode']=='camp'))
+    newest['shortcode']='new-after-collection'
+    report['posts'].append(newest)
+    report['generated_at']+=1
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    page.wait_for_function("document.querySelector('#result-count').textContent==='3'")
+    assert page.locator('#modal').is_visible()
+    assert page.evaluate("window.refreshPlayer===document.querySelector('#refresh-player')")
+    assert page.locator('#refresh-draft').input_value()=='보존할 입력'
+
+
 def test_settings_save_survives_navigation_and_reload(dashboard):
     page,state=dashboard
     page.goto('http://dashboard.test/settings.html')
     page.wait_for_function("!document.querySelector('#settings-save').disabled")
+    page.locator('#detection [data-v="all"]').click()
     page.locator('#period [data-v="72"]').click()
     page.locator('#kind [data-v="video"]').click()
     page.locator('#sort').select_option('views')
@@ -128,7 +155,8 @@ def test_settings_save_survives_navigation_and_reload(dashboard):
     page.locator('#detection [data-v="today"]').click()
     assert page.locator('#period [data-v="72"]').is_disabled()
     page.locator('#display-reset').click()
-    assert not page.locator('#period [data-v="72"]').is_disabled()
+    assert page.locator('#period [data-v="72"]').is_disabled()
+    assert page.locator('#detection [data-v="today"]').get_attribute('aria-pressed')=='true'
 
 
 def test_removed_account_warning_is_hidden_but_current_failures_remain(dashboard):
@@ -138,21 +166,30 @@ def test_removed_account_warning_is_hidden_but_current_failures_remain(dashboard
     assert not page.locator('#banner').is_visible()
     state['report']['notes'].append('@creator: 현재 목록 계정의 수집 실패')
     page.reload();page.wait_for_selector('.card')
+    assert not page.locator('#collection-health').is_visible()
+    page.locator('#collection-notification-toggle').click()
     assert '@creator' in page.locator('#collection-health').inner_text()
     assert '@retired_account' not in page.locator('#collection-health').inner_text()
     assert '수집 기록' in page.locator('#collection-health').inner_text()
     assert len(state['report']['notes'])==2  # No historical report data is erased.
 
 
-def test_notice_dismissal_persists_and_new_issue_reappears(dashboard):
+def test_collection_bell_read_state_persists_and_new_issue_reappears(dashboard):
     page,state=dashboard
-    page.goto('http://dashboard.test/');page.wait_for_selector('#collection-health .notice-close')
-    page.locator('#collection-health .notice-close').click()
+    state['health']['collection'].update(state='blocked',last_run=dict(id=98,stop_reason='login_required',notes='세션 만료'))
+    page.goto('http://dashboard.test/');page.wait_for_selector('#collection-notification-count:not([hidden])')
     assert not page.locator('#collection-health').is_visible()
+    page.locator('#collection-notification-toggle').click()
+    assert page.locator('#collection-health').is_visible()
+    assert not page.locator('#collection-notification-count').is_visible()
+    page.keyboard.press('Escape')
     page.reload();page.wait_for_selector('.card')
+    page.wait_for_function("document.querySelector('#collection-notification-loading').hidden")
     assert not page.locator('#collection-health').is_visible()
+    assert not page.locator('#collection-notification-count').is_visible()
     state['health']['collection'].update(state='blocked',last_run=dict(id=99,started_at=10,finished_at=20,stop_reason='login_required',notes='세션 만료'))
-    page.reload();page.wait_for_selector('#collection-health:not([hidden])')
+    page.reload();page.wait_for_selector('#collection-notification-count:not([hidden])')
+    page.locator('#collection-notification-toggle').click()
     assert '해결 방법:' in page.locator('#collection-health').inner_text()
     assert '로그인 복구 방법' in page.locator('#collection-health').inner_text()
     page.locator('#collection-health a').first.click()
@@ -166,6 +203,7 @@ def test_report_warning_can_be_closed_without_hiding_other_notices(dashboard):
     page.goto('http://dashboard.test/');page.wait_for_selector('#banner .notice-close')
     page.locator('#banner .notice-close').click()
     assert not page.locator('#banner').is_visible()
+    page.locator('#collection-notification-toggle').click()
     assert page.locator('#collection-health').is_visible()
     page.reload();page.wait_for_selector('.card')
     assert not page.locator('#banner').is_visible()

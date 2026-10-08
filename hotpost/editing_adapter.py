@@ -62,8 +62,10 @@ def selected_source_videos(
         if not path.is_relative_to(root):
             raise ValueError("Source manifest contains a path outside its job.")
         quality = str(item.get("source_quality") or "unknown")
-        if quality == "edited-with-text":
-            raise ValueError("Selected source contains a detected text overlay.")
+        if quality == "edited-with-text" or item.get('blur_required'):
+            from .source_quality import editing_ready
+            if not editing_ready(item):
+                raise ValueError("워터마크·삽입 텍스트를 가릴 CapCut 블러 영역을 먼저 검토해야 합니다.")
         if quality == "unknown" and not allow_unclassified:
             raise ValueError(
                 "Selected source overlay quality is unclassified; manual review "
@@ -244,7 +246,7 @@ def build_with_voicebench(
     job_dir = settings.editing_dir / job_id
     script_path = job_dir / "words.txt"
     if approved_script_path is None:
-        raise ValueError("rewritten_script_required: PersonalProject1에서 재가공한 대본을 선택하세요.")
+        raise ValueError("rewritten_script_required: 재가공한 대본을 선택하세요.")
     else:
         approved = approved_script_path.expanduser().resolve(strict=True)
         data_root = settings.data_dir.resolve()

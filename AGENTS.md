@@ -7,6 +7,7 @@
 
 ## 협업 역할과 판단 원칙
 
+- 사용자가 완성 영상 보기·원본 레퍼런스 비교·다운로드를 요청하면 재생과 다운로드가 가능한 웹페이지 링크를 우선 제공하고, 브라우저 제어가 허용되면 해당 페이지를 연다. 비교 화면은 원본을 왼쪽, 완성본을 오른쪽에 배치한다. 채팅의 로컬 MP4 첨부나 파일 경로만으로 전달을 대신하지 않는다. 모바일 확인을 위해 Cloudflare의 외부 HTTPS 링크를 사용한다. 공개 대상은 요청받은 영상·썸네일과 읽기 전용 비교 페이지로 제한하고, 제작 API·세션·설정은 노출하지 않는다. 영상의 바이트 범위 응답과 다운로드 헤더를 확인한다. 임시 터널은 작업 PC와 터널 프로세스가 실행 중일 때만 유효함을 알린다. 화면 검증 실패가 있으면 그 한계를 정확히 알린다.
 - 이 프로젝트에서 에이전트는 최고 수준의 소프트웨어 아키텍트이자 시니어 엔지니어의 관점으로 설계, 구현, 검토 및 검증한다.
 - 사용자의 제안에 관성적으로 동의하거나 반대하지 않는다. 요구사항, 현재 구조, 유지보수성, 안정성, 보안, 성능, 비용과 복잡도를 근거로 중립적이고 비판적으로 평가한다.
 - 제안에 문제나 불확실성이 있으면 이를 분명히 설명하고, 예상되는 영향과 트레이드오프를 밝힌 뒤 실행 가능한 대안을 제시한다.
@@ -14,6 +15,8 @@
 - 사실과 추정을 구분하고, 중요한 판단은 코드·테스트·문서 등 확인 가능한 근거에 기반한다. 합의만을 위해 기술적 우려를 숨기거나 과장하지 않는다.
 
 ## 시작할 때
+
+- 필요한 기능의 경로는 먼저 `docs/CODE_MAP.md`와 연결된 상세 지도로 찾는다. 전체 제작실 파일을 매번 읽기보다 해당 모듈과 계약 테스트를 우선한다.
 
 - `git status --short`로 기존 변경사항을 확인하고 다른 작업을 덮어쓰지 않는다.
 - `hotpost/config.py`의 `Settings`와 `config.json`/`HOTPOST_*` 환경변수 우선순위를 확인한다.
@@ -26,8 +29,13 @@
 - 모니터링 계정 구성·순서의 기준은 Git의 `influencer_list.txt`다. `hotpost/accounts.py`가 목록 조회·수집 전에 SQLite `managed_accounts`를 동기화하며 웹 추가·삭제도 파일에 저장한다. 직접 DB만 변경하지 않는다. 계정 메모·로그인·수집 결과는 PC별 로컬 데이터이며 파일에 내보내지 않는다. 웹 API는 `hotpost/server.py`, UI는 `web/accounts.*`에 있다. 삭제해도 과거 게시물은 보존하고 다음 리포트에서만 제외한다. Git 충돌·잘못된 파일은 반영하지 않고 기존 DB를 유지한다.
 - 수집·분석은 `hotpost/cli.py` → `hotpost/collectors/` → `hotpost/storage.py` → `hotpost/analyze.py` → `hotpost/report.py` 순서다. 수동 수집과 macOS LaunchAgent 수집은 `data/collect.lock`으로 중복 실행을 막는다. 일정 설치/삭제는 사용자 OS 상태를 변경하므로 명시적 요청 없이 실행하지 않는다.
 - 소스 찾기는 `hotpost/source_finder.py`와 `hotpost/browser_search.py`가 담당한다. 후보를 실제로 받은 뒤 유사도와 텍스트 오버레이를 검사하여 최대 20개를 ZIP에 넣는다. 기준 Instagram 릴스는 분석용이며 ZIP에 포함하지 않는다. `manifest.json`의 원 URL·권리 상태를 유지한다.
+- 새 제작·새 수집은 사용 가능한 서로 다른 소스 전체 최소 10개, 그중 TikTok 최소 5개를 요구한다. `source_policy.py`의 버전별 기준과 과거 완성본을 보존한다. 저장된 CAPTCHA/로그인 차단으로 건너뛴 기록은 새 요청·새 실패로 세지 않으며 `source_outcomes.py`에 미시도·검색·다운로드·품질·중복 사유를 구분한다.
+- 대본은 후킹의 효과·소구점·전개를 보존하면서 후킹 문장부터 본문까지 실제 표현을 재작성한다. 후킹 원문 복사, 어미·문장부호·숫자 교정·CTA 추가만으로 수정한 대본은 자동 수정·후보 순위에 반영한다. 중간 승인 대기는 만들지 않는다. 완성본의 대본·음성 연결을 바꾸지 않고 새 수정 대본은 feedback/script_candidates에 버전으로 저장한다.
+- 신규 대본의 단일 규칙 원본은 `hotpost/writing/RULES.md`다. 집필·수정·검사에 같은 계약 해시를 적용한다. Codex가 한 편 집필 → 한 번 검사 → 필요한 부분만 최대 한 번 보완 → 전후 비교하며, 개선되지 않으면 이전 원고를 보존한다. 내용 평가는 참고 의견이고 중간 승인·제작 중단 기준으로 쓰지 않는다.
+- `script_auto` 서비스·파일·로컬 Qwen 집필기는 사용하지 않는다. `studio_adapter.py` → 내부 `writing/jobs.py` → `pipeline.py` → 공식 Codex CLI로 실행한다. 과거 작업은 data/writing/legacy에 읽기 전용 결과를 보존한다. Codex 실행 실패를 다른 모델로 대체하지 않는다. VoiceBench 개인 목소리 TTS는 별도이며 보존한다.
+- 원본에 있는 일반 기능·편의는 “있어요”, “할 수 있어요”처럼 직접 쓴다. 독립 검증 100%를 기다리거나 전언 말투를 일괄 강요하지 않는다. 원본의 친구 집 방문·시식·구매·사용 경험 설정은 1인칭으로 차용·재작성할 수 있으며 설정 차용 자체를 삭제·감점하지 않는다. 후킹과 본문 문장은 새로 쓰고 원본에 없는 사실·별도 사연은 추가하지 않는다. 건강·치료·절대 안전 주장을 근거 없이 사실로 단정하지 않는다. 대본을 우선하고 확보 소스의 수·적합성을 집필 및 점수에 넣지 않는다.
 - 대본 추출은 `hotpost/transcript.py`가 담당한다. `speech`는 실제 오디오 전사, `screen_text`는 프레임 OCR이며 둘을 같은 종류의 대사로 취급하지 않는다. API는 `POST /api/transcript-jobs`, `GET /api/transcript-jobs/{id}`, `GET /api/transcript-jobs/{id}/download?format=txt|json`이다. 작업 상태는 SQLite 큐에 보존된다.
-- 제작 연결은 `hotpost/production.py`가 단계별 ID·선택 대본·변환 계획·해시를 저장한다. PersonalProject1이 대본을 재가공하고 사용자가 선택한 버전만 VoiceBench와 편집으로 전달한다. 원본 전사문으로 자동 대체하지 않는다. CapCut 연동은 `hotpost/editing_adapter.py`의 버전 JSON·별도 프로세스 경계를 유지한다. 패키지 직접 import나 가상환경 통합은 금지한다.
+- 제작 연결은 `hotpost/production.py`가 단계별 ID·선택 대본·변환 계획·해시를 저장한다. 내장 Codex 집필기가 대본을 재가공하고 사용자가 선택한 버전만 VoiceBench와 편집으로 전달한다. 원본 전사문으로 자동 대체하지 않는다. CapCut 연동은 `hotpost/editing_adapter.py`의 버전 JSON·별도 프로세스 경계를 유지한다. 패키지 직접 import나 가상환경 통합은 금지한다.
 - VoiceBench 연동은 `hotpost/voicebench_adapter.py`의 로컬 HTTP API 경계를 사용한다. VoiceBench 패키지를 import하거나 엔진·레퍼런스·Seed를 클라이언트에서 덮어쓰지 않는다. API 키는 환경변수 또는 VoiceBench의 Git 제외 파일에서만 읽는다.
 - 사용자 요청에 따라 제작실에서 `/v1/voices`에 공개된 공식 목소리의 `voice_id`를 선택할 수 있다. 엔진·참조 음성은 VoiceBench가 서버에서 결정하며, 빈 ID는 기존 기본 목소리를 뜻한다. 다른 PC의 기본 설정을 변경하지 않는다.
 - 서버는 표준 라이브러리 `ThreadingHTTPServer`, 화면은 빌드 단계 없는 HTML/CSS/JS다. 백엔드 API를 바꾸면 `web/app.js`의 모달 요청·표시·다운로드도 함께 점검한다.

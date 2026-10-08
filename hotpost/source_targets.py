@@ -1,16 +1,21 @@
 """Platform goals never relax relevance, overlay or duplicate checks."""
 import copy
 
-from .source_quality import round_robin_candidates, select_valid_candidates
+from .source_quality import round_robin_candidates, select_valid_candidates, editing_ready
+from dataclasses import asdict
+from .source_outcomes import platform_outcomes
+from .source_policy import source_platform
 
 
 def usable_tiktok(candidate):
-    return (candidate.platform == 'tiktok' and getattr(candidate, 'editing_eligible', True)
-            and candidate.source_quality in {'clean-source', 'light-overlay'})
+    item = asdict(candidate)
+    return source_platform(item) == 'tiktok' and editing_ready(item)
 
 
 def candidate_batch(candidates, limit, target):
-    ordered = round_robin_candidates(candidates, len(candidates))
+    # Preserve platform diversity, but spend each platform's first slices on
+    # candidates whose titles actually name the observed action.
+    ordered = round_robin_candidates(sorted(candidates,key=lambda c:-(c.discovery_score or 0)), len(candidates))
     # Inspect enough TikTok candidates for quality rejection, before other platforms
     # consume the shared download budget. All original time/request limits remain.
     first = [c for c in ordered if c.platform == 'tiktok'][:min(limit, max(0, target) * 3)]
@@ -47,5 +52,7 @@ def tiktok_coverage(candidates, searches, target, budget_stop=''):
         reasons.append('검색 상태: ' + ', '.join(str(v) for v in failures))
     if budget_stop:
         reasons.append('검사 예산 종료: ' + budget_stop)
-    return {'target':target, 'usable':count, 'languages':languages,
-            'status':'met' if count >= target and all(languages.values()) else 'shortfall', 'reasons':reasons}
+    outcome = platform_outcomes(candidates, searches, {'tiktok':target}, budget_stop)['tiktok']
+    return {**outcome, 'target':target, 'usable':count, 'languages':languages,
+            'search_complete':all(languages.values()), 'reason_codes':list(outcome['reasons']),
+            'status':'met' if count >= target else 'shortfall', 'reasons':reasons}

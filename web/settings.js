@@ -102,46 +102,6 @@ const defaults=window.HotpostDisplay.defaults;
     <li>수집을 반복하면 스냅샷이 쌓여 <b>시간당 증가 속도</b>가 상세 화면에 표시됩니다(📈 상승 중).</li>
   </ul>`;
 
-  const sessionModal = $('#session-modal');
-  const sessionStart = $('#session-start');
-  const sessionFinish = $('#session-finish');
-  let sessionPoll = null;
-  function closeSessionModal() { sessionModal.hidden = true; if (sessionPoll) clearTimeout(sessionPoll); sessionPoll = null; }
-  $$('[data-session-close]', sessionModal).forEach((el) => el.addEventListener('click', closeSessionModal));
-  $('#platform-login').addEventListener('click', () => { sessionModal.hidden = false; refreshPlatformSession(); });
-  function renderPlatformSession(data) {
-    $('#session-platforms').innerHTML = (data.platforms || []).map((p) =>
-      `<div class="session-platform">${esc(p.label)}<span class="${p.connected ? 'connected' : ''}">${p.connected ? '● 인증 확인' : p.cookie_present ? '◐ 쿠키 있음 · ' + esc(p.auth_status || '미검증') : '○ 로그인 필요'}</span></div>`).join('');
-    const status = $('#session-status');
-    status.classList.toggle('error', Boolean(data.error));
-    status.innerHTML = `<b>${esc(data.error || data.message || '상태 확인 완료')}</b><small>${data.cookie_file_ready ? '다운로드용 쿠키 파일 준비됨' : '로그인 창에서 인증하면 다운로드용 쿠키가 생성됩니다.'}</small>`;
-    sessionStart.hidden = Boolean(data.active);
-    sessionFinish.hidden = !data.active;
-  }
-  async function refreshPlatformSession() {
-    try {
-      const response = await fetch('/api/platform-session'); const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '로그인 상태 확인 실패');
-      renderPlatformSession(data);
-      if (data.active && !sessionModal.hidden) sessionPoll = setTimeout(refreshPlatformSession, 1800);
-    } catch (e) { $('#session-status').classList.add('error'); $('#session-status').textContent = e.message; }
-  }
-  sessionStart.addEventListener('click', async () => {
-    sessionStart.disabled = true;
-    try {
-      const response = await fetch('/api/platform-session', { method: 'POST' }); const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '로그인 창 실행 실패');
-      renderPlatformSession(data); sessionPoll = setTimeout(refreshPlatformSession, 1200);
-    } catch (e) { $('#session-status').classList.add('error'); $('#session-status').textContent = e.message; }
-    finally { sessionStart.disabled = false; }
-  });
-  sessionFinish.addEventListener('click', async () => {
-    sessionFinish.disabled = true;
-    try { await fetch('/api/platform-session/finish', { method: 'POST' }); setTimeout(refreshPlatformSession, 800); }
-    finally { sessionFinish.disabled = false; }
-  });
-
-
 const acc=$('#account');for(const a of R.accounts||[]){const o=new Option('@'+a.username,a.username);acc.add(o);}
 if(display.account&&!Array.from(acc.options).some(o=>o.value===display.account))acc.add(new Option('@'+display.account+' (현재 목록에 없음)',display.account));
 function syncDisplay(){

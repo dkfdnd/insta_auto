@@ -66,6 +66,28 @@ class VoiceBenchAdapter:
         except requests.RequestException as exc:
             raise RuntimeError('목소리 목록을 불러오지 못했어요. VoiceBench 연결·업데이트 상태를 확인하고 다시 눌러주세요.') from exc
 
+    def default_voice_status(self) -> dict:
+        return self._response_json(self.session.get(self._url('/v1/health'), headers=self._headers(), timeout=15))
+
+    def release_idle(self) -> dict:
+        """Ask the server to free idle workers; never supply engine overrides."""
+        try:
+            headers = self._headers()
+        except RuntimeError:
+            # Resource cleanup is optional for script-only installations. The
+            # synthesis path still requires its normal authentication setup.
+            return {'status': 'unconfigured', 'released': False}
+        response = self.session.post(self._url('/v1/resources/release-idle'),
+            json={}, headers=headers, timeout=60, allow_redirects=False)
+        if response.status_code in (404, 405, 501):
+            return {'status': 'unsupported', 'released': False}
+        if 300 <= response.status_code < 400:
+            raise RuntimeError('VoiceBench resource API redirects are not allowed.')
+        result = self._response_json(response)
+        if result.get('status') not in ('busy', 'released'):
+            raise RuntimeError('VoiceBench returned an invalid resource status.')
+        return result
+
     def preview(self, voice_id: str) -> tuple[bytes,str]:
         import re
         if not re.fullmatch(r'[a-z0-9_-]{1,100}',voice_id): raise ValueError('올바르지 않은 목소리입니다.')
@@ -89,7 +111,7 @@ class VoiceBenchAdapter:
                    request_id: int | None = None,
                    on_submitted: Callable[[int], None] | None = None,
                    retry_failed: bool = False, generation_key: str | None = None,
-                   voice_profile_id: str | None = None) -> dict:
+                   voice_profile_id: str | None = None, require_personal_clone: bool = False) -> dict:
         script = text.strip()
         if not script:
             raise ValueError("VoiceBench cannot synthesize an empty script.")
@@ -103,6 +125,14 @@ class VoiceBenchAdapter:
         timeout = min(60.0, float(self.settings.voicebench_timeout))
         progress("VoiceBench 음성 생성을 요청하는 중", 5)
         payload = {"text": script}
+        if require_personal_clone:
+            if voice_profile_id:
+                raise ValueError('자동 제작은 본인 복제 목소리만 사용합니다.')
+            health = self.default_voice_status()
+            if not health.get('ready') or health.get('default_voice_kind') != 'personal':
+                raise RuntimeError('내 목소리 복제 준비가 필요합니다. ' +
+                                   ' / '.join(health.get('errors') or ['기본 음성이 개인 복제 음성인지 확인할 수 없습니다.']) +
+                                   ' 다른 기본 목소리로 대체하지 않습니다.')
         if voice_profile_id:
             if not any(v.get('id')==voice_profile_id and v.get('available') for v in self.voices().get('voices',[])):
                 raise ValueError('선택한 목소리가 준비되지 않았습니다. 다른 목소리를 선택하세요.')
@@ -168,6 +198,8 @@ class VoiceBenchAdapter:
                 f"{detail[:500]}"
             )
 
+        if require_personal_clone and status.get('voice_id'):
+            raise RuntimeError('기존 요청이 다른 목소리로 생성됐습니다. 본인 복제 음성으로 새 작업이 필요합니다.')
         if voice_profile_id and status.get('voice_id') != voice_profile_id:
             raise RuntimeError('요청한 목소리와 생성 결과가 다릅니다. VoiceBench 업데이트 상태를 확인하세요.')
         try:

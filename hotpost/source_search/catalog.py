@@ -1,0 +1,48 @@
+"""Search vocabulary and bilingual concepts used by semantic discovery."""
+
+KO_EN_ZH = {
+    "차량": ("car", "汽车"), "자동차": ("car", "汽车"), "차문": ("car door", "车门"),
+    "차량용품": ("car accessories", "汽车用品"), "문쪽": ("door side", "车门侧"),
+    "컵홀더": ("cup holder", "杯架"), "홀더": ("holder", "支架"), "음료": ("drink", "饮料"),
+    "커피": ("coffee", "咖啡"), "수납": ("organizer", "收纳"), "쓰레기통": ("trash bin", "垃圾桶"),
+    "주방": ("kitchen", "厨房"), "캠핑": ("camping", "露营"), "에어컨": ("air conditioner", "空调"),
+    "소파": ("sofa", "沙发"), "조개": ("shellfish", "贝类"), "귀지": ("ear wax", "耳垢"),
+}
+
+
+PRODUCT_CONCEPTS = [
+    ("car door cup holder organizer", "车门挂式杯架 汽车收纳"),
+    ("car seat gap organizer", "汽车座椅缝隙收纳盒"),
+    ("car interior cleaning tool", "汽车内饰清洁工具"),
+    ("portable car trash bin", "车载便携垃圾桶"),
+    ("kitchen storage organizer", "厨房收纳神器"),
+    ("refrigerator storage container", "冰箱收纳盒"),
+    ("sink cleaning brush", "水槽清洁刷"),
+    ("vegetable slicer kitchen gadget", "多功能切菜器 厨房神器"),
+    ("food storage container", "食品保鲜收纳盒"),
+    ("bathroom cleaning tool", "浴室清洁神器"),
+    ("toilet cleaning brush", "马桶清洁刷"),
+    ("shower storage rack", "浴室置物架"),
+    ("laundry folding organizer", "衣物折叠收纳"),
+    ("closet space saving hanger", "衣柜省空间衣架"),
+    ("home cleaning mop", "家用清洁拖把"),
+    ("window cleaning tool", "玻璃窗清洁神器"),
+    ("sofa and carpet cleaning tool", "沙发地毯清洁神器"),
+    ("portable fan", "便携小风扇"),
+    ("air conditioner accessory", "空调实用配件"),
+    ("desk organizer", "桌面收纳神器"),
+    ("phone holder stand", "手机支架"),
+    ("charging cable organizer", "数据线收纳器"),
+    ("beauty skin care tool", "美容护肤工具"),
+    ("hair styling tool", "美发造型工具"),
+    ("makeup organizer", "化妆品收纳盒"),
+    ("ear cleaning tool", "可视采耳工具"),
+    ("pet grooming tool", "宠物美容清洁工具"),
+    ("pet hair remover", "宠物毛发清理器"),
+    ("camping storage gear", "露营收纳装备"),
+    ("portable outdoor light", "户外便携灯"),
+    ("handheld repair tool", "家用维修工具"),
+    ("shoe cleaning tool", "鞋子清洁神器"),
+    ("travel organizer bag", "旅行收纳袋"),
+    ("baby feeding product", "婴儿喂养用品"),
+]

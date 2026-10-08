@@ -13,6 +13,7 @@ from .criteria import defaults
 from .categories import post_categories
 from .growth import growth_signal
 from .thumbs import ensure_thumbnail
+from .daily_hot import daily_state, priority
 
 KST = timezone(timedelta(hours=9))
 
@@ -110,6 +111,10 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
         })
         posts_out.append(d)
 
+    for post in posts_out:
+        post.update(daily_state(post, now))
+    posts_out.sort(key=lambda post: priority(post, now), reverse=True)
+
     topics = extract_topics(all_scored, settings)
     hot = [p for p in posts_out if p["tier"] >= 1]
     store.register_hot_view_tracking(
@@ -157,6 +162,8 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
             "hot_24h": sum(1 for p in hot if p["age_hours"] <= 24),
             "hot_7d": sum(1 for p in hot if p["age_hours"] <= 24 * 7),
             "reels": sum(1 for p in posts_out if p["kind"] in ("reel", "video")),
+            "hot_today": sum(p['hot_today'] for p in posts_out),
+            "benchmark_consumed": sum(p['benchmark_consumed'] for p in posts_out),
         },
         "topics": topics,
         "accounts": accounts_out,
